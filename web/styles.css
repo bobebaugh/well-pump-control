@@ -200,3 +200,58 @@ footer { display: flex; justify-content: space-between; gap: 20px; padding: 14px
   footer { flex-direction: column; }
   .pilot-badge { font-size: .66rem; }
 }
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.monitor-control {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.monitor-control small {
+  color: var(--muted);
+  font-size: .62rem;
+}
+
+.monitor-button {
+  padding: 8px 12px;
+  border: 1px solid rgba(67,168,255,.45);
+  border-radius: 8px;
+  color: #cfe8ff;
+  background: rgba(67,168,255,.1);
+  font: inherit;
+  font-size: .72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.monitor-button:hover { background: rgba(67,168,255,.17); }
+.monitor-button.active {
+  border-color: rgba(242,184,75,.55);
+  color: #f2cf87;
+  background: rgba(242,184,75,.1);
+}
+
+.pump-state.running .state-dot {
+  background: var(--green);
+  box-shadow: 0 0 18px rgba(69,212,131,.5);
+}
+
+.pump-state.stopped .state-dot {
+  background: var(--blue);
+  box-shadow: 0 0 18px rgba(67,168,255,.45);
+}
+
+.pump-state.stale .state-dot {
+  background: var(--amber);
+  box-shadow: 0 0 18px rgba(242,184,75,.45);
+}
+
+@media (max-width: 700px) {
+  .topbar-actions { align-items: flex-end; flex-direction: column-reverse; }
+}

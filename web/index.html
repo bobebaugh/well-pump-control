@@ -14,7 +14,13 @@
       <p class="eyebrow">PRIVATE WELL · OBSERVATIONAL PILOT</p>
       <h1>Well Pump Monitoring</h1>
     </div>
-    <div class="pilot-badge"><span></span>Monitor only</div>
+    <div class="topbar-actions">
+      <div class="monitor-control">
+        <button type="button" id="monitor-toggle" class="monitor-button">Start 15-minute live view</button>
+        <small id="monitor-status">Standard 60-second refresh</small>
+      </div>
+      <div class="pilot-badge"><span></span>Monitor only</div>
+    </div>
   </header>
 
   <main>
@@ -112,11 +118,11 @@
             <span class="health-dot checking"></span>
             <div><strong>Firestore</strong><small>Not configured</small></div>
           </div>
-          <div class="health-row">
+          <div class="health-row" id="health-tab5">
             <span class="health-dot unavailable"></span>
             <div><strong>Tab5</strong><small>Not connected</small></div>
           </div>
-          <div class="health-row">
+          <div class="health-row" id="health-shelly">
             <span class="health-dot unavailable"></span>
             <div><strong>Shelly EM</strong><small>Awaiting Tab5 link</small></div>
           </div>
