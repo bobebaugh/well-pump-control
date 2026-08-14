@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bobebaugh/well-pump-control/contracts/shelly-em-source-v1.schema.json",
+  "title": "Gen-1 Shelly EM local source response v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "power",
+    "reactive",
+    "pf",
+    "voltage",
+    "is_valid",
+    "total",
+    "total_returned"
+  ],
+  "properties": {
+    "power": {
+      "type": "number",
+      "description": "Instantaneous active power in watts."
+    },
+    "reactive": {
+      "type": "number",
+      "description": "Instantaneous reactive power reported by the source."
+    },
+    "pf": {
+      "type": "number",
+      "minimum": -1,
+      "maximum": 1,
+      "description": "Power factor reported by the source."
+    },
+    "voltage": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Measured line voltage in volts."
+    },
+    "is_valid": {
+      "type": "boolean",
+      "description": "Source measurement-validity flag."
+    },
+    "total": {
+      "type": "number",
+      "description": "Cumulative imported-energy value reported by the source. Confirm its source unit before normalized use."
+    },
+    "total_returned": {
+      "type": "number",
+      "description": "Cumulative returned-energy value reported by the source. Confirm its source unit before normalized use."
+    }
+  }
+}

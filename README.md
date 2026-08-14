@@ -41,4 +41,4 @@ Google Drive contains the authoritative project and as-installed records. This r
 
 ## Development model
 
-Firmware is compiled and flashed from the Windows development PC using VS Code and ESP-IDF v5.4.2. GitHub stores and versions source; it does not physically program the Tab5. See `docs/development-workflow.md` once the initial scaffold is complete.
+Firmware is compiled and flashed from the Windows development PC using VS Code and ESP-IDF v5.4.2. GitHub stores and versions source; it does not physically program the Tab5. See `docs/development-workflow.md`.
