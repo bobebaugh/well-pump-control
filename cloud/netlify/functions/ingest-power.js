@@ -141,7 +141,9 @@ exports.handler = async function ingestPower(event) {
         pumpRunning,
         thresholds: { startW: startThresholdW, stopW: stopThresholdW }
       });
-      if (telemetry.publishReason !== "monitoring" || stateChanged) {
+      // Current telemetry already proves liveness. Keep the device metadata
+      // document sparse so a 1 Hz live session costs one write, not two.
+      if (stateChanged || telemetry.publishReason === "manual-test") {
         transaction.set(device, {
           deviceType: "shelly-em-gen1",
           channel: 0,

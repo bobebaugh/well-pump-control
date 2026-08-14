@@ -1,0 +1,23 @@
+name: Tab5 firmware build
+on:
+  push:
+    branches: [pilot]
+    paths:
+      - "firmware/tab5/**"
+      - ".github/workflows/tab5-firmware.yml"
+  pull_request:
+    paths:
+      - "firmware/tab5/**"
+      - ".github/workflows/tab5-firmware.yml"
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ESP32-P4 firmware with ESP-IDF 5.4.2
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4.2
+          target: esp32p4
+          path: firmware/tab5

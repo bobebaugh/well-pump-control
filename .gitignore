@@ -19,6 +19,7 @@ secrets/
 *.pem
 *.key
 service-account*.json
+firmware/tab5/main/secrets.local.h
 
 # Editors and operating systems
 .vscode/settings.json
