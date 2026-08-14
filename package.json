@@ -1,0 +1,12 @@
+{
+  "name": "well-pump-control",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Observational well-pump monitoring pilot",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0"
+  }
+}
