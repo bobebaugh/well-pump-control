@@ -8,7 +8,7 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
-#include "esp_sntp.h"
+#include "esp_netif_sntp.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -173,7 +173,7 @@ void sampling_task(void *) {
 
 void cloud_task(void *) {
     uint32_t sent_sample = 0, seen_state = 0;
-    int64_t last_publish_us = 0;
+    int64_t last_publish_us = -(int64_t)PILOT_HEARTBEAT_PERIOD_MS * 1000;
     while (true) {
         PilotSnapshot snapshot = g_pilot_model.snapshot();
         const int64_t now = esp_timer_get_time();
@@ -181,7 +181,8 @@ void cloud_task(void *) {
         const bool transition = snapshot.state_sequence != seen_state;
         const bool heartbeat = now - last_publish_us >= (int64_t)PILOT_HEARTBEAT_PERIOD_MS * 1000;
         const bool live = snapshot.monitoring_active && snapshot.sample_sequence != sent_sample;
-        if (connected && snapshot.has_sample && (transition || heartbeat || live)) {
+        const bool clock_ready = time(nullptr) >= 1700000000;
+        if (connected && clock_ready && snapshot.has_sample && (transition || heartbeat || live)) {
             const char *reason = live ? "monitoring" : (transition ? "state-change" : "heartbeat");
             const bool success = publish_sample(snapshot, reason);
             g_pilot_model.note_cloud_attempt(success);
