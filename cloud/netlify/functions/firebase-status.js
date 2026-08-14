@@ -10,6 +10,14 @@ const jsonHeaders = {
   "Cache-Control": "no-store"
 };
 
+function safeDiagnostic(value) {
+  if (typeof value !== "string") {
+    return "unknown";
+  }
+
+  return /^[A-Za-z0-9_.:/-]{1,80}$/.test(value) ? value : "unknown";
+}
+
 exports.handler = async function firebaseStatus(event) {
   if (event.httpMethod !== "GET") {
     return {
@@ -19,8 +27,11 @@ exports.handler = async function firebaseStatus(event) {
     };
   }
 
+  let stage = "initialize";
+
   try {
     const { db, projectId, databaseId } = getPilotFirestore();
+    stage = "read";
     const marker = await db.collection("_system").doc("pilot").get();
 
     return {
@@ -38,10 +49,15 @@ exports.handler = async function firebaseStatus(event) {
     };
   } catch (error) {
     const configurationError = error instanceof ConfigurationError;
+    const providerCode = safeDiagnostic(error.code);
+    const providerName = safeDiagnostic(error.name);
+    const diagnosticStage = safeDiagnostic(stage);
 
     console.error("Firestore status check failed", {
       category: configurationError ? "configuration" : "firestore",
-      code: typeof error.code === "string" ? error.code : "unknown"
+      providerCode,
+      providerName,
+      diagnosticStage
     });
 
     return {
@@ -49,7 +65,10 @@ exports.handler = async function firebaseStatus(event) {
       headers: jsonHeaders,
       body: JSON.stringify({
         status: "error",
-        code: configurationError ? "configuration_missing" : "firestore_unavailable"
+        code: configurationError ? "configuration_missing" : "firestore_unavailable",
+        diagnosticStage,
+        providerCode,
+        providerName
       })
     };
   }
