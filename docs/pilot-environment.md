@@ -26,5 +26,6 @@ This file records non-secret deployment identifiers only.
 - Pilot access path: authenticated Netlify server function using IAM; no browser-direct Firestore access
 - Netlify service account role: `roles/datastore.user` (Cloud Datastore User)
 - Netlify environment variable names: `FIREBASE_PROJECT_ID`, `FIRESTORE_DATABASE_ID`, and `FIREBASE_SERVICE_ACCOUNT_JSON`
+- Firebase variables configured in the Netlify `pilot` branch-deploy context: 2026-08-14 (values not recorded here)
 
 Do not add service-account JSON, private keys, bearer tokens, Wi-Fi credentials, or Netlify environment values to this file.
