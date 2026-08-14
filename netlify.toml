@@ -1,0 +1,6 @@
+# Production safeguard.
+# Netlify treats exit code 0 from the ignore command as "stop this build".
+# This file intentionally exists on main and must not be copied to pilot unchanged.
+
+[build]
+  ignore = "exit 0"
