@@ -2,7 +2,11 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { ContractError, validatePowerTelemetry } = require("./power-contract");
+const {
+  ContractError,
+  classifyPumpRunning,
+  validatePowerTelemetry
+} = require("./power-contract");
 
 const valid = {
   schemaVersion: 1,
@@ -42,4 +46,11 @@ test("rejects a different device", () => {
 test("rejects invalid numeric and timestamp fields", () => {
   assert.throws(() => validatePowerTelemetry({ ...valid, power: "2500" }, "shelly-em-well"));
   assert.throws(() => validatePowerTelemetry({ ...valid, observedAt: "not-a-date" }, "shelly-em-well"));
+});
+
+test("uses hysteresis for pump state", () => {
+  assert.equal(classifyPumpRunning(1500, false, 1000, 100), true);
+  assert.equal(classifyPumpRunning(500, true, 1000, 100), true);
+  assert.equal(classifyPumpRunning(50, true, 1000, 100), false);
+  assert.equal(classifyPumpRunning(500, false, 1000, 100), false);
 });

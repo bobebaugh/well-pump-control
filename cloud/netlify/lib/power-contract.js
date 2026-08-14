@@ -59,15 +59,32 @@ function validatePowerTelemetry(payload, expectedDeviceId) {
     normalized.powerFactor = requireFiniteNumber(payload, "pf", -1, 1);
   }
 
+  const allowedReasons = new Set(["state-change", "heartbeat", "monitoring", "manual-test"]);
+  const publishReason = payload.publishReason || "heartbeat";
+
+  if (!allowedReasons.has(publishReason)) {
+    throw new ContractError("invalid_value", "publishReason");
+  }
+
   return {
     schemaVersion: 1,
     deviceId: payload.deviceId,
     observedAt: new Date(observedAtMs),
+    publishReason,
     values: normalized
   };
 }
 
+function classifyPumpRunning(powerW, previousRunning, startThresholdW, stopThresholdW) {
+  if (previousRunning === true) {
+    return powerW > stopThresholdW;
+  }
+
+  return powerW >= startThresholdW;
+}
+
 module.exports = {
   ContractError,
+  classifyPumpRunning,
   validatePowerTelemetry
 };

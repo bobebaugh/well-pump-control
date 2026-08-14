@@ -3,7 +3,11 @@
 const { timingSafeEqual } = require("node:crypto");
 const { FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { ConfigurationError, getPilotFirestore } = require("../lib/firebase");
-const { ContractError, validatePowerTelemetry } = require("../lib/power-contract");
+const {
+  ContractError,
+  classifyPumpRunning,
+  validatePowerTelemetry
+} = require("../lib/power-contract");
 
 const SITE_ID = "well-main";
 const MAX_BODY_BYTES = 4096;
@@ -49,6 +53,22 @@ function parseBody(event) {
   }
 }
 
+function configuredThreshold(name, fallback, minimum, maximum) {
+  const raw = process.env[name];
+
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+
+  const value = Number(raw);
+
+  if (!Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new ConfigurationError(`${name} is outside the supported pilot range`);
+  }
+
+  return value;
+}
+
 exports.handler = async function ingestPower(event) {
   if (event.httpMethod !== "POST") {
     return {
@@ -73,9 +93,17 @@ exports.handler = async function ingestPower(event) {
     const telemetry = validatePowerTelemetry(parseBody(event), expectedDeviceId);
     const { db } = getPilotFirestore();
     const site = db.collection("sites").doc(SITE_ID);
-    const sample = site.collection("telemetry").doc();
     const current = site.collection("current").doc("well-power");
     const device = site.collection("devices").doc(telemetry.deviceId);
+    const eventRecord = site.collection("events").doc();
+    const monitoring = site.collection("control").doc("monitoring");
+    const startThresholdW = configuredThreshold("PUMP_START_THRESHOLD_W", 1000, 100, 10000);
+    const stopThresholdW = configuredThreshold("PUMP_STOP_THRESHOLD_W", 100, 0, 9999);
+
+    if (stopThresholdW >= startThresholdW) {
+      throw new ConfigurationError("Pump stop threshold must be below the start threshold");
+    }
+
     const common = {
       schemaVersion: telemetry.schemaVersion,
       measurementType: "well-power",
@@ -83,27 +111,78 @@ exports.handler = async function ingestPower(event) {
       source: "shelly-em-gen1-channel-0",
       observedAt: Timestamp.fromDate(telemetry.observedAt),
       receivedAt: FieldValue.serverTimestamp(),
+      publishReason: telemetry.publishReason,
       values: telemetry.values
     };
 
-    const batch = db.batch();
-    batch.create(sample, common);
-    batch.set(current, { ...common, sampleId: sample.id });
-    batch.set(device, {
-      deviceType: "shelly-em-gen1",
-      channel: 0,
-      gateway: "tab5",
-      lastSeenAt: FieldValue.serverTimestamp(),
-      latestSampleId: sample.id
-    }, { merge: true });
-    await batch.commit();
+    const outcome = await db.runTransaction(async transaction => {
+      const [previous, monitoringSnapshot] = await Promise.all([
+        transaction.get(current),
+        transaction.get(monitoring)
+      ]);
+      const previousRunning = previous.exists && typeof previous.data().pumpRunning === "boolean"
+        ? previous.data().pumpRunning
+        : null;
+      const monitoringData = monitoringSnapshot.exists ? monitoringSnapshot.data() : {};
+      const monitoringExpiresAt = monitoringData.expiresAt && typeof monitoringData.expiresAt.toMillis === "function"
+        ? monitoringData.expiresAt.toMillis()
+        : 0;
+      const monitoringActive = monitoringData.active === true && monitoringExpiresAt > Date.now();
+      const pumpRunning = classifyPumpRunning(
+        telemetry.values.powerW,
+        previousRunning,
+        startThresholdW,
+        stopThresholdW
+      );
+      const stateChanged = previousRunning !== null && pumpRunning !== previousRunning;
+
+      transaction.set(current, {
+        ...common,
+        pumpRunning,
+        thresholds: { startW: startThresholdW, stopW: stopThresholdW }
+      });
+      transaction.set(device, {
+        deviceType: "shelly-em-gen1",
+        channel: 0,
+        gateway: "tab5",
+        lastSeenAt: FieldValue.serverTimestamp(),
+        pumpRunning
+      }, { merge: true });
+
+      if (stateChanged) {
+        transaction.create(eventRecord, {
+          schemaVersion: 1,
+          eventType: pumpRunning ? "pump-started" : "pump-stopped",
+          deviceId: telemetry.deviceId,
+          observedAt: Timestamp.fromDate(telemetry.observedAt),
+          receivedAt: FieldValue.serverTimestamp(),
+          powerW: telemetry.values.powerW,
+          voltageV: telemetry.values.voltageV
+        });
+      }
+
+      return {
+        pumpRunning,
+        stateChanged,
+        eventId: stateChanged ? eventRecord.id : null,
+        monitoringActive,
+        monitoringUntil: monitoringActive ? new Date(monitoringExpiresAt).toISOString() : null
+      };
+    });
 
     return response(201, {
       status: "ok",
       accepted: true,
-      sampleId: sample.id,
       siteId: SITE_ID,
-      measurementType: "well-power"
+      measurementType: "well-power",
+      currentDocument: "sites/well-main/current/well-power",
+      pumpRunning: outcome.pumpRunning,
+      stateChanged: outcome.stateChanged,
+      eventId: outcome.eventId,
+      monitoring: {
+        active: outcome.monitoringActive,
+        until: outcome.monitoringUntil
+      }
     });
   } catch (error) {
     if (error instanceof ContractError) {
