@@ -4,6 +4,7 @@ sdkconfig
 sdkconfig.old
 managed_components/
 dependencies.lock
+!firmware/tab5/dependencies.lock
 
 # Node / Netlify
 node_modules/
