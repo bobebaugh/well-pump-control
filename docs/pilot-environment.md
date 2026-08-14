@@ -12,6 +12,7 @@ This file records non-secret deployment identifiers only.
 ## Netlify
 
 - Site/project name: `well-pump-control`
+- Netlify Project/Site ID: `bb016c1a-4517-4a86-994d-ef99e18c8108`
 - Production builds from `main` are intentionally suppressed by the main-only `netlify.toml`.
 - The `pilot` branch contains the deployable HMI and functions configuration.
 
