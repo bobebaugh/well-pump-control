@@ -141,13 +141,15 @@ exports.handler = async function ingestPower(event) {
         pumpRunning,
         thresholds: { startW: startThresholdW, stopW: stopThresholdW }
       });
-      transaction.set(device, {
-        deviceType: "shelly-em-gen1",
-        channel: 0,
-        gateway: "tab5",
-        lastSeenAt: FieldValue.serverTimestamp(),
-        pumpRunning
-      }, { merge: true });
+      if (telemetry.publishReason !== "monitoring" || stateChanged) {
+        transaction.set(device, {
+          deviceType: "shelly-em-gen1",
+          channel: 0,
+          gateway: "tab5",
+          lastSeenAt: FieldValue.serverTimestamp(),
+          pumpRunning
+        }, { merge: true });
+      }
 
       if (stateChanged) {
         transaction.create(eventRecord, {
