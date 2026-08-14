@@ -1,5 +1,6 @@
 "use strict";
 
+const { createPrivateKey } = require("node:crypto");
 const { cert, getApps, initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
 
@@ -29,6 +30,12 @@ function parseServiceAccount(raw) {
     if (!serviceAccount[field]) {
       throw new ConfigurationError(`Service account field ${field} is missing`);
     }
+  }
+
+  try {
+    createPrivateKey(serviceAccount.private_key);
+  } catch {
+    throw new ConfigurationError("Service account private key is not a valid PEM key");
   }
 
   return serviceAccount;
