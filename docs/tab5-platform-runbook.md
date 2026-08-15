@@ -226,6 +226,18 @@ The final root cause was insufficient external-memory bandwidth. `CONFIG_SPIRAM_
 
 Physical confirmation after the controlled correction showed the expected dark-navy screen, centered white `TAB5 DISPLAY QUALIFICATION` text, and red/green/blue rectangles. The display rendered without changing the 128 KiB L2 cache, 64-byte cache line, LVGL partial buffer, portrait orientation, ST7123 panel driver, MIPI DSI/DPI timing, or application display code. The temporary flush diagnostics remain in this physically verified Stage 1 baseline; Stage 2 widgets and touch qualification remain separate work.
 
+## Live display and touch qualification Stage 2
+
+Stage 2 replaces the static qualification scene with a deliberately small `WELL PUMP MONITOR` screen. It uses the UserDemo's software-rotation approach to present a logical 1280x720 landscape canvas on the physical 720x1280 ST7123 panel. The dark-navy screen contains one live panel for pump state, active power, and line voltage, plus one large `TOUCH TEST` button whose count increments once per valid tap and whose color alternates after each tap.
+
+The BSP still detects the physical controller and registers its ST7123 touch device with LVGL. LVGL applies the 90-degree display rotation to pointer coordinates. A one-second LVGL timer reads the existing mutex-protected `PilotSnapshot`; it retains the last valid display sample and shows `WAITING FOR DATA` before one exists or `STALE` when that sample is more than approximately three seconds old. Sampling, Wi-Fi, and Cloud tasks do not call LVGL, and the touch event callback and all widget updates remain in the LVGL context.
+
+The numeric labels deliberately avoid dependence on globally enabled floating-point `printf` support. Power is checked for availability and finiteness, rounded, and formatted as an integer number of watts. Voltage is checked similarly, converted to signed integer tenths, and formatted from its integer and fractional portions with sign-safe magnitude handling. Unavailable values render as `-- W` and `--.- V`.
+
+The accepted ESP-IDF 5.4.2 image is `0x155520` (1,398,048 bytes; size-tool total 1,397,653 bytes). The effective platform remains the physically proven configuration: 200 MHz PSRAM, 128 KiB L2 cache with 64-byte lines, RGB565, one DPI framebuffer, the single 720x50-pixel partial LVGL draw buffer, 70 MHz ST7123 DPI timing, and ESP-Hosted SDIO to the ESP32-C6 at 4-bit/40 MHz. The temporary rate-limited flush diagnostics remain in place.
+
+Runtime qualification observed 200 MHz PSRAM, ST7123 firmware version 3, a 1280x720 LVGL display, registered touch input, successful Wi-Fi and Netlify heartbeat operation, and forty valid Shelly samples at the one-second cadence. No underrun, reset after boot, watchdog, abort, or panic occurred during the bounded monitor. Physical acceptance confirmed correct landscape orientation, correctly updating pump state/watts/voltage, exactly one count increment per tap, and correct touch alignment.
+
 ## Current boundaries and deferred work
 
 - The pilot is monitor-only and has no relay, inhibit, Shelly command, pump-start, or pump-stop implementation.

@@ -1,3 +1,5 @@
+#include <climits>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -22,12 +24,20 @@
 namespace {
 constexpr EventBits_t WIFI_CONNECTED_BIT = BIT0;
 constexpr size_t HTTP_BUFFER_SIZE = 2048;
+constexpr uint32_t UI_REFRESH_PERIOD_MS = 1000;
+constexpr int64_t UI_STALE_AFTER_US = 3000000;
 const char *TAG = "well-pilot";
 EventGroupHandle_t wifi_events;
 uint32_t wifi_start_events;
 uint32_t wifi_disconnect_events;
 uint32_t display_flush_start_events;
 uint32_t display_flush_finish_events;
+lv_obj_t *status_label;
+lv_obj_t *power_label;
+lv_obj_t *voltage_label;
+lv_obj_t *touch_button;
+lv_obj_t *touch_button_label;
+uint32_t touch_test_count;
 
 struct HttpBuffer { char data[HTTP_BUFFER_SIZE]; size_t length; };
 
@@ -203,6 +213,7 @@ bool publish_sample(const PilotSnapshot &snapshot, const char *reason) {
 void sampling_task(void *) {
     TickType_t next = xTaskGetTickCount();
     uint32_t sample_count = 0;
+    uint32_t sample_failure_count = 0;
     bool polling_active = false;
     ESP_LOGI(TAG, "Shelly sampling task started");
     while (true) {
@@ -218,15 +229,21 @@ void sampling_task(void *) {
         } else if (!read_shelly(sample)) {
             sample.captured_us = esp_timer_get_time();
             sample.valid = false;
-            ESP_LOGW(TAG, "Shelly read failed");
+            ++sample_failure_count;
+            if (sample_failure_count <= 3 || sample_failure_count % 30 == 0) {
+                ESP_LOGW(TAG, "Shelly read failed #%lu", (unsigned long)sample_failure_count);
+            }
         } else {
             if (!polling_active) {
                 ESP_LOGI(TAG, "Shelly polling active");
                 polling_active = true;
             }
             ++sample_count;
-            ESP_LOGI(TAG, "Shelly sample %lu received (%s)",
-                (unsigned long)sample_count, sample.valid ? "valid" : "invalid");
+            if (sample_count <= 5 || sample_count % 10 == 0) {
+                ESP_LOGI(TAG, "Shelly sample %lu received (%s; cadence=%lu ms)",
+                    (unsigned long)sample_count, sample.valid ? "valid" : "invalid",
+                    (unsigned long)PILOT_SAMPLE_PERIOD_MS);
+            }
         }
         const bool changed = g_pilot_model.add_sample(sample);
         if (changed) ESP_LOGI(TAG, "Pump transition detected at %.0f W", sample.power_w);
@@ -281,18 +298,71 @@ void qualification_display_event(lv_event_t *event) {
     }
 }
 
-bool create_color_rectangle(lv_obj_t *parent, lv_color_t color) {
-    lv_obj_t *rectangle = lv_obj_create(parent);
-    if (!rectangle) {
-        return false;
+lv_obj_t *make_label(lv_obj_t *parent, const char *text, const lv_font_t *font, lv_color_t color) {
+    lv_obj_t *label = lv_label_create(parent);
+    if (!label) return nullptr;
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, font, 0);
+    lv_obj_set_style_text_color(label, color, 0);
+    return label;
+}
+
+void touch_button_event(lv_event_t *event) {
+    if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+    ++touch_test_count;
+    lv_label_set_text_fmt(touch_button_label, "TOUCH TEST %lu", (unsigned long)touch_test_count);
+    const lv_color_t color = (touch_test_count & 1U) ? lv_color_hex(0x16835d) : lv_color_hex(0x2457c5);
+    lv_obj_set_style_bg_color(touch_button, color, 0);
+    ESP_LOGI(TAG, "Touch test accepted #%lu", (unsigned long)touch_test_count);
+}
+
+void ui_refresh_timer(lv_timer_t *) {
+    static PowerSample last_valid_sample = {};
+    static bool has_valid_sample = false;
+    static bool numeric_fields_logged = false;
+    const PilotSnapshot snapshot = g_pilot_model.snapshot();
+    const int64_t now_us = esp_timer_get_time();
+    if (snapshot.has_sample && snapshot.sample.valid) {
+        last_valid_sample = snapshot.sample;
+        has_valid_sample = true;
     }
-    lv_obj_set_size(rectangle, 150, 120);
-    lv_obj_set_style_bg_color(rectangle, color, 0);
-    lv_obj_set_style_bg_opa(rectangle, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(rectangle, 0, 0);
-    lv_obj_set_style_radius(rectangle, 0, 0);
-    lv_obj_clear_flag(rectangle, LV_OBJ_FLAG_SCROLLABLE);
-    return true;
+    const bool stale = has_valid_sample && now_us - last_valid_sample.captured_us > UI_STALE_AFTER_US;
+
+    if (!has_valid_sample) {
+        lv_label_set_text(status_label, "WAITING FOR DATA");
+    } else if (stale) {
+        lv_label_set_text(status_label, "STALE");
+    } else {
+        lv_label_set_text(status_label, snapshot.pump_running ? "RUNNING" : "IDLE");
+    }
+
+    const double rounded_power = has_valid_sample ? std::round(last_valid_sample.power_w) : 0.0;
+    const double rounded_voltage_tenths = has_valid_sample ? std::round(last_valid_sample.voltage_v * 10.0) : 0.0;
+    const bool power_available = has_valid_sample && std::isfinite(rounded_power) &&
+        rounded_power >= LONG_MIN && rounded_power <= LONG_MAX;
+    const bool voltage_available = has_valid_sample && std::isfinite(rounded_voltage_tenths) &&
+        rounded_voltage_tenths >= LONG_MIN && rounded_voltage_tenths <= LONG_MAX;
+    if (has_valid_sample && !numeric_fields_logged) {
+        ESP_LOGI(TAG, "UI snapshot numeric fields: power=%s voltage=%s",
+            power_available ? "valid" : "unavailable", voltage_available ? "valid" : "unavailable");
+        numeric_fields_logged = true;
+    }
+
+    if (power_available) {
+        lv_label_set_text_fmt(power_label, "%ld W", static_cast<long>(rounded_power));
+    } else {
+        lv_label_set_text(power_label, "-- W");
+    }
+    if (voltage_available) {
+        const long voltage_tenths = static_cast<long>(rounded_voltage_tenths);
+        const unsigned long magnitude = voltage_tenths < 0
+            ? static_cast<unsigned long>(-(voltage_tenths + 1)) + 1UL
+            : static_cast<unsigned long>(voltage_tenths);
+        lv_label_set_text_fmt(voltage_label, "%s%lu.%lu V", voltage_tenths < 0 ? "-" : "",
+            magnitude / 10UL, magnitude % 10UL);
+    } else {
+        lv_label_set_text(voltage_label, "--.- V");
+    }
 }
 
 bool create_ui() {
@@ -320,10 +390,18 @@ bool create_ui() {
         bsp_display_unlock();
         return false;
     }
-    ESP_LOGI(TAG, "LVGL default display exists; resolution=%ldx%ld color_format=%d",
+    bsp_display_rotate(display, LV_DISPLAY_ROTATION_90);
+    ESP_LOGI(TAG, "LVGL landscape rotation applied; resolution=%ldx%ld color_format=%d",
         (long)lv_display_get_horizontal_resolution(default_display),
         (long)lv_display_get_vertical_resolution(default_display),
         (int)lv_display_get_color_format(default_display));
+    lv_indev_t *input = bsp_display_get_input_dev();
+    if (input == nullptr) {
+        ESP_LOGE(TAG, "BSP touch input device is missing");
+        bsp_display_unlock();
+        return false;
+    }
+    ESP_LOGI(TAG, "BSP touch registered with LVGL for rotated display");
     lv_display_add_event_cb(display, qualification_display_event, LV_EVENT_FLUSH_START, nullptr);
     lv_display_add_event_cb(display, qualification_display_event, LV_EVENT_FLUSH_FINISH, nullptr);
 
@@ -337,47 +415,85 @@ bool create_ui() {
     lv_obj_set_style_bg_color(screen, lv_color_hex(0x07152e), 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *title = lv_label_create(screen);
+    lv_obj_t *title = make_label(screen, "WELL PUMP MONITOR", &lv_font_montserrat_36, lv_color_white());
     if (title == nullptr) {
-        ESP_LOGE(TAG, "LVGL qualification title creation failed");
+        ESP_LOGE(TAG, "LVGL header creation failed");
         bsp_display_unlock();
         return false;
     }
-    lv_label_set_text(title, "TAB5 DISPLAY QUALIFICATION");
     lv_obj_set_width(title, LV_PCT(100));
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_36, 0);
-    lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, -120);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 42);
 
-    lv_obj_t *swatches = lv_obj_create(screen);
-    if (swatches == nullptr) {
-        ESP_LOGE(TAG, "LVGL qualification swatch container creation failed");
+    lv_obj_t *panel = lv_obj_create(screen);
+    if (panel == nullptr) {
+        ESP_LOGE(TAG, "LVGL live status panel creation failed");
         bsp_display_unlock();
         return false;
     }
-    lv_obj_set_size(swatches, LV_PCT(100), 150);
-    lv_obj_align(swatches, LV_ALIGN_CENTER, 0, 110);
-    lv_obj_set_flex_flow(swatches, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(swatches, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_bg_opa(swatches, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(swatches, 0, 0);
-    lv_obj_set_style_pad_all(swatches, 0, 0);
-    lv_obj_clear_flag(swatches, LV_OBJ_FLAG_SCROLLABLE);
-    if (!create_color_rectangle(swatches, lv_color_hex(0xff0000)) ||
-        !create_color_rectangle(swatches, lv_color_hex(0x00ff00)) ||
-        !create_color_rectangle(swatches, lv_color_hex(0x0000ff))) {
-        ESP_LOGE(TAG, "LVGL qualification rectangle creation failed");
+    lv_obj_set_pos(panel, 80, 125);
+    lv_obj_set_size(panel, 1120, 270);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x101f3d), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(0x38517d), 0);
+    lv_obj_set_style_border_width(panel, 3, 0);
+    lv_obj_set_style_radius(panel, 18, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *state_caption = make_label(panel, "PUMP STATUS", &lv_font_montserrat_18, lv_color_hex(0x9eb4d8));
+    lv_obj_t *power_caption = make_label(panel, "ACTIVE POWER", &lv_font_montserrat_18, lv_color_hex(0x9eb4d8));
+    lv_obj_t *voltage_caption = make_label(panel, "LINE VOLTAGE", &lv_font_montserrat_18, lv_color_hex(0x9eb4d8));
+    status_label = make_label(panel, "WAITING FOR DATA", &lv_font_montserrat_36, lv_color_white());
+    power_label = make_label(panel, "-- W", &lv_font_montserrat_36, lv_color_white());
+    voltage_label = make_label(panel, "--.- V", &lv_font_montserrat_36, lv_color_white());
+    if (!state_caption || !power_caption || !voltage_caption || !status_label || !power_label || !voltage_label) {
+        ESP_LOGE(TAG, "LVGL live status labels creation failed");
         bsp_display_unlock();
         return false;
     }
-    ESP_LOGI(TAG, "LVGL qualification objects created");
+    lv_obj_set_pos(state_caption, 35, 35);
+    lv_obj_set_pos(status_label, 35, 90);
+    lv_obj_set_pos(power_caption, 445, 35);
+    lv_obj_set_pos(power_label, 445, 90);
+    lv_obj_set_pos(voltage_caption, 785, 35);
+    lv_obj_set_pos(voltage_label, 785, 90);
+
+    touch_button = lv_button_create(screen);
+    if (!touch_button) {
+        ESP_LOGE(TAG, "LVGL touch button creation failed");
+        bsp_display_unlock();
+        return false;
+    }
+    lv_obj_set_pos(touch_button, 250, 460);
+    lv_obj_set_size(touch_button, 780, 180);
+    lv_obj_set_style_bg_color(touch_button, lv_color_hex(0x2457c5), 0);
+    lv_obj_set_style_bg_color(touch_button, lv_color_hex(0x183d8f), LV_STATE_PRESSED);
+    lv_obj_set_style_radius(touch_button, 20, 0);
+    lv_obj_set_style_border_width(touch_button, 3, 0);
+    lv_obj_set_style_border_color(touch_button, lv_color_hex(0xdce7ff), 0);
+    touch_button_label = make_label(touch_button, "TOUCH TEST 0", &lv_font_montserrat_36, lv_color_white());
+    if (!touch_button_label) {
+        ESP_LOGE(TAG, "LVGL touch button label creation failed");
+        bsp_display_unlock();
+        return false;
+    }
+    lv_obj_center(touch_button_label);
+    lv_obj_add_event_cb(touch_button, touch_button_event, LV_EVENT_CLICKED, nullptr);
+
+    ui_refresh_timer(nullptr);
+    if (lv_timer_create(ui_refresh_timer, UI_REFRESH_PERIOD_MS, nullptr) == nullptr) {
+        ESP_LOGE(TAG, "LVGL telemetry refresh timer creation failed");
+        bsp_display_unlock();
+        return false;
+    }
+    ESP_LOGI(TAG, "Stage 2 LVGL objects created; snapshot refresh=%lu ms stale=%lld us",
+        (unsigned long)UI_REFRESH_PERIOD_MS, (long long)UI_STALE_AFTER_US);
     lv_obj_invalidate(screen);
     lv_refr_now(default_display);
-    ESP_LOGI(TAG, "LVGL qualification invalidation and refresh requested");
+    ESP_LOGI(TAG, "LVGL Stage 2 invalidation and refresh requested");
     bsp_display_unlock();
     bsp_display_backlight_on();
-    ESP_LOGI(TAG, "Display qualification scene initialized and backlight enabled");
+    ESP_LOGI(TAG, "Stage 2 landscape live-touch scene initialized and backlight enabled");
     return true;
 }
 
@@ -388,7 +504,7 @@ void display_task(void *) {
         return;
     }
 
-    ESP_LOGI(TAG, "Display qualification is static; telemetry remains independent");
+    ESP_LOGI(TAG, "Display task complete; LVGL timer owns UI refresh and telemetry remains independent");
     vTaskDelete(nullptr);
 }
 }  // namespace
