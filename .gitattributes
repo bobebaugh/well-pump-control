@@ -1,0 +1,2 @@
+# Preserve upstream LVGL 9.2.2 source formatting during Git whitespace checks.
+firmware/tab5/components/lvgl/** -whitespace

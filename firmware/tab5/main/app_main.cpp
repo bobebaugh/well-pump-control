@@ -26,6 +26,8 @@ const char *TAG = "well-pilot";
 EventGroupHandle_t wifi_events;
 lv_obj_t *state_label, *power_label, *voltage_label, *pf_label;
 lv_obj_t *cycle_label, *network_label, *history_label;
+uint32_t wifi_start_events;
+uint32_t wifi_disconnect_events;
 
 struct HttpBuffer { char data[HTTP_BUFFER_SIZE]; size_t length; };
 
@@ -41,38 +43,80 @@ esp_err_t http_event(esp_http_client_event_t *event) {
     return ESP_OK;
 }
 
-void wifi_handler(void *, esp_event_base_t base, int32_t id, void *) {
+void wifi_handler(void *, esp_event_base_t base, int32_t id, void *event_data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        ++wifi_start_events;
+        const esp_err_t result = esp_wifi_connect();
+        ESP_LOGI(TAG, "Wi-Fi STA_START #%lu; esp_wifi_connect()=%s (0x%lx)",
+            (unsigned long)wifi_start_events, esp_err_to_name(result), (unsigned long)result);
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        ++wifi_disconnect_events;
+        const auto *disconnect = static_cast<const wifi_event_sta_disconnected_t *>(event_data);
+        const unsigned reason = disconnect ? disconnect->reason : 0;
         xEventGroupClearBits(wifi_events, WIFI_CONNECTED_BIT);
         g_pilot_model.set_wifi(false);
-        esp_wifi_connect();
+        const esp_err_t result = esp_wifi_connect();
+        ESP_LOGW(TAG, "Wi-Fi disconnected #%lu reason=%u; esp_wifi_connect()=%s (0x%lx)",
+            (unsigned long)wifi_disconnect_events, reason, esp_err_to_name(result), (unsigned long)result);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         xEventGroupSetBits(wifi_events, WIFI_CONNECTED_BIT);
         g_pilot_model.set_wifi(true);
+        ESP_LOGI(TAG, "Wi-Fi connected");
     }
 }
 
-void start_wifi() {
-    wifi_events = xEventGroupCreate();
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+bool log_wifi_result(const char *operation, esp_err_t result) {
+    ESP_LOGI(TAG, "Wi-Fi init %s=%s (0x%lx)", operation, esp_err_to_name(result), (unsigned long)result);
+    return result == ESP_OK;
+}
+
+bool initialize_board_io_and_internal_antenna() {
+    const esp_err_t i2c_result = bsp_i2c_init();
+    if (i2c_result != ESP_OK) {
+        ESP_LOGE(TAG, "Board I2C initialization failed: %s", esp_err_to_name(i2c_result));
+        return false;
+    }
+
+    // PI4IOE1 P0 is the Tab5 antenna select.  Its BSP initialization makes it
+    // an output; explicitly drive it low to select the internal antenna.
+    bsp_io_expander_pi4ioe_init(bsp_i2c_get_handle());
+    bsp_set_ext_antenna_enable(false);
+    ESP_LOGI(TAG, "Internal Wi-Fi antenna selected (PI4IOE1 P0 low)");
+    return true;
+}
+
+bool start_wifi() {
+    // This mirrors the known-working UserDemo task sequence: netif, default
+    // event loop, remote Wi-Fi netif, Wi-Fi init, configuration, then start.
+    if (!log_wifi_result("esp_netif_init", esp_netif_init())) return false;
+    if (!log_wifi_result("esp_event_loop_create_default", esp_event_loop_create_default())) return false;
+    esp_netif_t *station_netif = esp_netif_create_default_wifi_sta();
+    ESP_LOGI(TAG, "Wi-Fi init esp_netif_create_default_wifi_sta=%s", station_netif ? "OK" : "NULL");
+    if (!station_netif) return false;
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&config));
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_handler, nullptr));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_handler, nullptr));
+    if (!log_wifi_result("esp_wifi_init", esp_wifi_init(&config))) return false;
+    if (!log_wifi_result("register_wifi_events",
+            esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_handler, nullptr))) return false;
+    if (!log_wifi_result("register_ip_event",
+            esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_handler, nullptr))) return false;
     wifi_config_t station = {};
     strlcpy(reinterpret_cast<char *>(station.sta.ssid), PILOT_WIFI_SSID, sizeof(station.sta.ssid));
     strlcpy(reinterpret_cast<char *>(station.sta.password), PILOT_WIFI_PASSWORD, sizeof(station.sta.password));
     station.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     station.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &station));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    if (!log_wifi_result("esp_wifi_set_mode", esp_wifi_set_mode(WIFI_MODE_STA))) return false;
+    if (!log_wifi_result("esp_wifi_set_config", esp_wifi_set_config(WIFI_IF_STA, &station))) return false;
+    if (!log_wifi_result("esp_wifi_start", esp_wifi_start())) return false;
     esp_sntp_config_t time_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-    esp_netif_sntp_init(&time_config);
+    if (!log_wifi_result("esp_netif_sntp_init", esp_netif_sntp_init(&time_config))) return false;
+    return true;
+}
+
+void wifi_start_task(void *) {
+    if (!start_wifi()) {
+        ESP_LOGE(TAG, "Wi-Fi startup failed; telemetry will remain offline");
+    }
+    vTaskDelete(nullptr);
 }
 
 bool read_shelly(PowerSample &sample) {
@@ -80,7 +124,7 @@ bool read_shelly(PowerSample &sample) {
     esp_http_client_config_t config = {};
     config.url = PILOT_SHELLY_URL;
     config.method = HTTP_METHOD_GET;
-    config.timeout_ms = 2500;
+    config.timeout_ms = PILOT_SHELLY_REQUEST_TIMEOUT_MS;
     config.event_handler = http_event;
     config.user_data = &response;
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -133,7 +177,7 @@ bool publish_sample(const PilotSnapshot &snapshot, const char *reason) {
     esp_http_client_config_t config = {};
     config.url = PILOT_INGEST_URL;
     config.method = HTTP_METHOD_POST;
-    config.timeout_ms = 8000;
+    config.timeout_ms = PILOT_PUBLISH_REQUEST_TIMEOUT_MS;
     config.event_handler = http_event;
     config.user_data = &response;
     config.crt_bundle_attach = esp_crt_bundle_attach;
@@ -158,12 +202,31 @@ bool publish_sample(const PilotSnapshot &snapshot, const char *reason) {
 
 void sampling_task(void *) {
     TickType_t next = xTaskGetTickCount();
+    uint32_t sample_count = 0;
+    bool polling_active = false;
+    ESP_LOGI(TAG, "Shelly sampling task started");
     while (true) {
         PowerSample sample = {};
-        if (!read_shelly(sample)) {
+        const bool connected = wifi_events && (xEventGroupGetBits(wifi_events) & WIFI_CONNECTED_BIT) != 0;
+        if (!connected) {
+            sample.captured_us = esp_timer_get_time();
+            sample.valid = false;
+            if (polling_active) {
+                ESP_LOGW(TAG, "Shelly polling paused while Wi-Fi is unavailable");
+                polling_active = false;
+            }
+        } else if (!read_shelly(sample)) {
             sample.captured_us = esp_timer_get_time();
             sample.valid = false;
             ESP_LOGW(TAG, "Shelly read failed");
+        } else {
+            if (!polling_active) {
+                ESP_LOGI(TAG, "Shelly polling active");
+                polling_active = true;
+            }
+            ++sample_count;
+            ESP_LOGI(TAG, "Shelly sample %lu received (%s)",
+                (unsigned long)sample_count, sample.valid ? "valid" : "invalid");
         }
         const bool changed = g_pilot_model.add_sample(sample);
         if (changed) ESP_LOGI(TAG, "Pump transition detected at %.0f W", sample.power_w);
@@ -174,22 +237,28 @@ void sampling_task(void *) {
 void cloud_task(void *) {
     uint32_t sent_sample = 0, seen_state = 0;
     int64_t last_publish_us = -(int64_t)PILOT_HEARTBEAT_PERIOD_MS * 1000;
+    int64_t last_attempt_us = -(int64_t)PILOT_PUBLISH_RETRY_MS * 1000;
     while (true) {
         PilotSnapshot snapshot = g_pilot_model.snapshot();
         const int64_t now = esp_timer_get_time();
-        const bool connected = (xEventGroupGetBits(wifi_events) & WIFI_CONNECTED_BIT) != 0;
+        const bool connected = wifi_events && (xEventGroupGetBits(wifi_events) & WIFI_CONNECTED_BIT) != 0;
         const bool transition = snapshot.state_sequence != seen_state;
         const bool heartbeat = now - last_publish_us >= (int64_t)PILOT_HEARTBEAT_PERIOD_MS * 1000;
         const bool live = snapshot.monitoring_active && snapshot.sample_sequence != sent_sample;
         const bool clock_ready = time(nullptr) >= 1700000000;
-        if (connected && clock_ready && snapshot.has_sample && (transition || heartbeat || live)) {
+        const bool retry_due = now - last_attempt_us >= (int64_t)PILOT_PUBLISH_RETRY_MS * 1000;
+        if (connected && clock_ready && snapshot.has_sample && retry_due && (transition || heartbeat || live)) {
             const char *reason = live ? "monitoring" : (transition ? "state-change" : "heartbeat");
+            last_attempt_us = now;
             const bool success = publish_sample(snapshot, reason);
             g_pilot_model.note_cloud_attempt(success);
             if (success) {
                 last_publish_us = now;
                 sent_sample = snapshot.sample_sequence;
                 seen_state = snapshot.state_sequence;
+                ESP_LOGI(TAG, "Netlify publish succeeded (%s)", reason);
+            } else {
+                ESP_LOGW(TAG, "Netlify publish failed (%s)", reason);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(snapshot.monitoring_active ? 200 : 1000));
@@ -216,9 +285,24 @@ lv_obj_t *make_label(lv_obj_t *parent, const char *text, int x, int y, const lv_
     return label;
 }
 
-void create_ui() {
-    bsp_display_start();
-    bsp_display_lock(0);
+bool create_ui() {
+    ESP_LOGI(TAG, "Display initialization started");
+    const esp_err_t i2c_result = bsp_i2c_init();
+    if (i2c_result != ESP_OK) {
+        ESP_LOGE(TAG, "Display I2C initialization failed: %s", esp_err_to_name(i2c_result));
+        return false;
+    }
+    bsp_reset_tp();
+    if (bsp_display_start() == nullptr) {
+        ESP_LOGE(TAG, "Display controller initialization failed");
+        return false;
+    }
+    ESP_LOGI(TAG, "Display controller initialized");
+    if (!bsp_display_lock(0)) {
+        ESP_LOGE(TAG, "Display lock acquisition failed");
+        return false;
+    }
+    ESP_LOGI(TAG, "Display lock acquired");
     lv_obj_t *screen = lv_scr_act();
     lv_obj_set_style_bg_color(screen, lv_color_hex(0x080b1d), 0);
     lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
@@ -245,6 +329,8 @@ void create_ui() {
     make_label(health, "Reserved: pressure · tank level · alarms · advanced controls", 20, 220, &lv_font_montserrat_18);
     bsp_display_unlock();
     bsp_display_backlight_on();
+    ESP_LOGI(TAG, "Display initialized and backlight enabled");
+    return true;
 }
 
 void ui_task(void *) {
@@ -278,6 +364,19 @@ void ui_task(void *) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
+
+void display_task(void *) {
+    if (!create_ui()) {
+        ESP_LOGE(TAG, "Display task stopped; telemetry remains active");
+        vTaskDelete(nullptr);
+        return;
+    }
+
+    if (xTaskCreate(ui_task, "pilot-ui", 6144, nullptr, 3, nullptr) != pdPASS) {
+        ESP_LOGE(TAG, "UI refresh task creation failed; telemetry remains active");
+    }
+    vTaskDelete(nullptr);
+}
 }  // namespace
 
 extern "C" void app_main(void) {
@@ -288,13 +387,23 @@ extern "C" void app_main(void) {
     }
     ESP_ERROR_CHECK(nvs);
     ESP_ERROR_CHECK(g_pilot_model.begin() ? ESP_OK : ESP_ERR_NO_MEM);
-    create_ui();
+    ESP_LOGI(TAG, "Pilot application initialized");
+    const bool internal_antenna_ready = initialize_board_io_and_internal_antenna();
 #if PILOT_HAS_LOCAL_SECRETS
-    start_wifi();
+    wifi_events = xEventGroupCreate();
+    if (!wifi_events) {
+        ESP_LOGE(TAG, "Wi-Fi event group allocation failed; telemetry will remain offline");
+    } else if (!internal_antenna_ready) {
+        ESP_LOGE(TAG, "Internal antenna selection failed; telemetry will remain offline");
+    } else if (xTaskCreate(wifi_start_task, "pilot-wifi", 6144, nullptr, 5, nullptr) != pdPASS) {
+        ESP_LOGE(TAG, "Wi-Fi startup task creation failed; telemetry will remain offline");
+    }
     xTaskCreate(sampling_task, "shelly-sample", 8192, nullptr, 5, nullptr);
     xTaskCreate(cloud_task, "cloud-publish", 10240, nullptr, 4, nullptr);
 #else
     ESP_LOGW(TAG, "secrets.local.h is absent; networking and Shelly sampling are disabled");
 #endif
-    xTaskCreate(ui_task, "pilot-ui", 6144, nullptr, 3, nullptr);
+    if (xTaskCreatePinnedToCore(display_task, "pilot-display", 10240, nullptr, 3, nullptr, 1) != pdPASS) {
+        ESP_LOGE(TAG, "Display task creation failed; telemetry remains active");
+    }
 }

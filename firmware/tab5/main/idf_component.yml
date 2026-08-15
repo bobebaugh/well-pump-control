@@ -8,4 +8,3 @@ dependencies:
   espressif/usb_host_hid: "1.0.3"
   espressif/esp_hosted: "1.4.0"
   espressif/esp_wifi_remote: "0.8.5"
-  lvgl/lvgl: "8.4.0"

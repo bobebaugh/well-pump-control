@@ -12,6 +12,9 @@
 #define PILOT_SHELLY_URL "http://192.168.50.141/emeter/0"
 #define PILOT_INGEST_URL "https://pilot--well-pump-control.netlify.app/.netlify/functions/ingest-power"
 #define PILOT_SAMPLE_PERIOD_MS 1000
+#define PILOT_SHELLY_REQUEST_TIMEOUT_MS 750
+#define PILOT_PUBLISH_REQUEST_TIMEOUT_MS 3000
+#define PILOT_PUBLISH_RETRY_MS 60000
 #define PILOT_HEARTBEAT_PERIOD_MS 60000
 #define PILOT_MONITOR_LIMIT_MS (15 * 60 * 1000)
 #define PILOT_START_THRESHOLD_W 1000.0
