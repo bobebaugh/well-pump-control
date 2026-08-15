@@ -258,3 +258,36 @@ When changing platform-sensitive code:
 5. Run a short startup/cadence check before a longer stability observation.
 6. Do not commit a platform change until display, Wi-Fi, Shelly polling, Netlify heartbeat, and bounded stability pass.
 7. Keep diagnostic instrumentation non-sensitive and remove excessive per-second logging once the condition is understood.
+
+## Local checkout and durable sessions
+
+Physical Tab5 work uses Local mode in the canonical Windows checkout, `C:\Tab5\well-pump-control`. Automatically created Codex worktrees are appropriate for non-physical review work but are not valid for builds intended for a physical flash or monitor session.
+
+At the start of a session, inspect the worktree, fetch `origin` with pruning, and query the advertised branch directly with `git ls-remote origin refs/heads/<branch>`. A cached remote-tracking ref can be stale and is never proof of the current remote tip. When a task names a starting SHA, compare that SHA with the advertised ref before editing; stop for a mismatch, dirty worktree, missing recovery artifact, or non-fast-forward condition.
+
+### Known-working Windows environment
+
+The verified ESP-IDF installation is `C:\esp\v5.4.2\esp-idf`. Its working tools configuration is intentionally explicit:
+
+```powershell
+$env:IDF_TOOLS_PATH = 'C:\Espressif\tools'
+$env:IDF_PYTHON_ENV_PATH = 'C:\Espressif\tools\python\v5.4.2\venv'
+. C:\esp\v5.4.2\esp-idf\export.ps1
+```
+
+Activation must produce ESP-IDF `v5.4.2` and Python `C:\Espressif\tools\python\v5.4.2\venv\Scripts\python.exe`. The associated constraints file is `C:\Espressif\tools\espidf.constraints.v5.4.txt`. An environment failure ends the firmware task; do not install, repair, replace, upgrade, or regenerate any toolchain component.
+
+From `firmware\tab5`, use the checked-in helpers:
+
+```powershell
+.\tools\verify-session.ps1 -ExpectedPilotSha <40-character-sha>
+.\tools\build.ps1
+.\tools\flash.ps1 -Port COM3
+.\tools\monitor.ps1 -Port COM3
+```
+
+`flash.ps1` requires an explicit port and verifies its presence. A normal flash has no NVS-erase, full-chip-erase, or SD-format path. COM3 remains the expected port but must be verified at the time of flashing. `monitor.ps1` only starts the standard serial monitor.
+
+### Stale-base SD prevention
+
+An SD qualification draft was prepared against a stale base. SD work must remain isolated until a session verifies the live advertised base and required starting SHA. One designated SD owner may access the filesystem, and no helper may automatically format SD media.

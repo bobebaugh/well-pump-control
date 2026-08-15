@@ -19,3 +19,11 @@
 
 - Never commit secrets, credentials, tokens, private keys, Wi-Fi information, or production configuration values.
 - Tab5 sends authenticated HTTPS requests to Netlify and never holds Firestore administrative credentials.
+
+## Repository sessions
+
+- At session start, run `git fetch origin --prune`, then query the actual advertised branch with `git ls-remote`; a cached `origin/*` ref is not authoritative.
+- When a task specifies a starting SHA, verify that exact SHA before editing. Stop rather than silently changing branches, bases, dependencies, or toolchains.
+- Preserve unrelated and user-owned changes. Never display, stage, or commit secrets.
+- Never delete branches, commits, patches, or worktrees unless explicitly authorized. Do not run simultaneous modifying agents in the same local checkout.
+- Route Tab5 firmware work to `firmware/tab5/AGENTS.md` and `docs/tab5-platform-runbook.md`.
