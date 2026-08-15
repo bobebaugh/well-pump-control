@@ -20,6 +20,7 @@
 #include "nvs_flash.h"
 #include "pilot_config.h"
 #include "pilot_model.h"
+#include "sd_qualification.h"
 
 namespace {
 constexpr EventBits_t WIFI_CONNECTED_BIT = BIT0;
@@ -37,7 +38,15 @@ lv_obj_t *power_label;
 lv_obj_t *voltage_label;
 lv_obj_t *touch_button;
 lv_obj_t *touch_button_label;
+lv_obj_t *sd_status_label;
+lv_obj_t *sd_format_button;
+lv_obj_t *sd_format_button_label;
 uint32_t touch_test_count;
+enum class SdFormatUiState : uint8_t { Idle, ArmedForHold, AwaitingPhysicalConfirmation, Locked, Submitted };
+SdFormatUiState sd_format_ui_state;
+int64_t sd_format_arm_deadline_us;
+int64_t sd_format_hold_started_us;
+bool sd_format_ignore_next_click;
 
 struct HttpBuffer { char data[HTTP_BUFFER_SIZE]; size_t length; };
 
@@ -316,6 +325,91 @@ void touch_button_event(lv_event_t *event) {
     ESP_LOGI(TAG, "Touch test accepted #%lu", (unsigned long)touch_test_count);
 }
 
+const char *sd_phase_name(SdQualificationPhase phase) {
+    switch (phase) {
+        case SdQualificationPhase::Starting: return "PROBING";
+        case SdQualificationPhase::NotDetected: return "NOT DETECTED";
+        case SdQualificationPhase::MountFailed: return "MOUNT FAILED";
+        case SdQualificationPhase::Mounted: return "MOUNTED";
+        case SdQualificationPhase::AwaitingPhysicalConfirmation: return "CONFIRM FORMAT";
+        case SdQualificationPhase::Formatting: return "FORMATTING";
+        case SdQualificationPhase::Qualified: return "QUALIFIED";
+        case SdQualificationPhase::Failed: return "FAILED";
+    }
+    return "UNKNOWN";
+}
+
+void reset_sd_format_ui(const char *label = "SD FORMAT\nTAP TO ARM") {
+    sd_format_ui_state = SdFormatUiState::Idle;
+    sd_format_arm_deadline_us = 0;
+    sd_format_hold_started_us = 0;
+    sd_format_ignore_next_click = false;
+    lv_label_set_text(sd_format_button_label, label);
+    lv_obj_clear_state(sd_format_button, LV_STATE_DISABLED);
+}
+
+void sd_format_button_event(lv_event_t *event) {
+    const lv_event_code_t code = lv_event_get_code(event);
+    const int64_t now_us = esp_timer_get_time();
+    if (code == LV_EVENT_CLICKED) {
+        if (sd_format_ignore_next_click) {
+            sd_format_ignore_next_click = false;
+            return;
+        }
+        if (sd_format_ui_state == SdFormatUiState::Idle) {
+            sd_format_ui_state = SdFormatUiState::ArmedForHold;
+            sd_format_arm_deadline_us = now_us + 10 * 1000 * 1000;
+            lv_label_set_text(sd_format_button_label, "HOLD\n3 SECONDS");
+            return;
+        }
+        if (sd_format_ui_state == SdFormatUiState::AwaitingPhysicalConfirmation) {
+            if (sd_qualification_confirm_physical_format()) {
+                sd_format_ui_state = SdFormatUiState::Submitted;
+                lv_label_set_text(sd_format_button_label, "FORMATTING\nDO NOT REMOVE POWER");
+                lv_obj_add_state(sd_format_button, LV_STATE_DISABLED);
+            } else {
+                sd_format_ui_state = SdFormatUiState::Locked;
+                lv_label_set_text(sd_format_button_label, "FORMAT LOCKED\nBOB APPROVAL REQUIRED");
+                lv_obj_add_state(sd_format_button, LV_STATE_DISABLED);
+            }
+        }
+        return;
+    }
+    if (sd_format_ui_state != SdFormatUiState::ArmedForHold) return;
+    if (code == LV_EVENT_PRESSED) {
+        sd_format_hold_started_us = now_us;
+    } else if (code == LV_EVENT_PRESSING && sd_format_hold_started_us != 0 &&
+               now_us - sd_format_hold_started_us >= 3 * 1000 * 1000) {
+        if (sd_qualification_request_physical_confirmation()) {
+            sd_format_ui_state = SdFormatUiState::AwaitingPhysicalConfirmation;
+            sd_format_ignore_next_click = true;
+            lv_label_set_text(sd_format_button_label, "PHYSICAL\nCONFIRM FORMAT");
+        } else {
+            reset_sd_format_ui("FORMAT REQUEST\nNOT ACCEPTED");
+        }
+    } else if (code == LV_EVENT_RELEASED) {
+        reset_sd_format_ui();
+    }
+}
+
+void update_sd_ui() {
+    const SdQualificationSnapshot sd = sd_qualification_snapshot();
+    const unsigned long long capacity_mib = (unsigned long long)(sd.capacity_bytes / (1024 * 1024));
+    const unsigned long long free_mib = (unsigned long long)(sd.free_bytes / (1024 * 1024));
+    lv_label_set_text_fmt(sd_status_label, "SD: %s | card %s | %s%s | %llu MiB / %llu MiB free | %s",
+        sd_phase_name(sd.phase), sd.card_detected ? "detected" : "not detected",
+        sd.mounted ? "mounted" : "not mounted", sd.fat32 ? " FAT32" : "",
+        capacity_mib, free_mib, sd.detail);
+    if (sd_format_ui_state == SdFormatUiState::ArmedForHold && esp_timer_get_time() >= sd_format_arm_deadline_us) {
+        reset_sd_format_ui("FORMAT ARMING\nEXPIRED");
+    }
+    if (sd.phase == SdQualificationPhase::Formatting && sd_format_ui_state != SdFormatUiState::Submitted) {
+        sd_format_ui_state = SdFormatUiState::Submitted;
+        lv_label_set_text(sd_format_button_label, "FORMATTING\nDO NOT REMOVE POWER");
+        lv_obj_add_state(sd_format_button, LV_STATE_DISABLED);
+    }
+}
+
 void ui_refresh_timer(lv_timer_t *) {
     static PowerSample last_valid_sample = {};
     static bool has_valid_sample = false;
@@ -363,6 +457,7 @@ void ui_refresh_timer(lv_timer_t *) {
     } else {
         lv_label_set_text(voltage_label, "--.- V");
     }
+    update_sd_ui();
 }
 
 bool create_ui() {
@@ -480,6 +575,42 @@ bool create_ui() {
     lv_obj_center(touch_button_label);
     lv_obj_add_event_cb(touch_button, touch_button_event, LV_EVENT_CLICKED, nullptr);
 
+    sd_format_button = lv_button_create(screen);
+    if (!sd_format_button) {
+        ESP_LOGE(TAG, "LVGL SD format button creation failed");
+        bsp_display_unlock();
+        return false;
+    }
+    lv_obj_set_pos(sd_format_button, 30, 460);
+    lv_obj_set_size(sd_format_button, 190, 180);
+    lv_obj_set_style_bg_color(sd_format_button, lv_color_hex(0x7a1d27), 0);
+    lv_obj_set_style_bg_color(sd_format_button, lv_color_hex(0x4d1018), LV_STATE_PRESSED);
+    lv_obj_set_style_radius(sd_format_button, 16, 0);
+    lv_obj_set_style_border_width(sd_format_button, 2, 0);
+    lv_obj_set_style_border_color(sd_format_button, lv_color_hex(0xffc4c8), 0);
+    sd_format_button_label = make_label(sd_format_button, "", &lv_font_montserrat_18, lv_color_white());
+    if (!sd_format_button_label) {
+        ESP_LOGE(TAG, "LVGL SD format button label creation failed");
+        bsp_display_unlock();
+        return false;
+    }
+    lv_label_set_long_mode(sd_format_button_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(sd_format_button_label, 170);
+    lv_obj_set_style_text_align(sd_format_button_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(sd_format_button_label);
+    lv_obj_add_event_cb(sd_format_button, sd_format_button_event, LV_EVENT_ALL, nullptr);
+    reset_sd_format_ui();
+
+    sd_status_label = make_label(screen, "SD: owner starting", &lv_font_montserrat_14, lv_color_hex(0x9eb4d8));
+    if (!sd_status_label) {
+        ESP_LOGE(TAG, "LVGL SD status label creation failed");
+        bsp_display_unlock();
+        return false;
+    }
+    lv_obj_set_pos(sd_status_label, 20, 674);
+    lv_obj_set_width(sd_status_label, 1240);
+    lv_obj_set_style_text_align(sd_status_label, LV_TEXT_ALIGN_CENTER, 0);
+
     ui_refresh_timer(nullptr);
     if (lv_timer_create(ui_refresh_timer, UI_REFRESH_PERIOD_MS, nullptr) == nullptr) {
         ESP_LOGE(TAG, "LVGL telemetry refresh timer creation failed");
@@ -533,6 +664,7 @@ extern "C" void app_main(void) {
 #else
     ESP_LOGW(TAG, "secrets.local.h is absent; networking and Shelly sampling are disabled");
 #endif
+    sd_qualification_begin();
     if (xTaskCreatePinnedToCore(display_task, "pilot-display", 10240, nullptr, 3, nullptr, 1) != pdPASS) {
         ESP_LOGE(TAG, "Display task creation failed; telemetry remains active");
     }
