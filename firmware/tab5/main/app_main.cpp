@@ -24,10 +24,10 @@ constexpr EventBits_t WIFI_CONNECTED_BIT = BIT0;
 constexpr size_t HTTP_BUFFER_SIZE = 2048;
 const char *TAG = "well-pilot";
 EventGroupHandle_t wifi_events;
-lv_obj_t *state_label, *power_label, *voltage_label, *pf_label;
-lv_obj_t *cycle_label, *network_label, *history_label;
 uint32_t wifi_start_events;
 uint32_t wifi_disconnect_events;
+uint32_t display_flush_start_events;
+uint32_t display_flush_finish_events;
 
 struct HttpBuffer { char data[HTTP_BUFFER_SIZE]; size_t length; };
 
@@ -265,24 +265,34 @@ void cloud_task(void *) {
     }
 }
 
-lv_obj_t *make_card(lv_obj_t *parent, int x, int y, int w, int h) {
-    lv_obj_t *card = lv_obj_create(parent);
-    lv_obj_set_pos(card, x, y);
-    lv_obj_set_size(card, w, h);
-    lv_obj_set_style_bg_color(card, lv_color_hex(0x12172b), 0);
-    lv_obj_set_style_border_color(card, lv_color_hex(0x2d365a), 0);
-    lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_radius(card, 14, 0);
-    return card;
+void qualification_display_event(lv_event_t *event) {
+    const lv_event_code_t code = lv_event_get_code(event);
+    uint32_t *count = nullptr;
+    const char *name = nullptr;
+    if (code == LV_EVENT_FLUSH_START) {
+        count = &display_flush_start_events;
+        name = "flush began";
+    } else if (code == LV_EVENT_FLUSH_FINISH) {
+        count = &display_flush_finish_events;
+        name = "flush completed";
+    }
+    if (count && ++*count <= 3) {
+        ESP_LOGI(TAG, "LVGL display %s #%lu", name, (unsigned long)*count);
+    }
 }
 
-lv_obj_t *make_label(lv_obj_t *parent, const char *text, int x, int y, const lv_font_t *font) {
-    lv_obj_t *label = lv_label_create(parent);
-    lv_label_set_text(label, text);
-    lv_obj_set_pos(label, x, y);
-    lv_obj_set_style_text_font(label, font, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(0xf2f5ff), 0);
-    return label;
+bool create_color_rectangle(lv_obj_t *parent, lv_color_t color) {
+    lv_obj_t *rectangle = lv_obj_create(parent);
+    if (!rectangle) {
+        return false;
+    }
+    lv_obj_set_size(rectangle, 150, 120);
+    lv_obj_set_style_bg_color(rectangle, color, 0);
+    lv_obj_set_style_bg_opa(rectangle, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(rectangle, 0, 0);
+    lv_obj_set_style_radius(rectangle, 0, 0);
+    lv_obj_clear_flag(rectangle, LV_OBJ_FLAG_SCROLLABLE);
+    return true;
 }
 
 bool create_ui() {
@@ -293,7 +303,8 @@ bool create_ui() {
         return false;
     }
     bsp_reset_tp();
-    if (bsp_display_start() == nullptr) {
+    lv_display_t *display = bsp_display_start();
+    if (display == nullptr) {
         ESP_LOGE(TAG, "Display controller initialization failed");
         return false;
     }
@@ -303,66 +314,71 @@ bool create_ui() {
         return false;
     }
     ESP_LOGI(TAG, "Display lock acquired");
-    lv_obj_t *screen = lv_scr_act();
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0x080b1d), 0);
-    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
-    make_label(screen, "PRIVATE WELL · OBSERVATIONAL PILOT", 34, 24, &lv_font_montserrat_18);
-    make_label(screen, "Well Pump Monitoring", 34, 55, &lv_font_montserrat_36);
-    lv_obj_t *notice = make_label(screen, "MONITOR ONLY · NO PUMP CONTROL", 845, 38, &lv_font_montserrat_18);
-    lv_obj_set_style_text_color(notice, lv_color_hex(0xf2c94c), 0);
+    lv_display_t *default_display = lv_display_get_default();
+    if (default_display == nullptr) {
+        ESP_LOGE(TAG, "LVGL default display is missing");
+        bsp_display_unlock();
+        return false;
+    }
+    ESP_LOGI(TAG, "LVGL default display exists; resolution=%ldx%ld color_format=%d",
+        (long)lv_display_get_horizontal_resolution(default_display),
+        (long)lv_display_get_vertical_resolution(default_display),
+        (int)lv_display_get_color_format(default_display));
+    lv_display_add_event_cb(display, qualification_display_event, LV_EVENT_FLUSH_START, nullptr);
+    lv_display_add_event_cb(display, qualification_display_event, LV_EVENT_FLUSH_FINISH, nullptr);
 
-    lv_obj_t *state = make_card(screen, 30, 125, 380, 190);
-    make_label(state, "PUMP", 20, 16, &lv_font_montserrat_18);
-    state_label = make_label(state, "WAITING FOR METER", 20, 52, &lv_font_montserrat_24);
-    power_label = make_label(state, "— W", 20, 100, &lv_font_montserrat_36);
-    lv_obj_t *electrical = make_card(screen, 430, 125, 390, 190);
-    make_label(electrical, "ELECTRICAL", 20, 16, &lv_font_montserrat_18);
-    voltage_label = make_label(electrical, "Voltage  — V", 20, 58, &lv_font_montserrat_24);
-    pf_label = make_label(electrical, "Power factor  —", 20, 105, &lv_font_montserrat_24);
-    lv_obj_t *cycle = make_card(screen, 840, 125, 400, 190);
-    make_label(cycle, "CURRENT CYCLE", 20, 16, &lv_font_montserrat_18);
-    cycle_label = make_label(cycle, "—", 20, 64, &lv_font_montserrat_36);
-    lv_obj_t *health = make_card(screen, 30, 340, 1210, 310);
-    make_label(health, "DEVICE HEALTH", 20, 16, &lv_font_montserrat_18);
-    network_label = make_label(health, "Wi-Fi: configuration pending", 20, 62, &lv_font_montserrat_24);
-    history_label = make_label(health, "RAM history: 0 / 3600 seconds", 20, 112, &lv_font_montserrat_24);
-    make_label(health, "Reserved: pressure · tank level · alarms · advanced controls", 20, 220, &lv_font_montserrat_18);
+    lv_obj_t *screen = lv_display_get_screen_active(default_display);
+    if (screen == nullptr) {
+        ESP_LOGE(TAG, "LVGL active screen is missing");
+        bsp_display_unlock();
+        return false;
+    }
+    ESP_LOGI(TAG, "LVGL active screen exists");
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x07152e), 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *title = lv_label_create(screen);
+    if (title == nullptr) {
+        ESP_LOGE(TAG, "LVGL qualification title creation failed");
+        bsp_display_unlock();
+        return false;
+    }
+    lv_label_set_text(title, "TAB5 DISPLAY QUALIFICATION");
+    lv_obj_set_width(title, LV_PCT(100));
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_36, 0);
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, -120);
+
+    lv_obj_t *swatches = lv_obj_create(screen);
+    if (swatches == nullptr) {
+        ESP_LOGE(TAG, "LVGL qualification swatch container creation failed");
+        bsp_display_unlock();
+        return false;
+    }
+    lv_obj_set_size(swatches, LV_PCT(100), 150);
+    lv_obj_align(swatches, LV_ALIGN_CENTER, 0, 110);
+    lv_obj_set_flex_flow(swatches, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(swatches, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(swatches, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(swatches, 0, 0);
+    lv_obj_set_style_pad_all(swatches, 0, 0);
+    lv_obj_clear_flag(swatches, LV_OBJ_FLAG_SCROLLABLE);
+    if (!create_color_rectangle(swatches, lv_color_hex(0xff0000)) ||
+        !create_color_rectangle(swatches, lv_color_hex(0x00ff00)) ||
+        !create_color_rectangle(swatches, lv_color_hex(0x0000ff))) {
+        ESP_LOGE(TAG, "LVGL qualification rectangle creation failed");
+        bsp_display_unlock();
+        return false;
+    }
+    ESP_LOGI(TAG, "LVGL qualification objects created");
+    lv_obj_invalidate(screen);
+    lv_refr_now(default_display);
+    ESP_LOGI(TAG, "LVGL qualification invalidation and refresh requested");
     bsp_display_unlock();
     bsp_display_backlight_on();
-    ESP_LOGI(TAG, "Display initialized and backlight enabled");
+    ESP_LOGI(TAG, "Display qualification scene initialized and backlight enabled");
     return true;
-}
-
-void ui_task(void *) {
-    while (true) {
-        PilotSnapshot snapshot = g_pilot_model.snapshot();
-        bsp_display_lock(0);
-        if (!snapshot.has_sample || !snapshot.sample.valid) {
-            lv_label_set_text(state_label, "METER UNAVAILABLE");
-            lv_label_set_text(power_label, "— W");
-            lv_label_set_text(voltage_label, "Voltage  — V");
-            lv_label_set_text(pf_label, "Power factor  —");
-        } else {
-            lv_label_set_text(state_label, snapshot.pump_running ? "RUNNING" : "STOPPED");
-            lv_label_set_text_fmt(power_label, "%.0f W", snapshot.sample.power_w);
-            lv_label_set_text_fmt(voltage_label, "Voltage  %.1f V", snapshot.sample.voltage_v);
-            lv_label_set_text_fmt(pf_label, "Power factor  %.2f", snapshot.sample.power_factor);
-        }
-        if (snapshot.pump_running) {
-            lv_label_set_text_fmt(cycle_label, "%02lu:%02lu",
-                (unsigned long)(snapshot.cycle_seconds / 60), (unsigned long)(snapshot.cycle_seconds % 60));
-        } else {
-            lv_label_set_text(cycle_label, "IDLE");
-        }
-        lv_label_set_text_fmt(network_label, "Wi-Fi: %s     Cloud: %s     Live: %s",
-            snapshot.wifi_connected ? "connected" : "offline",
-            snapshot.cloud_connected ? "connected" : "offline",
-            snapshot.monitoring_active ? "active" : "off");
-        lv_label_set_text_fmt(history_label, "RAM history: %lu / %d seconds     Cloud failures: %lu",
-            (unsigned long)snapshot.sample_count, PILOT_RING_CAPACITY, (unsigned long)snapshot.cloud_failures);
-        bsp_display_unlock();
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
 }
 
 void display_task(void *) {
@@ -372,9 +388,7 @@ void display_task(void *) {
         return;
     }
 
-    if (xTaskCreate(ui_task, "pilot-ui", 6144, nullptr, 3, nullptr) != pdPASS) {
-        ESP_LOGE(TAG, "UI refresh task creation failed; telemetry remains active");
-    }
+    ESP_LOGI(TAG, "Display qualification is static; telemetry remains independent");
     vTaskDelete(nullptr);
 }
 }  // namespace

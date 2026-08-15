@@ -212,6 +212,20 @@ Application acceptance additionally requires a real stopped → running → stop
 | Router shows a client but P4 has no got-IP event | Router entry may be retained/stale. P4 event state, not the router screen, authorizes network traffic. |
 | `FR_NO_FILESYSTEM` from the inserted microSD | Slot/card communication succeeded, but no usable FAT filesystem was found. Format FAT32 externally and repeat the non-destructive test. |
 
+## Display qualification Stage 1
+
+The qualification branch replaces the dashboard with a static LVGL 9 scene: dark navy background, centered white `TAB5 DISPLAY QUALIFICATION` title, and red/green/blue rectangles. It does not create a UI update task or read telemetry data; the existing telemetry-first startup and separate display task remain intact.
+
+The target BSP retains the UserDemo display sequence: `bsp_display_start()` initializes the LVGL port, detects the panel and touch controller, creates the detected ST7123 display, then registers the LVGL display. The qualification code only observes that result through LVGL 9 APIs and LVGL display events; it does not force a panel type or modify the BSP/component.
+
+On the first Stage 1 boot, the application observed: ST7123 detection; a 720x1280 default display with color format 18 (RGB565); an active screen; successful qualification-object creation; an explicit invalidation and refresh; and three LVGL flush start/finish pairs. Wi-Fi connected, Shelly sampling began at roughly one-second cadence, and the Netlify heartbeat succeeded while the static display task had already exited. Physical inspection nevertheless found a uniformly white, full-intensity screen, confirming that LVGL flush events alone do not prove physical scanout.
+
+The same hardware then visibly rendered the exact unmodified UserDemo. Its boot diagnostic positively reported `Detected ST7123 touch controller (FW version: 3), using ST7123 display`, followed by `ST7123 Display initialized with resolution 720x1280`; this identifies the physical controller through firmware-version diagnostic 3 and the actual ST7123 detection branch rather than inferring it from the shared I2C address.
+
+The final root cause was insufficient external-memory bandwidth. `CONFIG_SPIRAM_SPEED_200M=y` was already present in `sdkconfig.defaults`, but ESP-IDF 5.4.2 gates that ESP32-P4 selection on `CONFIG_IDF_EXPERIMENTAL_FEATURES`. Without the gate enabled, ESP-IDF silently generated and compiled a 20 MHz PSRAM configuration. That configuration could not reliably sustain the 70 MHz RGB565 DPI framebuffer scanout from PSRAM. Enabling `CONFIG_IDF_EXPERIMENTAL_FEATURES=y` caused both generated `sdkconfig` and compiled `sdkconfig.h` to select 200 MHz.
+
+Physical confirmation after the controlled correction showed the expected dark-navy screen, centered white `TAB5 DISPLAY QUALIFICATION` text, and red/green/blue rectangles. The display rendered without changing the 128 KiB L2 cache, 64-byte cache line, LVGL partial buffer, portrait orientation, ST7123 panel driver, MIPI DSI/DPI timing, or application display code. The temporary flush diagnostics remain in this physically verified Stage 1 baseline; Stage 2 widgets and touch qualification remain separate work.
+
 ## Current boundaries and deferred work
 
 - The pilot is monitor-only and has no relay, inhibit, Shelly command, pump-start, or pump-stop implementation.
