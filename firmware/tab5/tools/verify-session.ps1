@@ -41,5 +41,5 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host 'Secrets path: ignored'
 
 Initialize-Tab5IdfEnvironment
-Write-Host "ESP-IDF: $(Invoke-Tab5Idf --version)"
+Write-Host "ESP-IDF: $(Invoke-Tab5Idf -IdfArguments @('--version'))"
 Write-Host "Python: $((Get-Command python).Source)"
