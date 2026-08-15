@@ -8,5 +8,5 @@ param(
 . (Join-Path $PSScriptRoot 'common.ps1')
 Initialize-Tab5IdfEnvironment
 Set-Tab5FirmwareLocation
-Invoke-Tab5Idf -p $Port monitor
+Invoke-Tab5Idf -IdfArguments @('-p', $Port, 'monitor')
 exit $LASTEXITCODE

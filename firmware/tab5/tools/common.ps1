@@ -12,11 +12,11 @@ $script:IdfCommand = Join-Path $script:IdfPath 'tools\idf.py'
 
 function Invoke-Tab5Idf {
     param(
-        [Parameter(ValueFromRemainingArguments = $true)]
-        [string[]]$Arguments
+        [Parameter(Mandatory = $true)]
+        [string[]]$IdfArguments
     )
 
-    & $script:IdfPython $script:IdfCommand @Arguments
+    & $script:IdfPython $script:IdfCommand @IdfArguments
 }
 
 function Initialize-Tab5IdfEnvironment {
@@ -40,7 +40,7 @@ function Initialize-Tab5IdfEnvironment {
     if ($env:IDF_PATH -ne $script:IdfPath) { throw "Unexpected IDF_PATH after activation: $env:IDF_PATH" }
     $pythonPath = (Get-Command python -ErrorAction Stop).Source
     if ($pythonPath -ne $script:IdfPython) { throw "Unexpected Python after activation: $pythonPath" }
-    $version = Invoke-Tab5Idf --version
+    $version = Invoke-Tab5Idf -IdfArguments @('--version')
     if ($LASTEXITCODE -ne 0 -or ($version -notmatch 'ESP-IDF v5\.4\.2')) {
         throw 'ESP-IDF 5.4.2 is not active; do not change the toolchain automatically.'
     }

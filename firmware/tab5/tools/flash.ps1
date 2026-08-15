@@ -16,5 +16,5 @@ if (-not (Get-CimInstance Win32_SerialPort | Where-Object { $_.DeviceID -eq $Por
 }
 Initialize-Tab5IdfEnvironment
 Set-Tab5FirmwareLocation
-Invoke-Tab5Idf -p $Port flash
+Invoke-Tab5Idf -IdfArguments @('-p', $Port, 'flash')
 exit $LASTEXITCODE
