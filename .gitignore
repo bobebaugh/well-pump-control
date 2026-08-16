@@ -2,6 +2,10 @@
 build/
 sdkconfig
 sdkconfig.old
+firmware/tab5/build-sdio-baseline/
+firmware/tab5/sdkconfig.sdio-baseline*
+firmware/tab5/build-sdio-release/
+firmware/tab5/sdkconfig.sdio-release*
 managed_components/
 dependencies.lock
 !firmware/tab5/dependencies.lock
