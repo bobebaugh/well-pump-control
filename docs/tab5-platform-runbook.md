@@ -83,6 +83,10 @@ The P4 reaches the C6 through the configured four-bit SDIO host interface. Curre
 | SDIO D3 | 8 |
 | C6 reset | 15, active low |
 
+The P4↔C6 transport is fixed at four-bit SDIO, 40 MHz; it is not SPI. The official Tab5 pin assignment is CMD 13, CLK 12, D0 11, D1 10, D2 9, D3 8, with C6 reset on GPIO 15 active-low.
+
+On August 15, an ignored generated `sdkconfig` switched ESP-Hosted to SPI. An isolated SDIO build restored Wi-Fi, Shelly polling, and Netlify publishing. Build, flash, and monitor operations for this platform must use the same explicit build directory and SDK configuration; do not mix a generated configuration or artifact directory from another transport.
+
 Do not start TCP, HTTP, or TLS work merely because the SDIO INIT event occurred or the router remembers the C6. Network traffic is permitted only after the P4 receives `IP_EVENT_STA_GOT_IP` and sets the Wi-Fi connected event bit. Clear the bit on disconnect and pause network work until IP readiness returns.
 
 ### External I2C and ADC
