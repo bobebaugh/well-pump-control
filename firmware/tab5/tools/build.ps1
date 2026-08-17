@@ -5,6 +5,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
 
+$script:MaximumPhysicalBuildRootLength = 80
+
 function Get-Sha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -13,6 +15,53 @@ function Get-Sha256 {
 function Get-RelativePackagePath {
     param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$Path)
     return $Path.Substring($Root.TrimEnd('\').Length + 1).Replace('\', '/')
+}
+
+function New-ValidationBuildAttemptIdentity {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceSha,
+        [datetime]$UtcNow = [DateTime]::UtcNow,
+        [string]$Nonce = [Guid]::NewGuid().ToString('N')
+    )
+
+    if ($SourceSha -notmatch '^[0-9a-f]{40}$') { throw 'Build attempt source SHA is invalid.' }
+    if ($Nonce -notmatch '^[0-9a-f]{32}$') { throw 'Build attempt nonce is invalid.' }
+    $timestamp = $UtcNow.ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ', [System.Globalization.CultureInfo]::InvariantCulture)
+    return [pscustomobject]@{
+        Identity = "$SourceSha-$timestamp-$($Nonce.Substring(0, 8))"
+        ShortToken = $Nonce.Substring(0, 12)
+        StartedUtc = $UtcNow.ToUniversalTime().ToString('o')
+    }
+}
+
+function Assert-PhysicalBuildRootLength {
+    param([Parameter(Mandatory = $true)][string]$BuildRoot)
+
+    $fullPath = [System.IO.Path]::GetFullPath($BuildRoot)
+    if ($fullPath.Length -gt $script:MaximumPhysicalBuildRootLength) {
+        throw "Physical CMake build path is too long ($($fullPath.Length) characters; maximum $script:MaximumPhysicalBuildRootLength): $fullPath"
+    }
+    return $fullPath
+}
+
+function New-PhysicalBuildDirectory {
+    param(
+        [Parameter(Mandatory = $true)][string]$FirmwareRoot,
+        [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{12}$')][string]$ShortToken
+    )
+
+    $parent = Join-Path $FirmwareRoot 'b'
+    if (Test-Path -LiteralPath $parent -PathType Leaf) { throw "Physical build parent is not a directory: $parent" }
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    $buildRoot = Assert-PhysicalBuildRootLength -BuildRoot (Join-Path $parent $ShortToken)
+    try {
+        New-Item -ItemType Directory -Path $buildRoot -ErrorAction Stop | Out-Null
+    }
+    catch {
+        if (Test-Path -LiteralPath $buildRoot) { throw "Refusing to reuse physical build directory: $buildRoot" }
+        throw
+    }
+    return $buildRoot
 }
 
 function Resolve-PackagePath {
@@ -197,23 +246,21 @@ try {
     $sourceBranch = (git branch --show-current).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sourceBranch)) { throw 'Cannot determine the source branch.' }
 
-    $timestamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ', [System.Globalization.CultureInfo]::InvariantCulture)
-    $identityBase = "$sourceSha-$timestamp-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
     $buildRoot = $null
     $packageRoot = $null
     for ($attempt = 0; $attempt -lt 1000; ++$attempt) {
-        $identity = if ($attempt -eq 0) { $identityBase } else { "$identityBase-$attempt" }
-        $candidateBuild = Join-Path $script:FirmwareRoot "build-validation-$identity"
+        $buildAttempt = New-ValidationBuildAttemptIdentity -SourceSha $sourceSha
+        $identity = $buildAttempt.Identity
+        $shortBuildToken = $buildAttempt.ShortToken
         $candidatePackage = Join-Path $script:FirmwareRoot "checkpoints\tab5-validation-$identity"
         if ((Test-Path -LiteralPath $candidatePackage) -or (Test-Path -LiteralPath "$candidatePackage.zip") -or (Test-Path -LiteralPath "$candidatePackage.zip.sha256")) { continue }
         try {
-            New-Item -ItemType Directory -Path $candidateBuild -ErrorAction Stop | Out-Null
-            $buildRoot = $candidateBuild
+            $buildRoot = New-PhysicalBuildDirectory -FirmwareRoot $script:FirmwareRoot -ShortToken $shortBuildToken
             $packageRoot = $candidatePackage
             break
         }
         catch {
-            if (-not (Test-Path -LiteralPath $candidateBuild)) { throw }
+            if ($_.Exception.Message -notmatch '^Refusing to reuse physical build directory:') { throw }
         }
     }
     if ($null -eq $buildRoot) { throw 'Could not reserve a unique build/checkpoint identity.' }
@@ -223,8 +270,9 @@ try {
     @(
         'This build attempt is incomplete unless its paired checkpoint package contains SUCCESS.',
         "Identity: $identity",
+        "Physical build path: $buildRoot",
         "Source SHA: $sourceSha",
-        "Started UTC: $([DateTime]::UtcNow.ToString('o'))"
+        "Started UTC: $($buildAttempt.StartedUtc)"
     ) | Set-Content -LiteralPath $incompleteMarker -Encoding utf8
     Start-Transcript -Path $logPath -Force | Out-Null
     $transcriptStarted = $true
@@ -285,6 +333,7 @@ try {
         '# Tab5 validation baseline build receipt', '',
         "Generated UTC: ``$(Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ssZ')``",
         "Source branch: ``$sourceBranch``", "Source SHA: ``$sourceSha``", 'Tracked worktree state: `clean`',
+        "Checkpoint identity: ``$identity``", "Physical CMake build directory: ``$buildRoot``", "Physical build directory token: ``$shortBuildToken``",
         "ESP-IDF path: ``$script:IdfPath``", "ESP-IDF version: ``$idfVersion``",
         "Python path: ``$script:IdfPython``", "Python version: ``$pythonVersion``",
         "Build command: ``idf.py $($idfArguments -join ' ')``",
