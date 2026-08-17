@@ -125,9 +125,10 @@ function Assert-CheckpointZip {
     $expectedFiles = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
     foreach ($file in @(Get-ChildItem -LiteralPath $Root -File -Recurse)) {
         $relative = Get-RelativePackagePath -Root $Root -Path $file.FullName
-        if (-not $expectedFiles.TryAdd($relative, $file.FullName)) {
+        if ($expectedFiles.ContainsKey($relative)) {
             throw "Checkpoint staging has duplicate relative path: $relative"
         }
+        $expectedFiles.Add($relative, $file.FullName)
     }
     $readArchive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
     try {
@@ -138,9 +139,10 @@ function Assert-CheckpointZip {
             if ([string]::IsNullOrEmpty($entry.FullName) -or $entry.FullName.EndsWith('/')) {
                 throw "Checkpoint ZIP has an invalid directory entry: $($entry.FullName)"
             }
-            if (-not $archiveEntries.TryAdd($entry.FullName, $entry)) {
+            if ($archiveEntries.ContainsKey($entry.FullName)) {
                 throw "Checkpoint ZIP has a duplicate entry: $($entry.FullName)"
             }
+            $archiveEntries.Add($entry.FullName, $entry)
             if ($entry.FullName -ne 'SUCCESS' -and -not $expectedFiles.ContainsKey($entry.FullName)) {
                 throw "Checkpoint ZIP has an unexpected entry: $($entry.FullName)"
             }
@@ -212,11 +214,14 @@ function New-CheckpointZip {
     )
 
     if (Test-Path -LiteralPath $ZipPath) { throw "Refusing to overwrite checkpoint ZIP: $ZipPath" }
+    Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $files = @(Get-ChildItem -LiteralPath $Root -File -Recurse)
-    $stream = [System.IO.File]::Open($ZipPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
-    $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
+    $stream = $null
+    $archive = $null
     try {
+        $stream = [System.IO.File]::Open($ZipPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
         foreach ($file in $files) {
             $relative = Get-RelativePackagePath -Root $Root -Path $file.FullName
             [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
@@ -227,8 +232,8 @@ function New-CheckpointZip {
         try { $writer.Write($SuccessText) } finally { $writer.Dispose() }
     }
     finally {
-        $archive.Dispose()
-        $stream.Dispose()
+        if ($null -ne $archive) { $archive.Dispose() }
+        if ($null -ne $stream) { $stream.Dispose() }
     }
     Assert-CheckpointZip -Root $Root -ZipPath $ZipPath -SuccessText $SuccessText
 }
@@ -331,7 +336,7 @@ try {
     if ($idfExitCode -ne 0) { $exitCode = $idfExitCode; throw "Python version query failed with exit code $idfExitCode." }
     $receipt = @(
         '# Tab5 validation baseline build receipt', '',
-        "Generated UTC: ``$(Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ssZ')``",
+        "Generated UTC: ``$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture))``",
         "Source branch: ``$sourceBranch``", "Source SHA: ``$sourceSha``", 'Tracked worktree state: `clean`',
         "Checkpoint identity: ``$identity``", "Physical CMake build directory: ``$buildRoot``", "Physical build directory token: ``$shortBuildToken``",
         "ESP-IDF path: ``$script:IdfPath``", "ESP-IDF version: ``$idfVersion``",
