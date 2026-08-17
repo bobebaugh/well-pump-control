@@ -1,23 +1,29 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^[0-9a-f]{40}$')]
-    [string]$ExpectedPilotSha
+    [string]$ExpectedPilotSha,
+    [ValidatePattern('^[0-9a-f]{40}$')]
+    [string]$ExpectedRecoverySha = '844e398ac394a5772d68097622df979f2e55a1bb'
 )
 
 . (Join-Path $PSScriptRoot 'common.ps1')
 
+$callerLocation = (Get-Location).Path
 Set-Location -LiteralPath $script:RepoRoot
 $branch = git branch --show-current
 $head = git rev-parse HEAD
-$status = git status --porcelain=v1
+$trackedWorktreeDirty = (git diff --name-only)
+$trackedIndexDirty = (git diff --cached --name-only)
+$untracked = git ls-files --others --exclude-standard
 Write-Host "Branch: $branch"
 Write-Host "HEAD: $head"
-if ([string]::IsNullOrWhiteSpace($status)) {
-    Write-Host 'Worktree: clean'
+if ([string]::IsNullOrWhiteSpace($trackedWorktreeDirty) -and [string]::IsNullOrWhiteSpace($trackedIndexDirty)) {
+    Write-Host 'Tracked worktree: clean'
 } else {
-    Write-Error "Worktree is dirty:`n$status"
+    Write-Error "Tracked worktree is dirty:`n$trackedWorktreeDirty`n$trackedIndexDirty"
     exit 1
 }
+Write-Host "Untracked paths (preserved): $(@($untracked).Count)"
 
 git fetch origin --prune
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -33,6 +39,18 @@ if ($ExpectedPilotSha -and $pilotSha -ne $ExpectedPilotSha) {
     exit 1
 }
 
+$recoveryAdvertised = git ls-remote origin refs/heads/agent/tab5-known-good-rebuild
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($recoveryAdvertised)) {
+    Write-Error 'Could not read the advertised recovery ref.'
+    exit 1
+}
+$recoverySha = ($recoveryAdvertised -split "`t")[0]
+Write-Host "Advertised recovery: $recoverySha"
+if ($ExpectedRecoverySha -and $recoverySha -ne $ExpectedRecoverySha) {
+    Write-Error "Advertised recovery does not match expected SHA: $ExpectedRecoverySha"
+    exit 1
+}
+
 git check-ignore -q -- firmware/tab5/main/secrets.local.h
 if ($LASTEXITCODE -ne 0) {
     Write-Error 'firmware/tab5/main/secrets.local.h is not ignored.'
@@ -43,3 +61,4 @@ Write-Host 'Secrets path: ignored'
 Initialize-Tab5IdfEnvironment
 Write-Host "ESP-IDF: $(Invoke-Tab5Idf -IdfArguments @('--version'))"
 Write-Host "Python: $((Get-Command python).Source)"
+Set-Location -LiteralPath $callerLocation

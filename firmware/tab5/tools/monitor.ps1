@@ -5,6 +5,7 @@ param(
     [string]$Port,
     [string]$BuildDirectory,
     [string]$Sdkconfig,
+    [switch]$NoReset,
     [switch]$Mock
 )
 
@@ -41,6 +42,9 @@ if (-not [string]::IsNullOrWhiteSpace($BuildDirectory)) {
     $idfArguments += @('-B', $resolvedBuildDirectory, '-D', "SDKCONFIG=$resolvedSdkconfig")
 }
 $idfArguments += @('-p', $Port, 'monitor')
+if ($NoReset) {
+    $idfArguments += '--no-reset'
+}
 
 if ($Mock) {
     Write-Host 'Mock idf.py literal arguments:'

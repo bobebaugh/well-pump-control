@@ -4,6 +4,7 @@ param(
     [ValidatePattern('^COM\d+$')]
     [string]$Port,
     [string]$ArtifactDirectory,
+    [string]$ValidationPackageDirectory,
     [switch]$Mock
 )
 
@@ -66,20 +67,69 @@ function Assert-PackageIntegrity {
     }
 }
 
+function Get-ValidationPackageDefinition {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $manifestPath = Join-Path $Root 'ARTIFACT-MANIFEST.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw 'Validation package manifest is missing.'
+    }
+    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+    if ($manifest.schemaVersion -ne 1 -or $manifest.sourceSha -notmatch '^[0-9a-f]{40}$') {
+        throw 'Validation package manifest has an unsupported identity.'
+    }
+    $artifacts = @($manifest.artifacts | ForEach-Object {
+        if ([string]::IsNullOrWhiteSpace($_.path) -or $_.path -eq 'ARTIFACT-MANIFEST.json' -or $_.sha256 -notmatch '^[0-9a-f]{64}$' -or $_.bytes -lt 0) {
+            throw 'Validation package manifest has an invalid artifact entry.'
+        }
+        [pscustomobject]@{ Path = $_.path; Length = [int64]$_.bytes; Sha256 = $_.sha256 }
+    })
+    if ($artifacts.Count -eq 0) { throw 'Validation package manifest has no artifacts.' }
+    foreach ($artifact in $artifacts) {
+        $path = Resolve-PackageFile -Root $Root -RelativePath $artifact.Path
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required artifact is missing: $($artifact.Path)" }
+        if ((Get-Item -LiteralPath $path).Length -ne $artifact.Length) { throw "Artifact size mismatch for $($artifact.Path)" }
+        if ((Get-Sha256 -Path $path) -ne $artifact.Sha256) { throw "Artifact SHA-256 mismatch for $($artifact.Path)" }
+    }
+    $mappings = @($manifest.flashMappings | ForEach-Object { [pscustomobject]@{ Offset = $_.offset; Path = $_.path } })
+    $requiredMappings = @(
+        [pscustomobject]@{ Offset = '0x2000'; Path = 'bootloader/bootloader.bin' },
+        [pscustomobject]@{ Offset = '0x10000'; Path = 'well_pump_tab5.bin' },
+        [pscustomobject]@{ Offset = '0x8000'; Path = 'partition_table/partition-table.bin' }
+    )
+    if ($mappings.Count -ne $requiredMappings.Count) { throw 'Validation package has an unexpected flash mapping count.' }
+    foreach ($required in $requiredMappings) {
+        if ($null -eq @($mappings | Where-Object { $_.Offset -eq $required.Offset -and $_.Path -eq $required.Path })[0]) {
+            throw "Validation package is missing required mapping $($required.Offset) -> $($required.Path)."
+        }
+    }
+    return [pscustomobject]@{ Artifacts = $artifacts; Mappings = $requiredMappings; SourceSha = $manifest.sourceSha }
+}
+
 $firmwareRoot = Split-Path -Parent $PSScriptRoot
+if ($ValidationPackageDirectory -and $ArtifactDirectory) { throw 'Use either ValidationPackageDirectory or ArtifactDirectory, not both.' }
 $defaultArtifactDirectory = Join-Path $firmwareRoot 'recovery-artifacts\tab5-stage2-sdio-recovery-9c8b82e'
-$artifactRoot = [System.IO.Path]::GetFullPath($(if ([string]::IsNullOrWhiteSpace($ArtifactDirectory)) { $defaultArtifactDirectory } else { $ArtifactDirectory }))
+$artifactRoot = [System.IO.Path]::GetFullPath($(if ($ValidationPackageDirectory) { $ValidationPackageDirectory } elseif ([string]::IsNullOrWhiteSpace($ArtifactDirectory)) { $defaultArtifactDirectory } else { $ArtifactDirectory }))
 
 if (-not (Test-Path -LiteralPath $artifactRoot -PathType Container)) {
     throw "Artifact directory is missing: $artifactRoot"
 }
 
-Assert-PackageIntegrity -Root $artifactRoot
+if ($ValidationPackageDirectory) {
+    $validationPackage = Get-ValidationPackageDefinition -Root $artifactRoot
+    $expectedArtifacts = $validationPackage.Artifacts
+    $expectedMappings = $validationPackage.Mappings
+    Write-Host "Verified validation package source: $($validationPackage.SourceSha)"
+} else {
+    Assert-PackageIntegrity -Root $artifactRoot
+}
 
-$receipt = Get-Content -Raw -LiteralPath (Resolve-PackageFile -Root $artifactRoot -RelativePath 'BUILD-RECEIPT.md')
-foreach ($requiredReceiptValue in @('Application version: `9c8b82e`', 'Recovery branch HEAD: `844e398ac394a5772d68097622df979f2e55a1bb`', 'ESP-IDF: `5.4.2`')) {
-    if (-not $receipt.Contains($requiredReceiptValue)) {
-        throw "Build receipt is missing required identity: $requiredReceiptValue"
+if (-not $ValidationPackageDirectory) {
+    $receipt = Get-Content -Raw -LiteralPath (Resolve-PackageFile -Root $artifactRoot -RelativePath 'BUILD-RECEIPT.md')
+    foreach ($requiredReceiptValue in @('Application version: `9c8b82e`', 'Recovery branch HEAD: `844e398ac394a5772d68097622df979f2e55a1bb`', 'ESP-IDF: `5.4.2`')) {
+        if (-not $receipt.Contains($requiredReceiptValue)) {
+            throw "Build receipt is missing required identity: $requiredReceiptValue"
+        }
     }
 }
 
