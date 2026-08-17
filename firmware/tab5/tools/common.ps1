@@ -49,3 +49,24 @@ function Initialize-Tab5IdfEnvironment {
 function Set-Tab5FirmwareLocation {
     Set-Location -LiteralPath $script:FirmwareRoot
 }
+
+function Assert-Tab5SourceProvenance {
+    param([Parameter(Mandatory = $true)][string]$SourceSha)
+
+    $currentSha = (git -C $script:RepoRoot rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $currentSha -notmatch '^[0-9a-f]{40}$') {
+        throw 'Cannot determine the source commit before checkpoint finalization.'
+    }
+    if ($currentSha -ne $SourceSha) {
+        throw "Source HEAD changed during the build: expected $SourceSha, found $currentSha."
+    }
+
+    git -C $script:RepoRoot diff --quiet
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Tracked worktree changed during the build; refuse to finalize a baseline receipt.'
+    }
+    git -C $script:RepoRoot diff --cached --quiet
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Tracked index changed during the build; refuse to finalize a baseline receipt.'
+    }
+}

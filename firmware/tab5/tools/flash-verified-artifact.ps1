@@ -3,14 +3,18 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^COM\d+$')]
     [string]$Port,
-    [string]$ArtifactDirectory,
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
     [string]$ValidationPackageDirectory,
+    [string]$ArtifactDirectory,
     [switch]$Mock
 )
 
 $ErrorActionPreference = 'Stop'
 
-$expectedArtifacts = @(
+# Historical recovery evidence only. The verified-artifact helper deliberately does not
+# accept this unsealed package or its fixed hashes as a flash source.
+$legacyRecoveryArtifacts = @(
     [pscustomobject]@{ Path = 'BUILD-RECEIPT.md'; Length = 2753; Sha256 = '1e65fc90fb2cba0872ccd5af342fc0f6ee72d3bf4f83ebf61655ea791e9223b3' },
     [pscustomobject]@{ Path = 'flash_args'; Length = 159; Sha256 = '7f0c9b533865c14c949c9f9e6c2abb5c65a30a25fc1cb850a4baf0ae8cd691e6' },
     [pscustomobject]@{ Path = 'flash_project_args'; Length = 159; Sha256 = '7f0c9b533865c14c949c9f9e6c2abb5c65a30a25fc1cb850a4baf0ae8cd691e6' },
@@ -22,7 +26,7 @@ $expectedArtifacts = @(
     [pscustomobject]@{ Path = 'well_pump_tab5.map'; Length = 6817244; Sha256 = 'e3bae307bbccf9415a949e653c7c30f35c019bf2953171c28845b1ff4ecb4cea' }
 )
 
-$expectedMappings = @(
+$legacyRecoveryMappings = @(
     [pscustomobject]@{ Offset = '0x2000'; Path = 'bootloader/bootloader.bin' },
     [pscustomobject]@{ Offset = '0x10000'; Path = 'well_pump_tab5.bin' },
     [pscustomobject]@{ Offset = '0x8000'; Path = 'partition_table/partition-table.bin' }
@@ -46,25 +50,6 @@ function Resolve-PackageFile {
         throw "Package path escapes the artifact directory: $RelativePath"
     }
     return $candidate
-}
-
-function Assert-PackageIntegrity {
-    param([Parameter(Mandatory = $true)][string]$Root)
-
-    foreach ($artifact in $expectedArtifacts) {
-        $path = Resolve-PackageFile -Root $Root -RelativePath $artifact.Path
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            throw "Required artifact is missing: $($artifact.Path)"
-        }
-        $item = Get-Item -LiteralPath $path
-        if ($item.Length -ne $artifact.Length) {
-            throw "Artifact size mismatch for $($artifact.Path): expected $($artifact.Length), found $($item.Length)"
-        }
-        $hash = Get-Sha256 -Path $path
-        if ($hash -ne $artifact.Sha256) {
-            throw "Artifact SHA-256 mismatch for $($artifact.Path): expected $($artifact.Sha256), found $hash"
-        }
-    }
 }
 
 function Get-ValidationPackageDefinition {
@@ -159,32 +144,19 @@ function Get-ValidationPackageDefinition {
     return [pscustomobject]@{ Artifacts = $artifacts; Mappings = $requiredMappings; SourceSha = $manifest.sourceSha }
 }
 
-$firmwareRoot = Split-Path -Parent $PSScriptRoot
-if ($ValidationPackageDirectory -and $ArtifactDirectory) { throw 'Use either ValidationPackageDirectory or ArtifactDirectory, not both.' }
-$defaultArtifactDirectory = Join-Path $firmwareRoot 'recovery-artifacts\tab5-stage2-sdio-recovery-9c8b82e'
-$artifactRoot = [System.IO.Path]::GetFullPath($(if ($ValidationPackageDirectory) { $ValidationPackageDirectory } elseif ([string]::IsNullOrWhiteSpace($ArtifactDirectory)) { $defaultArtifactDirectory } else { $ArtifactDirectory }))
+if (-not [string]::IsNullOrWhiteSpace($ArtifactDirectory)) {
+    throw 'Legacy -ArtifactDirectory mode is not permitted. Use a sealed -ValidationPackageDirectory with SUCCESS, receipt, and manifest validation.'
+}
+$artifactRoot = [System.IO.Path]::GetFullPath($ValidationPackageDirectory)
 
 if (-not (Test-Path -LiteralPath $artifactRoot -PathType Container)) {
     throw "Artifact directory is missing: $artifactRoot"
 }
 
-if ($ValidationPackageDirectory) {
-    $validationPackage = Get-ValidationPackageDefinition -Root $artifactRoot
-    $expectedArtifacts = $validationPackage.Artifacts
-    $expectedMappings = $validationPackage.Mappings
-    Write-Host "Verified validation package source: $($validationPackage.SourceSha)"
-} else {
-    Assert-PackageIntegrity -Root $artifactRoot
-}
-
-if (-not $ValidationPackageDirectory) {
-    $receipt = Get-Content -Raw -LiteralPath (Resolve-PackageFile -Root $artifactRoot -RelativePath 'BUILD-RECEIPT.md')
-    foreach ($requiredReceiptValue in @('Application version: `9c8b82e`', 'Recovery branch HEAD: `844e398ac394a5772d68097622df979f2e55a1bb`', 'ESP-IDF: `5.4.2`')) {
-        if (-not $receipt.Contains($requiredReceiptValue)) {
-            throw "Build receipt is missing required identity: $requiredReceiptValue"
-        }
-    }
-}
+$validationPackage = Get-ValidationPackageDefinition -Root $artifactRoot
+$expectedArtifacts = $validationPackage.Artifacts
+$expectedMappings = $validationPackage.Mappings
+Write-Host "Verified validation package source: $($validationPackage.SourceSha)"
 
 $flasherArgs = Get-Content -Raw -LiteralPath (Resolve-PackageFile -Root $artifactRoot -RelativePath 'flasher_args.json') | ConvertFrom-Json
 if ($flasherArgs.extra_esptool_args.chip -ne 'esp32p4' -or $flasherArgs.extra_esptool_args.before -ne 'default_reset' -or $flasherArgs.extra_esptool_args.after -ne 'hard_reset') {
@@ -218,7 +190,7 @@ foreach ($mapping in $expectedMappings) {
 }
 
 Write-Host "Artifact directory: $artifactRoot"
-Write-Host 'Verified package: tab5-stage2-sdio-recovery-9c8b82e'
+Write-Host "Verified validation checkpoint: $(Split-Path -Leaf $artifactRoot)"
 Write-Host 'Literal esptool arguments:'
 $esptoolArguments | ForEach-Object { Write-Host "[$_]" }
 

@@ -26,7 +26,7 @@ From `firmware\tab5` in the verified ESP-IDF 5.4.2 VS Code PowerShell terminal, 
 .\tools\build.ps1
 ```
 
-The helper requires a clean tracked worktree. It automatically reserves a unique identity containing the full source commit, UTC timestamp, and collision-resistant suffix; concurrent or repeated invocations cannot reuse the same build or checkpoint directories. Preserved untracked SD artifacts do not block the build and are not modified.
+The helper requires a clean tracked worktree. It automatically reserves a unique identity containing the full source commit, UTC timestamp, and collision-resistant suffix; concurrent or repeated invocations cannot reuse the same build or checkpoint directories. Preserved user-owned untracked SD artifacts do not block the build and are not modified.
 
 Before invoking ESP-IDF, `build.ps1` creates the new build directory, `BUILD-CONSOLE.log`, and an `INCOMPLETE` marker. It runs visibly and synchronously, preserves ESP-IDF's nonzero exit code, and leaves a failed or interrupted attempt in place. It does not create a valid checkpoint package until the build succeeds. On success it verifies every recorded artifact hash, creates the package ZIP and its SHA-256 sidecar, then writes the package `SUCCESS` marker last. The console ends by printing the checkpoint path, receipt path, application SHA-256, ZIP path, and ZIP SHA-256.
 
@@ -80,4 +80,4 @@ After an authorized flash, accept the checkpoint only when physical and serial e
 
 ## Archived Stage 2 recovery evidence
 
-`tab5-stage2-sdio-recovery-9c8b82e.zip` and the preserved recovery package remain evidence for the prior physical checkpoint. The helper retains its legacy default mode for that package. It is not the product baseline and must not be rebuilt, overwritten, or used as a substitute for a new validation receipt.
+`tab5-stage2-sdio-recovery-9c8b82e.zip` and the preserved recovery package remain evidence for the prior physical checkpoint. `flash-verified-artifact.ps1` rejects legacy/default and `-ArtifactDirectory` operation; it accepts only a sealed `-ValidationPackageDirectory`. The recovery evidence is not the product baseline and must not be rebuilt, overwritten, or used as a substitute for a new validation receipt.

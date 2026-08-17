@@ -66,6 +66,95 @@ function Assert-PackageManifest {
     }
 }
 
+function Assert-CheckpointZip {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$ZipPath,
+        [Parameter(Mandatory = $true)][string]$SuccessText
+    )
+
+    $expectedFiles = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
+    foreach ($file in @(Get-ChildItem -LiteralPath $Root -File -Recurse)) {
+        $relative = Get-RelativePackagePath -Root $Root -Path $file.FullName
+        if (-not $expectedFiles.TryAdd($relative, $file.FullName)) {
+            throw "Checkpoint staging has duplicate relative path: $relative"
+        }
+    }
+    $readArchive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $expectedCount = $expectedFiles.Count + 1
+        if ($readArchive.Entries.Count -ne $expectedCount) { throw 'Checkpoint ZIP entry count mismatch.' }
+        $archiveEntries = [System.Collections.Generic.Dictionary[string, System.IO.Compression.ZipArchiveEntry]]::new([System.StringComparer]::Ordinal)
+        foreach ($entry in $readArchive.Entries) {
+            if ([string]::IsNullOrEmpty($entry.FullName) -or $entry.FullName.EndsWith('/')) {
+                throw "Checkpoint ZIP has an invalid directory entry: $($entry.FullName)"
+            }
+            if (-not $archiveEntries.TryAdd($entry.FullName, $entry)) {
+                throw "Checkpoint ZIP has a duplicate entry: $($entry.FullName)"
+            }
+            if ($entry.FullName -ne 'SUCCESS' -and -not $expectedFiles.ContainsKey($entry.FullName)) {
+                throw "Checkpoint ZIP has an unexpected entry: $($entry.FullName)"
+            }
+        }
+        foreach ($relative in $expectedFiles.Keys) {
+            if (-not $archiveEntries.ContainsKey($relative)) { throw "Checkpoint ZIP is missing entry: $relative" }
+            $sourcePath = $expectedFiles[$relative]
+            $sourceLength = (Get-Item -LiteralPath $sourcePath).Length
+            $entry = $archiveEntries[$relative]
+            if ($entry.Length -ne $sourceLength) { throw "Checkpoint ZIP entry size mismatch: $relative" }
+            $sourceStream = [System.IO.File]::OpenRead($sourcePath)
+            $entryStream = $entry.Open()
+            try {
+                $sourceBuffer = New-Object byte[] 65536
+                $entryBuffer = New-Object byte[] 65536
+                while ($true) {
+                    $sourceRead = $sourceStream.Read($sourceBuffer, 0, $sourceBuffer.Length)
+                    if ($sourceRead -eq 0) { break }
+                    $entryRead = 0
+                    while ($entryRead -lt $sourceRead) {
+                        $read = $entryStream.Read($entryBuffer, $entryRead, $sourceRead - $entryRead)
+                        if ($read -eq 0) { throw "Checkpoint ZIP entry is truncated: $relative" }
+                        $entryRead += $read
+                    }
+                    for ($index = 0; $index -lt $sourceRead; ++$index) {
+                        if ($sourceBuffer[$index] -ne $entryBuffer[$index]) { throw "Checkpoint ZIP entry content mismatch: $relative" }
+                    }
+                }
+                if ($entryStream.ReadByte() -ne -1) { throw "Checkpoint ZIP entry has unexpected trailing data: $relative" }
+            }
+            finally { $entryStream.Dispose(); $sourceStream.Dispose() }
+            $entryHashStream = $entry.Open()
+            $hasher = [System.Security.Cryptography.SHA256]::Create()
+            try {
+                $entryHash = ([System.BitConverter]::ToString($hasher.ComputeHash($entryHashStream))).Replace('-', '').ToLowerInvariant()
+            }
+            finally { $hasher.Dispose(); $entryHashStream.Dispose() }
+            if ($entryHash -ne (Get-Sha256 $sourcePath)) { throw "Checkpoint ZIP entry SHA-256 mismatch: $relative" }
+        }
+        if (-not $archiveEntries.ContainsKey('SUCCESS')) { throw 'Checkpoint ZIP is missing entry: SUCCESS' }
+        $successBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($SuccessText)
+        $successEntry = $archiveEntries['SUCCESS']
+        if ($successEntry.Length -ne $successBytes.Length) { throw 'Checkpoint ZIP SUCCESS marker size mismatch.' }
+        $successStream = $successEntry.Open()
+        try {
+            for ($index = 0; $index -lt $successBytes.Length; ++$index) {
+                if ($successStream.ReadByte() -ne $successBytes[$index]) { throw 'Checkpoint ZIP SUCCESS marker content mismatch.' }
+            }
+            if ($successStream.ReadByte() -ne -1) { throw 'Checkpoint ZIP SUCCESS marker has unexpected trailing data.' }
+        }
+        finally { $successStream.Dispose() }
+        $successHash = [System.Security.Cryptography.SHA256]::Create()
+        try { $expectedSuccessHash = ([System.BitConverter]::ToString($successHash.ComputeHash($successBytes))).Replace('-', '').ToLowerInvariant() }
+        finally { $successHash.Dispose() }
+        $successHashStream = $successEntry.Open()
+        $archiveSuccessHash = [System.Security.Cryptography.SHA256]::Create()
+        try { $actualSuccessHash = ([System.BitConverter]::ToString($archiveSuccessHash.ComputeHash($successHashStream))).Replace('-', '').ToLowerInvariant() }
+        finally { $archiveSuccessHash.Dispose(); $successHashStream.Dispose() }
+        if ($actualSuccessHash -ne $expectedSuccessHash) { throw 'Checkpoint ZIP SUCCESS marker SHA-256 mismatch.' }
+    }
+    finally { $readArchive.Dispose() }
+}
+
 function New-CheckpointZip {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
@@ -76,7 +165,6 @@ function New-CheckpointZip {
     if (Test-Path -LiteralPath $ZipPath) { throw "Refusing to overwrite checkpoint ZIP: $ZipPath" }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $files = @(Get-ChildItem -LiteralPath $Root -File -Recurse)
-    $entryNames = @()
     $stream = [System.IO.File]::Open($ZipPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
     $archive = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
     try {
@@ -84,7 +172,6 @@ function New-CheckpointZip {
             $relative = Get-RelativePackagePath -Root $Root -Path $file.FullName
             [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
                 $archive, $file.FullName, $relative, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
-            $entryNames += $relative
         }
         $successEntry = $archive.CreateEntry('SUCCESS', [System.IO.Compression.CompressionLevel]::Optimal)
         $writer = [System.IO.StreamWriter]::new($successEntry.Open(), [System.Text.UTF8Encoding]::new($false))
@@ -94,25 +181,7 @@ function New-CheckpointZip {
         $archive.Dispose()
         $stream.Dispose()
     }
-
-    $readArchive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
-    try {
-        $actualNames = @($readArchive.Entries | ForEach-Object { $_.FullName })
-        $expectedNames = @($entryNames + 'SUCCESS')
-        if ($actualNames.Count -ne $expectedNames.Count) { throw 'Checkpoint ZIP entry count mismatch.' }
-        foreach ($expectedName in $expectedNames) {
-            if ($null -eq @($actualNames | Where-Object { $_ -ceq $expectedName })[0]) {
-                throw "Checkpoint ZIP is missing entry: $expectedName"
-            }
-        }
-        $successEntry = $readArchive.GetEntry('SUCCESS')
-        $reader = [System.IO.StreamReader]::new($successEntry.Open(), [System.Text.UTF8Encoding]::new($false))
-        try {
-            if ($reader.ReadToEnd() -cne $SuccessText) { throw 'Checkpoint ZIP SUCCESS marker does not match the verified package marker.' }
-        }
-        finally { $reader.Dispose() }
-    }
-    finally { $readArchive.Dispose() }
+    Assert-CheckpointZip -Root $Root -ZipPath $ZipPath -SuccessText $SuccessText
 }
 
 $exitCode = 1
@@ -185,6 +254,7 @@ try {
         if (-not (Test-Path -LiteralPath (Join-Path $buildRoot $relative) -PathType Leaf)) { throw "Required build output is missing: $relative" }
     }
 
+    Assert-Tab5SourceProvenance -SourceSha $sourceSha
     New-Item -ItemType Directory -Path $packageRoot -ErrorAction Stop | Out-Null
     foreach ($relative in $requiredBuildFiles) {
         $destination = Join-Path $packageRoot $relative
