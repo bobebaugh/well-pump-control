@@ -10,6 +10,10 @@ C:\Tab5\well-pump-control
 
 The pilot is observational only. Do not use this procedure to add pump control, erase the chip or NVS, format SD media, or access the microSD card. Before a physical operation, verify the current branch/commit and query its advertised ref directly with `git ls-remote`; cached `origin/*` refs are not authoritative.
 
+## MICROSD BOUNDARY
+
+**DO NOT INITIALIZE, MOUNT, PROBE, WRITE, ERASE, FORMAT, OR OTHERWISE ACCESS THE INSERTED MICROSD CARD.** The recovered Stage 2 application has no slot-0 SD behavior. Leave an inserted unformatted card physically untouched throughout artifact validation, flashing, and qualification.
+
 ## Two different operations
 
 `tools/flash.ps1` is a build-and-flash helper. It delegates to `idf.py flash`, which may reconfigure CMake and rebuild when its generated state and supplied configuration are inconsistent. It must not be used where the objective is to reflash an exact archived artifact.
