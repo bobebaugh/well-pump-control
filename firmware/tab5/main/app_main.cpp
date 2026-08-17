@@ -33,8 +33,7 @@ constexpr uint8_t ADS1110_ADDRESS = 0x48;
 constexpr uint8_t ADS1110_CONFIG_CONTINUOUS_240_SPS_PGA_1 = 0x00;
 constexpr uint32_t ADS1110_I2C_HZ = 100000;
 constexpr int ADS1110_I2C_TIMEOUT_MS = 100;
-constexpr int64_t ADS1110_FULL_SCALE_UV = 2048000;
-constexpr int64_t ADS1110_SIGNED_CODE_RANGE = 32768;
+constexpr int64_t ADS1110_MICROVOLTS_PER_COUNT = 1000;
 const char *TAG = "well-pilot";
 EventGroupHandle_t wifi_events;
 uint32_t wifi_start_events;
@@ -188,8 +187,11 @@ esp_err_t read_ads1110_microvolts(int64_t &microvolts) {
         ADS1110_I2C_TIMEOUT_MS);
     if (result != ESP_OK) return result;
     if ((frame[2] & 0x80U) == 0) return ESP_ERR_INVALID_STATE;
-    const int16_t code = static_cast<int16_t>((static_cast<uint16_t>(frame[0]) << 8) | frame[1]);
-    microvolts = (static_cast<int64_t>(code) * ADS1110_FULL_SCALE_UV) / ADS1110_SIGNED_CODE_RANGE;
+    // At 240 SPS, the ADS1110 supplies a 12-bit signed, right-justified value
+    // sign-extended to these two bytes. Its PGA-1 LSB is exactly 1 mV.
+    const int16_t signed_raw_count = static_cast<int16_t>(
+        (static_cast<uint16_t>(frame[0]) << 8) | frame[1]);
+    microvolts = static_cast<int64_t>(signed_raw_count) * ADS1110_MICROVOLTS_PER_COUNT;
     return ESP_OK;
 }
 
