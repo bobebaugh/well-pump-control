@@ -9,14 +9,30 @@ $script:IdfToolsPath = 'C:\Espressif\tools'
 $script:IdfPythonEnvPath = 'C:\Espressif\tools\python\v5.4.2\venv'
 $script:IdfPython = Join-Path $script:IdfPythonEnvPath 'Scripts\python.exe'
 $script:IdfCommand = Join-Path $script:IdfPath 'tools\idf.py'
+$script:Tab5IdfExitCode = 0
 
 function Invoke-Tab5Idf {
     param(
         [Parameter(Mandatory = $true)]
-        [string[]]$IdfArguments
+        [string[]]$IdfArguments,
+        [switch]$StreamToHost
     )
 
-    & $script:IdfPython $script:IdfCommand @IdfArguments
+    if ($StreamToHost) {
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $script:IdfPython $script:IdfCommand @IdfArguments 2>&1 | ForEach-Object { Write-Host $_ }
+            $script:Tab5IdfExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+    }
+    else {
+        & $script:IdfPython $script:IdfCommand @IdfArguments
+        $script:Tab5IdfExitCode = $LASTEXITCODE
+    }
 }
 
 function Initialize-Tab5IdfEnvironment {
@@ -41,7 +57,7 @@ function Initialize-Tab5IdfEnvironment {
     $pythonPath = (Get-Command python -ErrorAction Stop).Source
     if ($pythonPath -ne $script:IdfPython) { throw "Unexpected Python after activation: $pythonPath" }
     $version = Invoke-Tab5Idf -IdfArguments @('--version')
-    if ($LASTEXITCODE -ne 0 -or ($version -notmatch 'ESP-IDF v5\.4\.2')) {
+    if ($script:Tab5IdfExitCode -ne 0 -or ($version -notmatch 'ESP-IDF v5\.4\.2')) {
         throw 'ESP-IDF 5.4.2 is not active; do not change the toolchain automatically.'
     }
 }

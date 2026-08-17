@@ -292,11 +292,11 @@ try {
     Initialize-Tab5IdfEnvironment
     $idfArguments = @('-B', $buildRoot, '-D', 'IDF_TARGET=esp32p4', '-D', "SDKCONFIG=$generatedSdkconfig", '-D', "SDKCONFIG_DEFAULTS=$configInput", 'build')
     Set-Tab5FirmwareLocation
-    Invoke-Tab5Idf -IdfArguments $idfArguments
-    $idfExitCode = $LASTEXITCODE
+    Invoke-Tab5Idf -IdfArguments $idfArguments -StreamToHost
+    $idfExitCode = $script:Tab5IdfExitCode
     if ($idfExitCode -ne 0) { $exitCode = $idfExitCode; throw "ESP-IDF build failed with exit code $idfExitCode." }
-    Invoke-Tab5Idf -IdfArguments @('-B', $buildRoot, '-D', "SDKCONFIG=$generatedSdkconfig", 'size')
-    $idfExitCode = $LASTEXITCODE
+    Invoke-Tab5Idf -IdfArguments @('-B', $buildRoot, '-D', "SDKCONFIG=$generatedSdkconfig", 'size') -StreamToHost
+    $idfExitCode = $script:Tab5IdfExitCode
     if ($idfExitCode -ne 0) { $exitCode = $idfExitCode; throw "ESP-IDF size failed with exit code $idfExitCode." }
 
     $requiredBuildFiles = @(
@@ -329,7 +329,7 @@ try {
     $application = [pscustomobject]@{ path = 'well_pump_tab5.bin'; bytes = (Get-Item -LiteralPath (Join-Path $buildRoot 'well_pump_tab5.bin')).Length; sha256 = Get-Sha256 (Join-Path $buildRoot 'well_pump_tab5.bin') }
     $elf = [pscustomobject]@{ path = 'well_pump_tab5.elf'; bytes = (Get-Item -LiteralPath (Join-Path $buildRoot 'well_pump_tab5.elf')).Length; sha256 = Get-Sha256 (Join-Path $buildRoot 'well_pump_tab5.elf') }
     $idfVersion = (Invoke-Tab5Idf -IdfArguments @('--version') | Out-String).Trim()
-    $idfExitCode = $LASTEXITCODE
+    $idfExitCode = $script:Tab5IdfExitCode
     if ($idfExitCode -ne 0) { $exitCode = $idfExitCode; throw "ESP-IDF version query failed with exit code $idfExitCode." }
     $pythonVersion = (& $script:IdfPython --version 2>&1 | Out-String).Trim()
     $idfExitCode = $LASTEXITCODE
