@@ -31,9 +31,13 @@ constexpr uint32_t UI_REFRESH_PERIOD_MS = 1000;
 constexpr int64_t UI_STALE_AFTER_US = 3000000;
 constexpr uint8_t ADS1110_ADDRESS = 0x48;
 constexpr uint8_t ADS1110_CONFIG_CONTINUOUS_240_SPS_PGA_1 = 0x00;
+constexpr uint8_t ADS1110_STATUS_NOT_NEW = 0x80;
+constexpr uint8_t ADS1110_CONFIGURATION_MASK = 0x7f;
 constexpr uint32_t ADS1110_I2C_HZ = 100000;
 constexpr int ADS1110_I2C_TIMEOUT_MS = 100;
 constexpr int64_t ADS1110_MICROVOLTS_PER_COUNT = 1000;
+constexpr uint8_t PI4IOE1_ANTENNA_SELECT_BIT = BIT0;
+constexpr uint8_t PI4IOE1_EXT_5V_ENABLE_BIT = BIT2;
 const char *TAG = "well-pilot";
 EventGroupHandle_t wifi_events;
 uint32_t wifi_start_events;
@@ -50,6 +54,8 @@ uint32_t touch_test_count;
 int64_t wifi_start_us;
 i2c_master_dev_handle_t ads1110_device;
 esp_err_t ads1110_initialization_error = ESP_ERR_INVALID_STATE;
+uint32_t ads1110_not_new_frame_count;
+uint32_t ads1110_configuration_mismatch_count;
 
 struct HttpBuffer { char data[HTTP_BUFFER_SIZE]; size_t length; };
 
@@ -65,12 +71,59 @@ esp_err_t http_event(esp_http_client_event_t *event) {
     return ESP_OK;
 }
 
+const char *wifi_power_save_name(wifi_ps_type_t mode) {
+    switch (mode) {
+        case WIFI_PS_NONE: return "WIFI_PS_NONE";
+        case WIFI_PS_MIN_MODEM: return "WIFI_PS_MIN_MODEM";
+        case WIFI_PS_MAX_MODEM: return "WIFI_PS_MAX_MODEM";
+        default: return "unknown";
+    }
+}
+
+void log_wifi_power_save_readback(const char *phase) {
+    wifi_ps_type_t effective = WIFI_PS_MAX_MODEM;
+    const esp_err_t result = esp_wifi_get_ps(&effective);
+    ESP_LOGI(TAG, "Wi-Fi power-save %s: esp_wifi_get_ps()=%s (0x%lx), effective=%s (%d)",
+        phase, esp_err_to_name(result), (unsigned long)result, wifi_power_save_name(effective),
+        static_cast<int>(effective));
+}
+
+bool set_and_verify_wifi_power_save_none() {
+    constexpr wifi_ps_type_t requested = WIFI_PS_NONE;
+    const esp_err_t set_result = esp_wifi_set_ps(requested);
+    wifi_ps_type_t effective = WIFI_PS_MAX_MODEM;
+    const esp_err_t get_result = esp_wifi_get_ps(&effective);
+    ESP_LOGI(TAG, "Wi-Fi power-save validation: requested=%s (%d), esp_wifi_set_ps()=%s (0x%lx), "
+        "esp_wifi_get_ps()=%s (0x%lx), effective=%s (%d)",
+        wifi_power_save_name(requested), static_cast<int>(requested),
+        esp_err_to_name(set_result), (unsigned long)set_result,
+        esp_err_to_name(get_result), (unsigned long)get_result,
+        wifi_power_save_name(effective), static_cast<int>(effective));
+    return set_result == ESP_OK && get_result == ESP_OK && effective == requested;
+}
+
+void log_wifi_access_point(const char *phase) {
+    wifi_ap_record_t access_point = {};
+    const esp_err_t result = esp_wifi_sta_get_ap_info(&access_point);
+    if (result != ESP_OK) {
+        ESP_LOGW(TAG, "Wi-Fi %s AP info: esp_wifi_sta_get_ap_info()=%s (0x%lx)",
+            phase, esp_err_to_name(result), (unsigned long)result);
+        return;
+    }
+    ESP_LOGI(TAG, "Wi-Fi %s AP: BSSID=%02x:%02x:%02x:%02x:%02x:%02x primary=%u RSSI=%d dBm",
+        phase, access_point.bssid[0], access_point.bssid[1], access_point.bssid[2],
+        access_point.bssid[3], access_point.bssid[4], access_point.bssid[5],
+        access_point.primary, access_point.rssi);
+}
+
 void wifi_handler(void *, esp_event_base_t base, int32_t id, void *event_data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         ++wifi_start_events;
-        const esp_err_t result = esp_wifi_connect();
-        ESP_LOGI(TAG, "Wi-Fi STA_START #%lu; esp_wifi_connect()=%s (0x%lx)",
-            (unsigned long)wifi_start_events, esp_err_to_name(result), (unsigned long)result);
+        ESP_LOGI(TAG, "Wi-Fi STA_START #%lu; association deferred until power-save validation completes",
+            (unsigned long)wifi_start_events);
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+        log_wifi_access_point("association");
+        log_wifi_power_save_readback("association");
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         ++wifi_disconnect_events;
         const auto *disconnect = static_cast<const wifi_event_sta_disconnected_t *>(event_data);
@@ -84,6 +137,8 @@ void wifi_handler(void *, esp_event_base_t base, int32_t id, void *event_data) {
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         xEventGroupSetBits(wifi_events, WIFI_CONNECTED_BIT);
         g_pilot_model.set_wifi(true);
+        log_wifi_access_point("got-IP");
+        log_wifi_power_save_readback("got-IP");
         ESP_LOGI(TAG, "Wi-Fi connected in %lld ms; network traffic remains paused for %lu ms",
             (long long)((esp_timer_get_time() - wifi_start_us) / 1000),
             (unsigned long)PILOT_DIAGNOSTIC_WIFI_OBSERVE_MS);
@@ -105,8 +160,21 @@ bool initialize_board_io_and_internal_antenna() {
     // PI4IOE1 P0 is the Tab5 antenna select.  Its BSP initialization makes it
     // an output; explicitly drive it low to select the internal antenna.
     bsp_io_expander_pi4ioe_init(bsp_i2c_get_handle());
+    ESP_LOGI(TAG, "Internal Wi-Fi antenna requested: PI4IOE1 0x43 P0 LOW");
     bsp_set_ext_antenna_enable(false);
-    ESP_LOGI(TAG, "Internal Wi-Fi antenna selected (PI4IOE1 P0 low); BSP has no antenna readback API");
+    uint8_t output_latch = 0;
+    const esp_err_t output_latch_result = bsp_get_ext_io_output_latch(&output_latch);
+    if (output_latch_result != ESP_OK) {
+        ESP_LOGE(TAG, "PI4IOE1 0x43 output-latch readback failed: %s (0x%lx)",
+            esp_err_to_name(output_latch_result), (unsigned long)output_latch_result);
+    } else {
+        const bool internal_antenna = (output_latch & PI4IOE1_ANTENNA_SELECT_BIT) == 0;
+        const bool external_5v_enabled = (output_latch & PI4IOE1_EXT_5V_ENABLE_BIT) != 0;
+        ESP_LOGI(TAG, "PI4IOE1 0x43 output latch=0x%02x: P0=%s (%s antenna), P2=%s (Port A 5 V)",
+            output_latch, internal_antenna ? "LOW" : "HIGH",
+            internal_antenna ? "internal" : "external",
+            external_5v_enabled ? "HIGH" : "LOW");
+    }
     return true;
 }
 
@@ -133,6 +201,11 @@ bool start_wifi() {
     if (!log_wifi_result("esp_wifi_set_config", esp_wifi_set_config(WIFI_IF_STA, &station))) return false;
     wifi_start_us = esp_timer_get_time();
     if (!log_wifi_result("esp_wifi_start", esp_wifi_start())) return false;
+    if (!set_and_verify_wifi_power_save_none()) {
+        ESP_LOGE(TAG, "Wi-Fi startup stopped: WIFI_PS_NONE was not accepted and verified before association");
+        return false;
+    }
+    if (!log_wifi_result("esp_wifi_connect_after_power_save_validation", esp_wifi_connect())) return false;
     esp_sntp_config_t time_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     if (!log_wifi_result("esp_netif_sntp_init", esp_netif_sntp_init(&time_config))) return false;
     return true;
@@ -142,7 +215,18 @@ bool initialize_ads1110_validation() {
     // Preserve other PI4IOE1 outputs by using the BSP's established
     // read-modify-write implementation for external 5 V (output register 0x05, bit 2).
     bsp_set_ext_5v_en(true);
-    ESP_LOGI(TAG, "Port A 5 V enabled through BSP PI4IOE1 read-modify-write");
+    uint8_t output_latch = 0;
+    const esp_err_t output_latch_result = bsp_get_ext_io_output_latch(&output_latch);
+    if (output_latch_result == ESP_OK) {
+        ESP_LOGI(TAG, "Port A 5 V requested through PI4IOE1 0x43 read-modify-write; "
+            "output latch=0x%02x P0=%s (%s antenna) P2=%s", output_latch,
+            (output_latch & PI4IOE1_ANTENNA_SELECT_BIT) == 0 ? "LOW" : "HIGH",
+            (output_latch & PI4IOE1_ANTENNA_SELECT_BIT) == 0 ? "internal" : "external",
+            (output_latch & PI4IOE1_EXT_5V_ENABLE_BIT) != 0 ? "HIGH" : "LOW");
+    } else {
+        ESP_LOGE(TAG, "Port A 5 V requested, but PI4IOE1 0x43 output-latch readback failed: %s (0x%lx)",
+            esp_err_to_name(output_latch_result), (unsigned long)output_latch_result);
+    }
 
     ads1110_initialization_error = bsp_ext_i2c_init();
     if (ads1110_initialization_error != ESP_OK) {
@@ -186,7 +270,29 @@ esp_err_t read_ads1110_microvolts(int64_t &microvolts) {
     const esp_err_t result = i2c_master_receive(ads1110_device, frame, sizeof(frame),
         ADS1110_I2C_TIMEOUT_MS);
     if (result != ESP_OK) return result;
-    if ((frame[2] & 0x80U) == 0) return ESP_ERR_INVALID_STATE;
+    const uint8_t configuration = frame[2] & ADS1110_CONFIGURATION_MASK;
+    if (configuration != ADS1110_CONFIG_CONTINUOUS_240_SPS_PGA_1) {
+        ++ads1110_configuration_mismatch_count;
+        if (ads1110_configuration_mismatch_count <= 3 ||
+                (ads1110_configuration_mismatch_count % 60) == 0) {
+            const unsigned data_rate_sps = configuration & 0x0cU ?
+                ((configuration & 0x0cU) == 0x04U ? 60 :
+                    ((configuration & 0x0cU) == 0x08U ? 30 : 15)) : 240;
+            ESP_LOGE(TAG, "ADS1110 configuration mismatch #%lu: frame=0x%02x config=0x%02x "
+                "continuous=%s rate=%u SPS PGA=%ux; sample withheld",
+                (unsigned long)ads1110_configuration_mismatch_count, frame[2], configuration,
+                (configuration & 0x10U) == 0 ? "yes" : "no", data_rate_sps,
+                1U << (configuration & 0x03U));
+        }
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    if ((frame[2] & ADS1110_STATUS_NOT_NEW) != 0) {
+        ++ads1110_not_new_frame_count;
+        if (ads1110_not_new_frame_count <= 3 || (ads1110_not_new_frame_count % 60) == 0) {
+            ESP_LOGW(TAG, "ADS1110 returned a previously-read sample #%lu; accepting it at "
+                "continuous 240 SPS, PGA 1x", (unsigned long)ads1110_not_new_frame_count);
+        }
+    }
     // At 240 SPS, the ADS1110 supplies a 12-bit signed, right-justified value
     // sign-extended to these two bytes. Its PGA-1 LSB is exactly 1 mV.
     const int16_t signed_raw_count = static_cast<int16_t>(
@@ -211,6 +317,11 @@ void diagnostic_wifi_observe_task(void *) {
     while (true) {
         xEventGroupWaitBits(wifi_events, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
         const TickType_t started = xTaskGetTickCount();
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        if ((xEventGroupGetBits(wifi_events) & WIFI_CONNECTED_BIT) != 0) {
+            log_wifi_access_point("got-IP +5 s");
+            log_wifi_power_save_readback("got-IP +5 s");
+        }
         while ((xTaskGetTickCount() - started) < pdMS_TO_TICKS(PILOT_DIAGNOSTIC_WIFI_OBSERVE_MS)) {
             wifi_ap_record_t access_point = {};
             const esp_err_t result = esp_wifi_sta_get_ap_info(&access_point);

@@ -70,8 +70,8 @@ Use `-NoReset` for serial capture of an already-running Tab5. Omit it only when 
 After an authorized flash, accept the checkpoint only when physical and serial evidence shows, in order:
 
 1. NVS initializes without erase; the reset reason is logged.
-2. PI4IOE1 initializes and P0 is explicitly driven LOW for the internal antenna. The current BSP exposes no antenna readback API, so the firmware logs that limitation rather than fabricating a readback.
-3. The C6 SDIO initialization uses four-bit/40 MHz and the official pins; Wi-Fi starts and reports connection time and RSSI.
+2. PI4IOE1 at `0x43` initializes and P0 is explicitly driven LOW for the internal antenna. Firmware reads back the existing PI4IOE1 output latch and logs P0 LOW/internal selection; after Port A is enabled it also logs P2 HIGH/5 V from that same readback.
+3. The C6 SDIO initialization uses four-bit/40 MHz and the official pins. After `esp_wifi_start()` and before the first association attempt, firmware sets `WIFI_PS_NONE`, reads it back, and stops Wi-Fi startup if the requested/effective mode is not `WIFI_PS_NONE`. It logs the effective mode again at got-IP and approximately five seconds later, together with BSSID, primary channel, and RSSI at association, got-IP, and the five-second observation.
 4. Got-IP occurs before all socket traffic. For 60 seconds afterward, only Wi-Fi/RSSI observation occurs; no Shelly or Netlify socket is opened.
 5. The Port A 5 V / ADS1110 validation path stays powered, reports one raw microvolt reading (or a clear I2C error) per second, and visibly updates its raw voltage field.
 6. After the quiet period, Shelly sampling begins at approximately one-second cadence and the Netlify heartbeat succeeds.

@@ -140,7 +140,10 @@ esp_err_t bsp_ext_i2c_init(void)
         .sda_io_num                   = BSP_EXT_I2C_SDA,
         .flags.enable_internal_pullup = true,
     };
-    i2c_new_master_bus(&i2c_mst_config, &ext_i2c_bus_handle);
+    const esp_err_t result = i2c_new_master_bus(&i2c_mst_config, &ext_i2c_bus_handle);
+    if (result != ESP_OK) {
+        return result;
+    }
 
     ext_i2c_initialized = true;
 
@@ -397,6 +400,20 @@ void bsp_set_ext_5v_en(bool en)
     }
 
     i2c_master_transmit(i2c_dev_handle_pi4ioe1, write_buf, 2, I2C_MASTER_TIMEOUT_MS);
+}
+
+esp_err_t bsp_get_ext_io_output_latch(uint8_t *output_latch)
+{
+    if (output_latch == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (i2c_dev_handle_pi4ioe1 == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const uint8_t register_address = PI4IO_REG_OUT_SET;
+    return i2c_master_transmit_receive(i2c_dev_handle_pi4ioe1, &register_address, 1,
+                                       output_latch, 1, I2C_MASTER_TIMEOUT_MS);
 }
 
 void bsp_generate_poweroff_signal()

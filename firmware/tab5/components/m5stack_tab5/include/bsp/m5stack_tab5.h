@@ -388,6 +388,8 @@ void bsp_set_usb_5v_en(bool en);
 
 void bsp_set_ext_5v_en(bool en);
 
+esp_err_t bsp_get_ext_io_output_latch(uint8_t *output_latch);
+
 void bsp_generate_poweroff_signal();
 
 bool bsp_headphone_detect();
