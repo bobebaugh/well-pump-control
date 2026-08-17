@@ -103,6 +103,8 @@ The external Port A I2C interface was verified as:
 
 The non-destructive diagnostic detected the ADC and obtained valid conversion/configuration responses. Near-zero readings were expected with no pressure sender connected.
 
+The validation baseline powers Port A once through the existing PI4IOE1 read-modify-write BSP routine, initializes this external I2C bus, configures the ADS1110 at `0x48` for continuous 240 SPS/PGA 1x operation, and records one raw microvolt observation per second. It presents the raw live voltage or a clear unavailable/error indication; it does not calibrate pressure, filter readings, retain history, alarm, or add pump logic.
+
 ### Pressure sender electrical boundary
 
 The selected sender is:

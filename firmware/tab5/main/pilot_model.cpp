@@ -24,6 +24,15 @@ void PilotModel::add_sample(const PowerSample &sample) {
     xSemaphoreGive(mutex_);
 }
 
+void PilotModel::set_ads1110_result(bool available, int64_t microvolts, int32_t error) {
+    xSemaphoreTake(mutex_, portMAX_DELAY);
+    state_.ads1110_available = available;
+    state_.ads1110_microvolts = microvolts;
+    state_.ads1110_error = error;
+    ++state_.ads1110_sequence;
+    xSemaphoreGive(mutex_);
+}
+
 void PilotModel::note_cloud_attempt(bool success) {
     xSemaphoreTake(mutex_, portMAX_DELAY);
     state_.cloud_connected = success;

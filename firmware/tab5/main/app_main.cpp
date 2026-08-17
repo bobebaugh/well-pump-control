@@ -5,6 +5,7 @@
 #include <ctime>
 #include "bsp/esp-bsp.h"
 #include "cJSON.h"
+#include "driver/i2c_master.h"
 #include "esp_crt_bundle.h"
 #include "esp_event.h"
 #include "esp_http_client.h"
@@ -28,6 +29,12 @@ constexpr EventBits_t NETWORK_TRAFFIC_ALLOWED_BIT = BIT1;
 constexpr size_t HTTP_BUFFER_SIZE = 2048;
 constexpr uint32_t UI_REFRESH_PERIOD_MS = 1000;
 constexpr int64_t UI_STALE_AFTER_US = 3000000;
+constexpr uint8_t ADS1110_ADDRESS = 0x48;
+constexpr uint8_t ADS1110_CONFIG_CONTINUOUS_240_SPS_PGA_1 = 0x00;
+constexpr uint32_t ADS1110_I2C_HZ = 100000;
+constexpr int ADS1110_I2C_TIMEOUT_MS = 100;
+constexpr int64_t ADS1110_FULL_SCALE_UV = 2048000;
+constexpr int64_t ADS1110_SIGNED_CODE_RANGE = 32768;
 const char *TAG = "well-pilot";
 EventGroupHandle_t wifi_events;
 uint32_t wifi_start_events;
@@ -37,10 +44,13 @@ uint32_t display_flush_finish_events;
 lv_obj_t *status_label;
 lv_obj_t *power_label;
 lv_obj_t *voltage_label;
+lv_obj_t *ads1110_label;
 lv_obj_t *touch_button;
 lv_obj_t *touch_button_label;
 uint32_t touch_test_count;
 int64_t wifi_start_us;
+i2c_master_dev_handle_t ads1110_device;
+esp_err_t ads1110_initialization_error = ESP_ERR_INVALID_STATE;
 
 struct HttpBuffer { char data[HTTP_BUFFER_SIZE]; size_t length; };
 
@@ -127,6 +137,72 @@ bool start_wifi() {
     esp_sntp_config_t time_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     if (!log_wifi_result("esp_netif_sntp_init", esp_netif_sntp_init(&time_config))) return false;
     return true;
+}
+
+bool initialize_ads1110_validation() {
+    // Preserve other PI4IOE1 outputs by using the BSP's established
+    // read-modify-write implementation for external 5 V (output register 0x05, bit 2).
+    bsp_set_ext_5v_en(true);
+    ESP_LOGI(TAG, "Port A 5 V enabled through BSP PI4IOE1 read-modify-write");
+
+    ads1110_initialization_error = bsp_ext_i2c_init();
+    if (ads1110_initialization_error != ESP_OK) {
+        ESP_LOGE(TAG, "Port A I2C initialization failed: %s (0x%lx)",
+            esp_err_to_name(ads1110_initialization_error), (unsigned long)ads1110_initialization_error);
+        return false;
+    }
+    i2c_master_bus_handle_t bus = bsp_ext_i2c_get_handle();
+    if (bus == nullptr) {
+        ads1110_initialization_error = ESP_ERR_INVALID_STATE;
+        ESP_LOGE(TAG, "Port A I2C bus handle is unavailable");
+        return false;
+    }
+    const i2c_device_config_t config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = ADS1110_ADDRESS,
+        .scl_speed_hz = ADS1110_I2C_HZ,
+    };
+    ads1110_initialization_error = i2c_master_bus_add_device(bus, &config, &ads1110_device);
+    if (ads1110_initialization_error != ESP_OK) {
+        ESP_LOGE(TAG, "ADS1110 device add failed: %s (0x%lx)",
+            esp_err_to_name(ads1110_initialization_error), (unsigned long)ads1110_initialization_error);
+        return false;
+    }
+    const uint8_t configuration = ADS1110_CONFIG_CONTINUOUS_240_SPS_PGA_1;
+    ads1110_initialization_error = i2c_master_transmit(ads1110_device, &configuration, 1,
+        ADS1110_I2C_TIMEOUT_MS);
+    if (ads1110_initialization_error != ESP_OK) {
+        ESP_LOGE(TAG, "ADS1110 configuration failed: %s (0x%lx)",
+            esp_err_to_name(ads1110_initialization_error), (unsigned long)ads1110_initialization_error);
+        return false;
+    }
+    ESP_LOGI(TAG, "ADS1110 configured: address=0x%02x continuous, 240 SPS, PGA 1x",
+        ADS1110_ADDRESS);
+    return true;
+}
+
+esp_err_t read_ads1110_microvolts(int64_t &microvolts) {
+    if (ads1110_device == nullptr) return ads1110_initialization_error;
+    uint8_t frame[3] = {};
+    const esp_err_t result = i2c_master_receive(ads1110_device, frame, sizeof(frame),
+        ADS1110_I2C_TIMEOUT_MS);
+    if (result != ESP_OK) return result;
+    if ((frame[2] & 0x80U) == 0) return ESP_ERR_INVALID_STATE;
+    const int16_t code = static_cast<int16_t>((static_cast<uint16_t>(frame[0]) << 8) | frame[1]);
+    microvolts = (static_cast<int64_t>(code) * ADS1110_FULL_SCALE_UV) / ADS1110_SIGNED_CODE_RANGE;
+    return ESP_OK;
+}
+
+void sample_ads1110_validation() {
+    int64_t microvolts = 0;
+    const esp_err_t result = read_ads1110_microvolts(microvolts);
+    g_pilot_model.set_ads1110_result(result == ESP_OK, microvolts, result);
+    if (result == ESP_OK) {
+        ESP_LOGI(TAG, "ADS1110 sample: %lld uV (240 SPS, PGA 1x)", (long long)microvolts);
+    } else {
+        ESP_LOGW(TAG, "ADS1110 unavailable: %s (0x%lx)", esp_err_to_name(result),
+            (unsigned long)result);
+    }
 }
 
 void diagnostic_wifi_observe_task(void *) {
@@ -243,6 +319,7 @@ void sampling_task(void *) {
     bool polling_active = false;
     ESP_LOGI(TAG, "Shelly sampling task started");
     while (true) {
+        sample_ads1110_validation();
         PowerSample sample = {};
         const bool connected = wifi_events && (xEventGroupGetBits(wifi_events) &
             (WIFI_CONNECTED_BIT | NETWORK_TRAFFIC_ALLOWED_BIT)) ==
@@ -390,6 +467,15 @@ void ui_refresh_timer(lv_timer_t *) {
     } else {
         lv_label_set_text(voltage_label, "--.- V");
     }
+    if (snapshot.ads1110_available) {
+        const int64_t magnitude = snapshot.ads1110_microvolts < 0
+            ? -snapshot.ads1110_microvolts : snapshot.ads1110_microvolts;
+        lv_label_set_text_fmt(ads1110_label, "%s%lld.%06lld V",
+            snapshot.ads1110_microvolts < 0 ? "-" : "", (long long)(magnitude / 1000000),
+            (long long)(magnitude % 1000000));
+    } else {
+        lv_label_set_text_fmt(ads1110_label, "UNAVAILABLE 0x%lx", (unsigned long)snapshot.ads1110_error);
+    }
 }
 
 bool create_ui() {
@@ -470,10 +556,13 @@ bool create_ui() {
     lv_obj_t *state_caption = make_label(panel, "SHELLY STATUS", &lv_font_montserrat_18, lv_color_hex(0x9eb4d8));
     lv_obj_t *power_caption = make_label(panel, "ACTIVE POWER", &lv_font_montserrat_18, lv_color_hex(0x9eb4d8));
     lv_obj_t *voltage_caption = make_label(panel, "LINE VOLTAGE", &lv_font_montserrat_18, lv_color_hex(0x9eb4d8));
+    lv_obj_t *ads1110_caption = make_label(panel, "PORT A ADS1110", &lv_font_montserrat_18, lv_color_hex(0x9eb4d8));
     status_label = make_label(panel, "WAITING FOR DATA", &lv_font_montserrat_36, lv_color_white());
     power_label = make_label(panel, "-- W", &lv_font_montserrat_36, lv_color_white());
     voltage_label = make_label(panel, "--.- V", &lv_font_montserrat_36, lv_color_white());
-    if (!state_caption || !power_caption || !voltage_caption || !status_label || !power_label || !voltage_label) {
+    ads1110_label = make_label(panel, "UNAVAILABLE", &lv_font_montserrat_36, lv_color_white());
+    if (!state_caption || !power_caption || !voltage_caption || !ads1110_caption || !status_label || !power_label ||
+        !voltage_label || !ads1110_label) {
         ESP_LOGE(TAG, "LVGL live status labels creation failed");
         bsp_display_unlock();
         return false;
@@ -484,6 +573,8 @@ bool create_ui() {
     lv_obj_set_pos(power_label, 445, 90);
     lv_obj_set_pos(voltage_caption, 785, 35);
     lv_obj_set_pos(voltage_label, 785, 90);
+    lv_obj_set_pos(ads1110_caption, 35, 170);
+    lv_obj_set_pos(ads1110_label, 35, 205);
 
     touch_button = lv_button_create(screen);
     if (!touch_button) {
@@ -546,6 +637,10 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(g_pilot_model.begin() ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_LOGI(TAG, "Platform validation harness initialized; reset reason=%d", (int)esp_reset_reason());
     const bool internal_antenna_ready = initialize_board_io_and_internal_antenna();
+    const bool ads1110_ready = internal_antenna_ready && initialize_ads1110_validation();
+    if (!ads1110_ready) {
+        g_pilot_model.set_ads1110_result(false, 0, ads1110_initialization_error);
+    }
 #if PILOT_HAS_LOCAL_SECRETS
     wifi_events = xEventGroupCreate();
     if (!wifi_events) {

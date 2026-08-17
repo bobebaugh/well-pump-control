@@ -76,9 +76,10 @@ After an authorized flash, accept the checkpoint only when physical and serial e
 2. PI4IOE1 initializes and P0 is explicitly driven LOW for the internal antenna. The current BSP exposes no antenna readback API, so the firmware logs that limitation rather than fabricating a readback.
 3. The C6 SDIO initialization uses four-bit/40 MHz and the official pins; Wi-Fi starts and reports connection time and RSSI.
 4. Got-IP occurs before all socket traffic. For 60 seconds afterward, only Wi-Fi/RSSI observation occurs; no Shelly or Netlify socket is opened.
-5. After the quiet period, Shelly sampling begins at approximately one-second cadence and the Netlify heartbeat succeeds.
-6. The ST7123 screen is visibly correct in landscape and the touch-test count advances exactly once per valid tap.
-7. No disconnect loop, watchdog, abort, panic, unexpected reset, or unrecoverable SDIO error occurs during the bounded observation.
+5. The Port A 5 V / ADS1110 validation path stays powered, reports one raw microvolt reading (or a clear I2C error) per second, and visibly updates its raw voltage field.
+6. After the quiet period, Shelly sampling begins at approximately one-second cadence and the Netlify heartbeat succeeds.
+7. The ST7123 screen is visibly correct in landscape and the touch-test count advances exactly once per valid tap.
+8. No disconnect loop, watchdog, abort, panic, unexpected reset, or unrecoverable SDIO error occurs during the bounded observation.
 
 ## Archived Stage 2 recovery evidence
 
