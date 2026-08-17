@@ -20,20 +20,17 @@ Declared component constraints are tracked in `firmware/tab5/main/idf_component.
 
 ## Build a new checkpoint
 
-Choose a new, unused suffix; the helper refuses both reuse of a build directory and overwrite of a checkpoint package. From `firmware\tab5` in the verified ESP-IDF 5.4.2 terminal:
+From `firmware\tab5` in the verified ESP-IDF 5.4.2 VS Code PowerShell terminal, run this single foreground command and leave the terminal open until it returns:
 
 ```powershell
-.\tools\verify-session.ps1
-.\tools\build.ps1 `
-  -BuildDirectory build-validation-<unique-suffix> `
-  -PackageDirectory checkpoints\tab5-validation-<unique-suffix>
+.\tools\build.ps1
 ```
 
-`verify-session.ps1` requires clean tracked files, verifies that `secrets.local.h` remains ignored without reading it, and verifies the advertised recovery ref. It reports untracked paths without modifying them, so preserved local SD artifacts do not block a baseline build.
+The helper requires a clean tracked worktree. It automatically reserves a unique identity containing the full source commit, UTC timestamp, and collision-resistant suffix; concurrent or repeated invocations cannot reuse the same build or checkpoint directories. Preserved untracked SD artifacts do not block the build and are not modified.
 
-`build.ps1` uses one new explicit build directory and writes the generated `sdkconfig` only inside it. It invokes only the checked-in ESP-IDF wrapper, then creates a checkpoint directory and ZIP. It never reuses, cleans, or overwrites an existing build/package directory.
+Before invoking ESP-IDF, `build.ps1` creates the new build directory, `BUILD-CONSOLE.log`, and an `INCOMPLETE` marker. It runs visibly and synchronously, preserves ESP-IDF's nonzero exit code, and leaves a failed or interrupted attempt in place. It does not create a valid checkpoint package until the build succeeds. On success it verifies every recorded artifact hash, creates the package ZIP and its SHA-256 sidecar, then writes the package `SUCCESS` marker last. The console ends by printing the checkpoint path, receipt path, application SHA-256, ZIP path, and ZIP SHA-256.
 
-The package contains the bootloader, application, partition table, generated `sdkconfig`, flash mapping files, ELF, map, tracked validation defaults, dependency lock, component manifests, `BUILD-RECEIPT.md`, and `ARTIFACT-MANIFEST.json`. The adjacent `.zip.sha256` file records the package ZIP hash. The receipt records the source SHA and clean state, IDF/Python paths and versions, configuration hashes, dependency lock hash, component provenance locations, build command, BIN/ELF hashes and sizes, flash mappings, and UTC time.
+The package contains the bootloader, application, partition table, generated `sdkconfig`, flash mapping files, ELF, map, tracked validation defaults, dependency lock, component manifests, `BUILD-RECEIPT.md`, `ARTIFACT-MANIFEST.json`, and final `SUCCESS` marker. The adjacent `.zip.sha256` file records the package ZIP hash. The receipt records the source SHA and clean state, IDF/Python paths and versions, configuration hashes, dependency lock hash, component provenance locations, build command, BIN/ELF hashes and sizes, flash mappings, and UTC time.
 
 ## Proposed authorized flash procedure
 
@@ -42,7 +39,7 @@ Do not run this procedure until a separate hardware authorization is given. Firs
 ```powershell
 .\tools\flash-verified-artifact.ps1 `
   -Port COM3 `
-  -ValidationPackageDirectory checkpoints\tab5-validation-<unique-suffix> `
+  -ValidationPackageDirectory checkpoints\tab5-validation-<automatically-printed-identity> `
   -Mock
 ```
 
@@ -51,10 +48,10 @@ The non-mock command is the same without `-Mock`:
 ```powershell
 .\tools\flash-verified-artifact.ps1 `
   -Port COM3 `
-  -ValidationPackageDirectory checkpoints\tab5-validation-<unique-suffix>
+  -ValidationPackageDirectory checkpoints\tab5-validation-<automatically-printed-identity>
 ```
 
-Before enumerating `COM3`, the helper validates every manifest-listed package file by path, size, and SHA-256; validates exactly the three permitted mappings—`0x2000` bootloader, `0x10000` application, and `0x8000` partition table; and rejects package path escape. It calls ESP-IDF 5.4.2 `esptool.py` directly and never calls `idf.py`, CMake, Ninja, erase, or a partition-changing command. Its normal flash uses the package mappings and preserves NVS. It also rehashes the package files after esptool exits.
+Before enumerating `COM3`, the helper rejects an `INCOMPLETE` marker or missing `SUCCESS`/receipt; then verifies the receipt, manifest, `SUCCESS` hashes, every manifest-listed package file by path, size, and SHA-256, and exactly the three permitted mappings—`0x2000` bootloader, `0x10000` application, and `0x8000` partition table. It calls ESP-IDF 5.4.2 `esptool.py` directly and never calls `idf.py`, CMake, Ninja, erase, or a partition-changing command. Its normal flash uses the package mappings and preserves NVS. It also rehashes the package files after esptool exits.
 
 ## Monitor and acceptance
 

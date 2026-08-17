@@ -70,16 +70,41 @@ function Assert-PackageIntegrity {
 function Get-ValidationPackageDefinition {
     param([Parameter(Mandatory = $true)][string]$Root)
 
+    $incompletePath = Join-Path $Root 'INCOMPLETE'
+    if (Test-Path -LiteralPath $incompletePath -PathType Leaf) {
+        throw 'Validation package is explicitly marked INCOMPLETE.'
+    }
+    $successPath = Join-Path $Root 'SUCCESS'
+    if (-not (Test-Path -LiteralPath $successPath -PathType Leaf)) {
+        throw 'Validation package SUCCESS marker is missing.'
+    }
+    $receiptPath = Join-Path $Root 'BUILD-RECEIPT.md'
+    if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) {
+        throw 'Validation package receipt is missing.'
+    }
     $manifestPath = Join-Path $Root 'ARTIFACT-MANIFEST.json'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
         throw 'Validation package manifest is missing.'
     }
     $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-    if ($manifest.schemaVersion -ne 1 -or $manifest.sourceSha -notmatch '^[0-9a-f]{40}$') {
+    $success = Get-Content -Raw -LiteralPath $successPath | ConvertFrom-Json
+    if ($manifest.schemaVersion -ne 2 -or $manifest.sourceSha -notmatch '^[0-9a-f]{40}$') {
         throw 'Validation package manifest has an unsupported identity.'
     }
+    if ($success.schemaVersion -ne 1 -or $success.sourceSha -ne $manifest.sourceSha -or
+        $success.receipt.path -ne 'BUILD-RECEIPT.md' -or $success.manifest.path -ne 'ARTIFACT-MANIFEST.json') {
+        throw 'Validation package SUCCESS marker does not agree with the manifest identity.'
+    }
+    if ((Get-Sha256 -Path $receiptPath) -ne $success.receipt.sha256 -or
+        (Get-Sha256 -Path $manifestPath) -ne $success.manifest.sha256) {
+        throw 'Validation package SUCCESS marker hash does not match the receipt or manifest.'
+    }
+    if ($null -eq $manifest.receipt -or $manifest.receipt.path -ne 'BUILD-RECEIPT.md' -or
+        $manifest.receipt.sourceSha -ne $manifest.sourceSha -or $manifest.receipt.sha256 -ne $success.receipt.sha256) {
+        throw 'Validation package receipt definition disagrees with SUCCESS or manifest identity.'
+    }
     $artifacts = @($manifest.artifacts | ForEach-Object {
-        if ([string]::IsNullOrWhiteSpace($_.path) -or $_.path -eq 'ARTIFACT-MANIFEST.json' -or $_.sha256 -notmatch '^[0-9a-f]{64}$' -or $_.bytes -lt 0) {
+        if ([string]::IsNullOrWhiteSpace($_.path) -or $_.path -in @('ARTIFACT-MANIFEST.json', 'SUCCESS', 'INCOMPLETE') -or $_.sha256 -notmatch '^[0-9a-f]{64}$' -or $_.bytes -lt 0) {
             throw 'Validation package manifest has an invalid artifact entry.'
         }
         [pscustomobject]@{ Path = $_.path; Length = [int64]$_.bytes; Sha256 = $_.sha256 }
@@ -90,6 +115,34 @@ function Get-ValidationPackageDefinition {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required artifact is missing: $($artifact.Path)" }
         if ((Get-Item -LiteralPath $path).Length -ne $artifact.Length) { throw "Artifact size mismatch for $($artifact.Path)" }
         if ((Get-Sha256 -Path $path) -ne $artifact.Sha256) { throw "Artifact SHA-256 mismatch for $($artifact.Path)" }
+    }
+    $receiptArtifact = @($artifacts | Where-Object { $_.Path -eq 'BUILD-RECEIPT.md' })
+    if ($receiptArtifact.Count -ne 1 -or $receiptArtifact[0].Sha256 -ne $manifest.receipt.sha256) {
+        throw 'Validation package receipt is absent from or disagrees with the artifact manifest.'
+    }
+    foreach ($recorded in @($manifest.receipt.application, $manifest.receipt.elf)) {
+        if ($null -eq $recorded -or [string]::IsNullOrWhiteSpace($recorded.path) -or $recorded.sha256 -notmatch '^[0-9a-f]{64}$') {
+            throw 'Validation package receipt has an invalid recorded artifact.'
+        }
+        $artifact = @($artifacts | Where-Object { $_.Path -eq $recorded.path })
+        if ($artifact.Count -ne 1 -or $artifact[0].Length -ne [int64]$recorded.bytes -or $artifact[0].Sha256 -ne $recorded.sha256) {
+            throw "Validation package receipt and artifact manifest disagree for $($recorded.path)."
+        }
+    }
+    if ($success.application.path -ne $manifest.receipt.application.path -or
+        $success.application.bytes -ne $manifest.receipt.application.bytes -or
+        $success.application.sha256 -ne $manifest.receipt.application.sha256) {
+        throw 'Validation package SUCCESS marker and receipt disagree for the application binary.'
+    }
+    $receipt = Get-Content -Raw -LiteralPath $receiptPath
+    foreach ($requiredReceiptValue in @(
+        "Receipt identity: sourceSha=$($manifest.sourceSha)",
+        "Receipt application: path=$($manifest.receipt.application.path) bytes=$($manifest.receipt.application.bytes) sha256=$($manifest.receipt.application.sha256)",
+        "Receipt ELF: path=$($manifest.receipt.elf.path) bytes=$($manifest.receipt.elf.bytes) sha256=$($manifest.receipt.elf.sha256)"
+    )) {
+        if (-not $receipt.Contains($requiredReceiptValue)) {
+            throw "Validation package receipt is missing required recorded value: $requiredReceiptValue"
+        }
     }
     $mappings = @($manifest.flashMappings | ForEach-Object { [pscustomobject]@{ Offset = $_.offset; Path = $_.path } })
     $requiredMappings = @(
