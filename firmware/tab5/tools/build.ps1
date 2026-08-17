@@ -222,7 +222,7 @@ try {
         "Generated sdkconfig SHA-256: ``$(Get-Sha256 $generatedSdkconfig)``",
         "dependencies.lock SHA-256: ``$(Get-Sha256 (Join-Path $script:FirmwareRoot 'dependencies.lock'))``",
         'Resolved managed-component versions and hashes are preserved verbatim in `provenance/dependencies.lock`.',
-        'Declared component constraints are preserved in `provenance/main-idf_component.yml`; local component manifests are under `provenance/components/.`',
+        'Declared component constraints are preserved in `provenance/main-idf_component.yml`; local component manifests are under `provenance/components/`.',
         "Application binary: ``$($application.path)`` bytes ``$($application.bytes)`` SHA-256 ``$($application.sha256)``",
         "Application ELF: ``$($elf.path)`` bytes ``$($elf.bytes)`` SHA-256 ``$($elf.sha256)``",
         "Receipt identity: sourceSha=$sourceSha",
