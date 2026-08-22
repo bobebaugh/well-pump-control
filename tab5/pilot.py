@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — enable credential-free Wi-Fi reconnect after link drops.
+# Release: 2026-08-22 — observe driver-owned Wi-Fi reconnect and report AP BSSID if exposed.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -233,18 +233,60 @@ def set_charge_enable(enable):
         return False
 
 
-# --- Wi-Fi: observe main-owned association; reconnect without application credentials ---
+# --- Wi-Fi: observe the association and driver-owned reconnect configured by main.py ---
 wlan = network.WLAN(network.STA_IF)
 wifi_connected = False
 network_traffic_allowed = False
 quiet_period_deadline_ms = None
 wifi_disconnect_events = 0
 
+WIFI_STATUS_NAMES = {
+    1000: 'IDLE',
+    1001: 'CONNECTING',
+    1010: 'GOT_IP',
+    201: 'NO_AP_FOUND',
+    202: 'WRONG_PASSWORD',
+    203: 'CONNECT_FAIL',
+}
+
+
+def format_mac(value):
+    if isinstance(value, (bytes, bytearray)) and len(value) == 6:
+        return ':'.join('{:02x}'.format(octet) for octet in value)
+    return str(value) if value is not None else None
+
+
+def connected_ap_bssid():
+    """Return the associated AP MAC if this UIFlow build exposes it.
+
+    UIFlow documents status('rssi'), but not a current-BSSID accessor. These
+    are read-only probes used by some ESP32 MicroPython builds. Unsupported
+    probes simply return None. Deliberately do not call scan(): a scan neither
+    proves the current association nor belongs in the one-second application.
+    """
+    try:
+        value = wlan.status('bssid')
+        if value is not None:
+            return format_mac(value)
+    except Exception:
+        pass
+    try:
+        value = wlan.config('bssid')
+        if value is not None:
+            return format_mac(value)
+    except Exception:
+        pass
+    return None
+
 
 def log_wifi_ap(phase):
     try:
         rssi = wlan.status('rssi')
-        log('Wi-Fi {} AP: RSSI={} dBm'.format(phase, rssi))
+        bssid = connected_ap_bssid()
+        if bssid is None:
+            log('Wi-Fi {} AP: RSSI={} dBm, BSSID unavailable'.format(phase, rssi))
+        else:
+            log('Wi-Fi {} AP: RSSI={} dBm, BSSID={}'.format(phase, rssi, bssid))
     except Exception as e:
         log('Wi-Fi {} AP info unavailable: {}'.format(phase, e))
 
@@ -416,7 +458,7 @@ def try_ntp_sync():
 
 # --- boot sequence ---
 internal_antenna_ready = confirm_internal_antenna()
-log('Wi-Fi initial association is main-owned; credential-free reconnect is enabled')
+log('Wi-Fi association and reconnect are driver-owned; pilot only observes link state')
 
 # Assume charging is permitted until the first battery poll below says otherwise -
 # M5.Power has no getter for the enable pin itself (only isCharging(), which reflects
@@ -432,7 +474,7 @@ last_sent_sample_ms = None
 sample_failure_count = 0
 touch_count = 0
 touch_pressed = False
-reconnect_attempt_at = time.ticks_ms()
+wifi_wait_log_at = time.ticks_ms()
 clock_synced = False
 ntp_attempt_at = time.ticks_ms()
 battery_v = None
@@ -468,13 +510,14 @@ while True:
         network_traffic_allowed = False
         log('Wi-Fi disconnected #{}'.format(wifi_disconnect_events))
 
-    if not wifi_connected and time.ticks_diff(now, reconnect_attempt_at) > 4000:
+    if not wifi_connected and time.ticks_diff(now, wifi_wait_log_at) >= 10000:
         try:
-            wlan.connect()
-            log('Wi-Fi credential-free reconnect issued')
+            status = wlan.status()
+            status_name = WIFI_STATUS_NAMES.get(status, 'UNKNOWN')
+            log('Wi-Fi waiting for driver reconnect: status={} ({})'.format(status, status_name))
         except Exception as e:
-            log('Wi-Fi credential-free reconnect failed: {}'.format(e))
-        reconnect_attempt_at = now
+            log('Wi-Fi reconnect status unavailable: {}'.format(e))
+        wifi_wait_log_at = now
 
     if wifi_connected and not network_traffic_allowed and quiet_period_deadline_ms is not None:
         if time.ticks_diff(now, quiet_period_deadline_ms) >= 0:

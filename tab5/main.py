@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — test documented credential-free WLAN activation and connect.
+# Release: 2026-08-22 — let the Wi-Fi driver own credential-free reconnect attempts.
 # Crash-capturing wrapper. The pilot itself lives in pilot.py.
 # Any exception that escapes the main loop is written to /flash/crash.log
 # (with a timestamp if the RTC was set) as well as printed to serial, so a
@@ -12,8 +12,9 @@ wlan_sta = None
 try:
     wlan_sta = network.WLAN(network.STA_IF)
     wlan_sta.active(True)
+    wlan_sta.config(reconnects=-1)
     wlan_sta.connect()
-    print('[well-main] credential-free Wi-Fi connect issued')
+    print('[well-main] credential-free Wi-Fi connect issued; driver reconnects unlimited')
 except Exception as wifi_err:
     print('[well-main] credential-free Wi-Fi connect failed:', wifi_err)
 
