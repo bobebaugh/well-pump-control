@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — introduce the CPU B Wi-Fi recovery and Netlify worker.
+# Release: 2026-08-22 — consolidate all CPU B Netlify transport into cloud.py.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -15,8 +15,9 @@ import sys
 import time
 import network
 import ntptime
+import requests
 
-from netlify_client import publish_sample
+from device_secrets import INGEST_TOKEN
 
 
 WIFI_QUIET_PERIOD_MS = 2000
@@ -27,10 +28,53 @@ NTP_RETRY_MS = 30000
 NTP_HOSTS = ('pool.ntp.org', 'time.google.com', 'time.cloudflare.com')
 PUBLISH_RETRY_MS = 60000
 HEARTBEAT_PERIOD_MS = 60000
+DEVICE_ID = 'shelly-em-well'
+INGEST_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/ingest-power'
+PUBLISH_TIMEOUT_S = 3
 
 
 def log(msg):
     print('[well-cloud] {}'.format(msg))
+
+
+def _format_timestamp_utc():
+    t = time.localtime()  # ntptime sets the RTC directly to UTC
+    return '{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}Z'.format(
+        t[0], t[1], t[2], t[3], t[4], t[5])
+
+
+def _publish_sample(sample, reason):
+    """Publish one telemetry record using the established Netlify contract."""
+    body = {
+        'schemaVersion': 1,
+        'deviceId': DEVICE_ID,
+        'observedAt': _format_timestamp_utc(),
+        'publishReason': reason,
+        'power': sample.get('power', 0.0),
+        'reactive': sample.get('reactive', 0.0),
+        'pf': sample.get('pf', 0.0),
+        'voltage': sample.get('voltage', 0.0),
+        'is_valid': bool(sample.get('is_valid', False)),
+        'total': sample.get('total', 0.0),
+        'total_returned': sample.get('total_returned', 0.0),
+    }
+    try:
+        response = requests.post(INGEST_URL, json=body, headers={
+            'Content-Type': 'application/json',
+            'X-Pilot-Key': INGEST_TOKEN,
+        }, timeout=PUBLISH_TIMEOUT_S)
+        ok = 200 <= response.status_code < 300
+        if not ok:
+            try:
+                detail = response.text[:140]
+            except Exception:
+                detail = ''
+            log('Netlify HTTP {} {}'.format(response.status_code, detail))
+        response.close()
+        return ok
+    except Exception as e:
+        log('Netlify publish error: {}'.format(e))
+        return False
 
 
 _state_lock = _thread.allocate_lock()
@@ -262,7 +306,7 @@ def _run():
                     reason = 'heartbeat'
                 if message is not None:
                     last_publish_attempt = now
-                    if publish_sample(_sample_from_message(message), reason):
+                    if _publish_sample(_sample_from_message(message), reason):
                         last_publish = now
                         last_published_message = message
                         log('Netlify publish succeeded ({})'.format(reason))
