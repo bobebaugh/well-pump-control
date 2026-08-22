@@ -1,10 +1,11 @@
-# Release: 2026-08-22 — start LAN-only WebREPL before entering the CPU A application.
-# Crash-capturing wrapper. The pilot itself lives in pilot.py.
-# Any exception that escapes the main loop is written to /flash/crash.log
+# Release: 2026-08-22 — run CPU A and CPU B as workers while main holds the maintenance REPL.
+# Crash-capturing launcher. The CPU A application itself lives in pilot.py.
+# Any exception that escapes CPU A is written to /flash/crash.log
 # (with a timestamp if the RTC was set) as well as printed to serial, so a
 # failure that happens while nobody is watching is still recoverable.
 import sys
 import time
+import _thread
 import cloud
 
 
@@ -38,17 +39,35 @@ def _stamp():
         return 'unknown-time'
 
 
-try:
-    import pilot
-except Exception as e:
+def _pilot_worker():
     try:
-        f = open('/flash/crash.log', 'a')
-        f.write('\n--- crash at {} (ticks_ms={}) ---\n'.format(_stamp(), time.ticks_ms()))
-        sys.print_exception(e, f)
-        f.close()
-    except Exception as log_err:
-        print('[well-pilot] could not write crash.log:', log_err)
-    print('[well-pilot] PILOT CRASHED:')
-    sys.print_exception(e)
-    raise
+        import pilot
+    except Exception as pilot_err:
+        try:
+            f = open('/flash/crash.log', 'a')
+            f.write('\n--- CPU A crash at {} (ticks_ms={}) ---\n'.format(
+                _stamp(), time.ticks_ms()))
+            sys.print_exception(pilot_err, f)
+            f.close()
+        except Exception as log_err:
+            print('[well-pilot] could not write crash.log:', log_err)
+        print('[well-pilot] CPU A CRASHED:')
+        sys.print_exception(pilot_err)
+
+
+try:
+    _thread.start_new_thread(_pilot_worker, ())
+    print('[well-main] CPU A device worker started')
+except Exception as pilot_start_err:
+    print('[well-main] CPU A startup failed:', pilot_start_err)
+
+
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    # Thonny/WebREPL sends Ctrl-C to the foreground. Returning from main.py
+    # releases the prompt while the CPU A and CPU B workers continue. Ctrl-D
+    # or machine.reset() remains the path back to a clean application start.
+    print('[well-main] foreground released; CPU A and CPU B remain active')
 
