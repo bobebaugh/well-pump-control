@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — test whether importing network initializes UIFlow Wi-Fi.
+# Release: 2026-08-22 — test documented credential-free WLAN activation and connect.
 # Crash-capturing wrapper. The pilot itself lives in pilot.py.
 # Any exception that escapes the main loop is written to /flash/crash.log
 # (with a timestamp if the RTC was set) as well as printed to serial, so a
@@ -6,6 +6,16 @@
 import sys
 import time
 import network
+
+
+wlan_sta = None
+try:
+    wlan_sta = network.WLAN(network.STA_IF)
+    wlan_sta.active(True)
+    wlan_sta.connect()
+    print('[well-main] credential-free Wi-Fi connect issued')
+except Exception as wifi_err:
+    print('[well-main] credential-free Wi-Fi connect failed:', wifi_err)
 
 
 def _stamp():
