@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — extract Netlify publishing without behavior changes.
+# Release: 2026-08-22 — restore SNTP timestamp formatting after Netlify split.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -418,6 +418,12 @@ def check_touch_button(was_pressed):
     _touch_was_down = True
     tapped = inside and not was_pressed
     return tapped, inside
+
+
+def format_timestamp_utc():
+    t = time.localtime()  # RTC is set directly to UTC by ntptime.settime(), no tz offset applied
+    return '{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}Z'.format(
+        t[0], t[1], t[2], t[3], t[4], t[5])
 
 
 def try_ntp_sync():
