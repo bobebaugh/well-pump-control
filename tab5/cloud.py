@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — consolidate all CPU B Netlify transport into cloud.py.
+# Release: 2026-08-22 — publish material changes and honor web monitoring mode.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -28,6 +28,9 @@ NTP_RETRY_MS = 30000
 NTP_HOSTS = ('pool.ntp.org', 'time.google.com', 'time.cloudflare.com')
 PUBLISH_RETRY_MS = 60000
 HEARTBEAT_PERIOD_MS = 60000
+MONITOR_PUBLISH_PERIOD_MS = 1000
+POWER_CHANGE_W = 50.0
+VOLTAGE_CHANGE_V = 2.0
 DEVICE_ID = 'shelly-em-well'
 INGEST_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/ingest-power'
 PUBLISH_TIMEOUT_S = 3
@@ -44,7 +47,7 @@ def _format_timestamp_utc():
 
 
 def _publish_sample(sample, reason):
-    """Publish one telemetry record using the established Netlify contract."""
+    """Publish one record and return (success, reported_monitoring_state)."""
     body = {
         'schemaVersion': 1,
         'deviceId': DEVICE_ID,
@@ -70,11 +73,22 @@ def _publish_sample(sample, reason):
             except Exception:
                 detail = ''
             log('Netlify HTTP {} {}'.format(response.status_code, detail))
+        monitoring_active = None
+        if ok:
+            try:
+                reply = response.json()
+                monitoring = reply.get('monitoring', {})
+                if isinstance(monitoring.get('active'), bool):
+                    monitoring_active = monitoring.get('active')
+            except Exception:
+                # Telemetry was accepted. A missing optional monitoring result
+                # must not turn the successful write into a retry.
+                pass
         response.close()
-        return ok
+        return ok, monitoring_active
     except Exception as e:
         log('Netlify publish error: {}'.format(e))
-        return False
+        return False, None
 
 
 _state_lock = _thread.allocate_lock()
@@ -138,16 +152,6 @@ def _take_pending_telemetry():
         _telemetry_lock.release()
 
 
-def _restore_if_slot_empty(message):
-    global _pending_telemetry
-    _telemetry_lock.acquire()
-    try:
-        if _pending_telemetry is None:
-            _pending_telemetry = message
-    finally:
-        _telemetry_lock.release()
-
-
 def _sample_from_message(message):
     return {
         'power': message[0],
@@ -158,6 +162,19 @@ def _sample_from_message(message):
         'total': message[5],
         'total_returned': message[6],
     }
+
+
+def _material_change(message, previous):
+    """Return True for fields that justify a normal-mode cloud write."""
+    if previous is None:
+        return True
+    if message[4] != previous[4]:
+        return True
+    if abs(message[0] - previous[0]) >= POWER_CHANGE_W:
+        return True
+    if abs(message[3] - previous[3]) >= VOLTAGE_CHANGE_V:
+        return True
+    return False
 
 
 def _safe_status(wlan):
@@ -249,9 +266,11 @@ def _run():
     quiet_deadline = None
     next_recovery = time.ticks_add(time.ticks_ms(), WIFI_RECOVERY_TRIGGER_MS)
     next_ntp_attempt = time.ticks_ms()
-    last_publish_attempt = time.ticks_add(time.ticks_ms(), -PUBLISH_RETRY_MS)
+    next_publish_attempt = time.ticks_ms()
     last_publish = time.ticks_add(time.ticks_ms(), -HEARTBEAT_PERIOD_MS)
     last_published_message = None
+    latest_message = None
+    monitoring_active = False
 
     while True:
         now = time.ticks_ms()
@@ -296,23 +315,44 @@ def _run():
                    _safe_ip(wlan), disconnect_count)
 
         if connected and traffic_ready and clock_synced:
-            retry_due = time.ticks_diff(now, last_publish_attempt) >= PUBLISH_RETRY_MS
+            pending = _take_pending_telemetry()
+            if pending is not None:
+                latest_message = pending
+
+            retry_due = time.ticks_diff(now, next_publish_attempt) >= 0
             heartbeat_due = time.ticks_diff(now, last_publish) >= HEARTBEAT_PERIOD_MS
-            if retry_due:
-                message = _take_pending_telemetry()
+            monitor_due = (monitoring_active and latest_message is not None and
+                           time.ticks_diff(now, last_publish) >= MONITOR_PUBLISH_PERIOD_MS)
+            change_due = (not monitoring_active and latest_message is not None and
+                          _material_change(latest_message, last_published_message))
+
+            reason = None
+            if monitor_due:
+                reason = 'monitoring'
+            elif change_due:
                 reason = 'state-change'
-                if message is None and heartbeat_due:
-                    message = last_published_message
-                    reason = 'heartbeat'
+            elif heartbeat_due:
+                reason = 'heartbeat'
+
+            if retry_due and reason is not None:
+                message = latest_message if latest_message is not None else last_published_message
                 if message is not None:
-                    last_publish_attempt = now
-                    if _publish_sample(_sample_from_message(message), reason):
+                    ok, reported_monitoring = _publish_sample(
+                        _sample_from_message(message), reason)
+                    if ok:
                         last_publish = now
                         last_published_message = message
+                        next_publish_attempt = now
+                        if (reported_monitoring is not None and
+                                reported_monitoring != monitoring_active):
+                            monitoring_active = reported_monitoring
+                            log('Web monitoring mode {}'.format(
+                                'ON (1 Hz)' if monitoring_active else 'OFF (on-change)'))
                         log('Netlify publish succeeded ({})'.format(reason))
                     else:
-                        _restore_if_slot_empty(message)
-                        log('Netlify publish failed ({})'.format(reason))
+                        next_publish_attempt = time.ticks_add(now, PUBLISH_RETRY_MS)
+                        log('Netlify publish failed ({}); retry in {} ms'.format(
+                            reason, PUBLISH_RETRY_MS))
 
         time.sleep_ms(100)
 
@@ -338,4 +378,3 @@ def start():
         return True
     finally:
         _start_lock.release()
-
