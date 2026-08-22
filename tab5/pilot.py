@@ -1,10 +1,10 @@
-# Release: 2026-08-22 — restore SNTP timestamp formatting after Netlify split.
+# Release: 2026-08-22 — test boot-owned Wi-Fi with application reconnect disabled.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
-# Mirrors the compiled pilot's behavior: confirm internal antenna, verify
-# Wi-Fi power-save is off before associating, hold a quiet period after
-# got-IP before opening any socket, sample the Shelly EM + ADS1110 at 1 Hz,
+# Observes the Wi-Fi connection established before this application starts,
+# holds a quiet period after got-IP before opening any socket, samples the
+# Shelly EM + ADS1110 at 1 Hz,
 # publish to Netlify on change or heartbeat, show live status on screen.
 #
 # Observational only. No pump start/stop/inhibit/relay authority - matches
@@ -19,7 +19,6 @@ import requests
 import ntptime
 import driver.ads1110 as ads1110
 from machine import I2C, Pin, SoftI2C
-from device_secrets import WIFI_SSID, WIFI_PASSWORD, TARGET_BSSID
 from netlify_client import publish_sample
 
 # --- config (values from firmware/tab5/main/pilot_config.h) ---
@@ -234,37 +233,12 @@ def set_charge_enable(enable):
         return False
 
 
-# --- Wi-Fi: start, verify power-save off before associating, quiet period after got-IP ---
+# --- Wi-Fi: observe boot-owned association; application reconnect disabled for this test ---
 wlan = network.WLAN(network.STA_IF)
 wifi_connected = False
 network_traffic_allowed = False
 quiet_period_deadline_ms = None
-wifi_start_events = 0
 wifi_disconnect_events = 0
-
-
-def set_and_verify_power_save_none():
-    wlan.config(pm=network.WLAN.PM_NONE)
-    effective = wlan.config('pm')
-    ok = effective == network.WLAN.PM_NONE
-    log('Wi-Fi power-save validation: requested=PM_NONE, effective={} ({})'.format(
-        effective, 'ok' if ok else 'MISMATCH'))
-    return ok
-
-
-def start_wifi():
-    global wifi_start_events
-    wlan.active(True)
-    wlan.disconnect()
-    time.sleep_ms(200)
-    wifi_start_events += 1
-    log('Wi-Fi STA_START #{}; association deferred until power-save validation completes'.format(wifi_start_events))
-    if not set_and_verify_power_save_none():
-        log('Wi-Fi startup stopped: PM_NONE was not accepted and verified before association')
-        return False
-    wlan.connect(WIFI_SSID, WIFI_PASSWORD, bssid=TARGET_BSSID)
-    log('Wi-Fi init connect_after_power_save_validation issued')
-    return True
 
 
 def log_wifi_ap(phase):
@@ -442,7 +416,7 @@ def try_ntp_sync():
 
 # --- boot sequence ---
 internal_antenna_ready = confirm_internal_antenna()
-start_wifi()
+log('Wi-Fi boot-owned test: application association and reconnect are disabled')
 
 # Assume charging is permitted until the first battery poll below says otherwise -
 # M5.Power has no getter for the enable pin itself (only isCharging(), which reflects
@@ -458,7 +432,7 @@ last_sent_sample_ms = None
 sample_failure_count = 0
 touch_count = 0
 touch_pressed = False
-reconnect_attempt_at = time.ticks_ms()
+reconnect_notice_at = time.ticks_ms()
 clock_synced = False
 ntp_attempt_at = time.ticks_ms()
 battery_v = None
@@ -494,9 +468,9 @@ while True:
         network_traffic_allowed = False
         log('Wi-Fi disconnected #{}'.format(wifi_disconnect_events))
 
-    if not wifi_connected and time.ticks_diff(now, reconnect_attempt_at) > 4000:
-        start_wifi()
-        reconnect_attempt_at = now
+    if not wifi_connected and time.ticks_diff(now, reconnect_notice_at) > 4000:
+        log('Wi-Fi remains disconnected; waiting for boot-owned reconnect')
+        reconnect_notice_at = now
 
     if wifi_connected and not network_traffic_allowed and quiet_period_deadline_ms is not None:
         if time.ticks_diff(now, quiet_period_deadline_ms) >= 0:
