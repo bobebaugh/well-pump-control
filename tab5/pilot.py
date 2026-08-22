@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — test boot-owned Wi-Fi with application reconnect disabled.
+# Release: 2026-08-22 — enable credential-free Wi-Fi reconnect after link drops.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -233,7 +233,7 @@ def set_charge_enable(enable):
         return False
 
 
-# --- Wi-Fi: observe boot-owned association; application reconnect disabled for this test ---
+# --- Wi-Fi: observe main-owned association; reconnect without application credentials ---
 wlan = network.WLAN(network.STA_IF)
 wifi_connected = False
 network_traffic_allowed = False
@@ -416,7 +416,7 @@ def try_ntp_sync():
 
 # --- boot sequence ---
 internal_antenna_ready = confirm_internal_antenna()
-log('Wi-Fi boot-owned test: application association and reconnect are disabled')
+log('Wi-Fi initial association is main-owned; credential-free reconnect is enabled')
 
 # Assume charging is permitted until the first battery poll below says otherwise -
 # M5.Power has no getter for the enable pin itself (only isCharging(), which reflects
@@ -432,7 +432,7 @@ last_sent_sample_ms = None
 sample_failure_count = 0
 touch_count = 0
 touch_pressed = False
-reconnect_notice_at = time.ticks_ms()
+reconnect_attempt_at = time.ticks_ms()
 clock_synced = False
 ntp_attempt_at = time.ticks_ms()
 battery_v = None
@@ -468,9 +468,13 @@ while True:
         network_traffic_allowed = False
         log('Wi-Fi disconnected #{}'.format(wifi_disconnect_events))
 
-    if not wifi_connected and time.ticks_diff(now, reconnect_notice_at) > 4000:
-        log('Wi-Fi remains disconnected; waiting for boot-owned reconnect')
-        reconnect_notice_at = now
+    if not wifi_connected and time.ticks_diff(now, reconnect_attempt_at) > 4000:
+        try:
+            wlan.connect()
+            log('Wi-Fi credential-free reconnect issued')
+        except Exception as e:
+            log('Wi-Fi credential-free reconnect failed: {}'.format(e))
+        reconnect_attempt_at = now
 
     if wifi_connected and not network_traffic_allowed and quiet_period_deadline_ms is not None:
         if time.ticks_diff(now, quiet_period_deadline_ms) >= 0:
