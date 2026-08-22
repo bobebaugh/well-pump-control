@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — observe driver-owned Wi-Fi reconnect and report AP BSSID if exposed.
+# Release: 2026-08-22 — confirm the first successful Shelly poll after each Wi-Fi connection.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -239,6 +239,7 @@ wifi_connected = False
 network_traffic_allowed = False
 quiet_period_deadline_ms = None
 wifi_disconnect_events = 0
+shelly_resume_confirmation_pending = True
 
 WIFI_STATUS_NAMES = {
     1000: 'IDLE',
@@ -501,6 +502,7 @@ while True:
     was_connected = wifi_connected
     wifi_connected = wlan.isconnected()
     if wifi_connected and not was_connected:
+        shelly_resume_confirmation_pending = True
         log_wifi_ap('got-IP')
         quiet_period_deadline_ms = time.ticks_add(now, WIFI_QUIET_PERIOD_MS)
         network_traffic_allowed = False
@@ -560,6 +562,18 @@ while True:
         else:
             last_valid_sample = sample
             last_valid_sample_ms = now
+            if shelly_resume_confirmation_pending:
+                try:
+                    wifi_status = wlan.status()
+                except Exception:
+                    wifi_status = 'unavailable'
+                try:
+                    wifi_ip = wlan.ifconfig()[0]
+                except Exception:
+                    wifi_ip = 'unavailable'
+                log('Shelly polling confirmed after connection: ticks_ms={}, isconnected={}, status={}, IP={}'.format(
+                    now, wlan.isconnected(), wifi_status, wifi_ip))
+                shelly_resume_confirmation_pending = False
 
     stale = last_valid_sample_ms is not None and time.ticks_diff(now, last_valid_sample_ms) > STALE_AFTER_MS
     if last_valid_sample is None:
