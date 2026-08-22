@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — run CPU A and CPU B as workers while main holds the maintenance REPL.
+# Release: 2026-08-22 — disable UIFlow relaunch when maintenance releases the REPL.
 # Crash-capturing launcher. The CPU A application itself lives in pilot.py.
 # Any exception that escapes CPU A is written to /flash/crash.log
 # (with a timestamp if the RTC was set) as well as printed to serial, so a
@@ -66,8 +66,10 @@ try:
     while True:
         time.sleep(1)
 except KeyboardInterrupt:
-    # Thonny/WebREPL sends Ctrl-C to the foreground. Returning from main.py
-    # releases the prompt while the CPU A and CPU B workers continue. Ctrl-D
-    # or machine.reset() remains the path back to a clean application start.
-    print('[well-main] foreground released; CPU A and CPU B remain active')
+    # Thonny/WebREPL sends Ctrl-C to the foreground. UIFlow normally resumes
+    # its launcher when main.py returns, which tears down WebREPL. This flag is
+    # part of the stock UIFlow boot namespace; clear it before releasing the
+    # native MicroPython prompt. CPU A and CPU B remain worker threads.
+    _uiflow_run_main = False
+    print('[well-main] foreground released; UIFlow relaunch disabled; CPU A and CPU B remain active')
 
