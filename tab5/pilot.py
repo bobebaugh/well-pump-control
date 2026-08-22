@@ -1,3 +1,4 @@
+# Release: 2026-08-22 — extract Netlify publishing without behavior changes.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -18,15 +19,13 @@ import requests
 import ntptime
 import driver.ads1110 as ads1110
 from machine import I2C, Pin, SoftI2C
-from device_secrets import WIFI_SSID, WIFI_PASSWORD, TARGET_BSSID, INGEST_TOKEN
+from device_secrets import WIFI_SSID, WIFI_PASSWORD, TARGET_BSSID
+from netlify_client import publish_sample
 
 # --- config (values from firmware/tab5/main/pilot_config.h) ---
-DEVICE_ID = 'shelly-em-well'
 SHELLY_URL = 'http://192.168.50.141/emeter/0'
-INGEST_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/ingest-power'
 SAMPLE_PERIOD_MS = 1000
 SHELLY_TIMEOUT_S = 1  # requests has whole-second granularity; C++ used 750ms
-PUBLISH_TIMEOUT_S = 3
 PUBLISH_RETRY_MS = 60000
 HEARTBEAT_PERIOD_MS = 60000
 WIFI_QUIET_PERIOD_MS = 2000  # shortened from the compiled pilot's 60000ms: that was caution
@@ -274,45 +273,6 @@ def log_wifi_ap(phase):
         log('Wi-Fi {} AP: RSSI={} dBm'.format(phase, rssi))
     except Exception as e:
         log('Wi-Fi {} AP info unavailable: {}'.format(phase, e))
-
-
-# --- Netlify publish (publish_sample) ---
-def format_timestamp_utc():
-    t = time.localtime()  # RTC is set directly to UTC by ntptime.settime(), no tz offset applied
-    return '{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}Z'.format(t[0], t[1], t[2], t[3], t[4], t[5])
-
-
-def publish_sample(sample, reason):
-    body = {
-        'schemaVersion': 1,
-        'deviceId': DEVICE_ID,
-        'observedAt': format_timestamp_utc(),
-        'publishReason': reason,
-        'power': sample.get('power', 0.0),
-        'reactive': sample.get('reactive', 0.0),
-        'pf': sample.get('pf', 0.0),
-        'voltage': sample.get('voltage', 0.0),
-        'is_valid': bool(sample.get('is_valid', False)),
-        'total': sample.get('total', 0.0),
-        'total_returned': sample.get('total_returned', 0.0),
-    }
-    try:
-        r = requests.post(INGEST_URL, json=body, headers={
-            'Content-Type': 'application/json',
-            'X-Pilot-Key': INGEST_TOKEN,
-        }, timeout=PUBLISH_TIMEOUT_S)
-        ok = 200 <= r.status_code < 300
-        if not ok:
-            try:
-                detail = r.text[:140]
-            except Exception:
-                detail = ''
-            log('Netlify HTTP {} {}'.format(r.status_code, detail))
-        r.close()
-        return ok
-    except Exception as e:
-        log('Netlify publish error: {}'.format(e))
-        return False
 
 
 # --- Shelly read ---
