@@ -26,3 +26,4 @@ firmware/tab5/main/secrets.local.h
 .vscode/settings.json
 .DS_Store
 Thumbs.db
+tab5/device_secrets.py
