@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — run device work on CPU A and hand telemetry to CPU B.
+# Release: 2026-08-22 — run device work on CPU A and hand telemetry to CPU B v2.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
