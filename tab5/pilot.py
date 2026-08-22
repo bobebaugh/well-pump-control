@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — confirm the first successful Shelly poll after each Wi-Fi connection.
+# Release: 2026-08-22 — run device work on CPU A and hand telemetry to CPU B.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -14,26 +14,16 @@
 
 import M5
 import time
-import network
 import requests
-import ntptime
 import driver.ads1110 as ads1110
 from machine import I2C, Pin, SoftI2C
-from netlify_client import publish_sample
+import cloud
 
 # --- config (values from firmware/tab5/main/pilot_config.h) ---
 SHELLY_URL = 'http://192.168.50.141/emeter/0'
 SAMPLE_PERIOD_MS = 1000
 SHELLY_TIMEOUT_S = 1  # requests has whole-second granularity; C++ used 750ms
-PUBLISH_RETRY_MS = 60000
-HEARTBEAT_PERIOD_MS = 60000
-WIFI_QUIET_PERIOD_MS = 2000  # shortened from the compiled pilot's 60000ms: that was caution
-                              # around racing ESP-Hosted's SDIO transport right after connect,
-                              # which doesn't apply here - MicroPython WiFi+Shelly polling was
-                              # already proven fine within seconds of connect tonight.
 STALE_AFTER_MS = 3000
-NTP_RETRY_MS = 30000
-NTP_HOSTS = ('pool.ntp.org', 'time.google.com', 'time.cloudflare.com')
 
 I2C_ANTENNA_ADDR = 0x43
 REG_IO_DIR = 0x03
@@ -233,63 +223,10 @@ def set_charge_enable(enable):
         return False
 
 
-# --- Wi-Fi: observe the association and driver-owned reconnect configured by main.py ---
-wlan = network.WLAN(network.STA_IF)
+# --- CPU B communications status: CPU A observes but never changes Wi-Fi ---
 wifi_connected = False
 network_traffic_allowed = False
-quiet_period_deadline_ms = None
-wifi_disconnect_events = 0
 shelly_resume_confirmation_pending = True
-
-WIFI_STATUS_NAMES = {
-    1000: 'IDLE',
-    1001: 'CONNECTING',
-    1010: 'GOT_IP',
-    201: 'NO_AP_FOUND',
-    202: 'WRONG_PASSWORD',
-    203: 'CONNECT_FAIL',
-}
-
-
-def format_mac(value):
-    if isinstance(value, (bytes, bytearray)) and len(value) == 6:
-        return ':'.join('{:02x}'.format(octet) for octet in value)
-    return str(value) if value is not None else None
-
-
-def connected_ap_bssid():
-    """Return the associated AP MAC if this UIFlow build exposes it.
-
-    UIFlow documents status('rssi'), but not a current-BSSID accessor. These
-    are read-only probes used by some ESP32 MicroPython builds. Unsupported
-    probes simply return None. Deliberately do not call scan(): a scan neither
-    proves the current association nor belongs in the one-second application.
-    """
-    try:
-        value = wlan.status('bssid')
-        if value is not None:
-            return format_mac(value)
-    except Exception:
-        pass
-    try:
-        value = wlan.config('bssid')
-        if value is not None:
-            return format_mac(value)
-    except Exception:
-        pass
-    return None
-
-
-def log_wifi_ap(phase):
-    try:
-        rssi = wlan.status('rssi')
-        bssid = connected_ap_bssid()
-        if bssid is None:
-            log('Wi-Fi {} AP: RSSI={} dBm, BSSID unavailable'.format(phase, rssi))
-        else:
-            log('Wi-Fi {} AP: RSSI={} dBm, BSSID={}'.format(phase, rssi, bssid))
-    except Exception as e:
-        log('Wi-Fi {} AP info unavailable: {}'.format(phase, e))
 
 
 # --- Shelly read ---
@@ -437,29 +374,9 @@ def check_touch_button(was_pressed):
     return tapped, inside
 
 
-def format_timestamp_utc():
-    t = time.localtime()  # RTC is set directly to UTC by ntptime.settime(), no tz offset applied
-    return '{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}Z'.format(
-        t[0], t[1], t[2], t[3], t[4], t[5])
-
-
-def try_ntp_sync():
-    """Try each NTP host in turn. Returns True once the RTC is set."""
-    for host in NTP_HOSTS:
-        try:
-            ntptime.host = host
-            ntptime.timeout = 5
-            ntptime.settime()
-            log('SNTP sync OK via {} -> {}'.format(host, format_timestamp_utc()))
-            return True
-        except Exception as e:
-            log('SNTP via {} failed: {}'.format(host, e))
-    return False
-
-
 # --- boot sequence ---
 internal_antenna_ready = confirm_internal_antenna()
-log('Wi-Fi association and reconnect are driver-owned; pilot only observes link state')
+log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
 
 # Assume charging is permitted until the first battery poll below says otherwise -
 # M5.Power has no getter for the enable pin itself (only isCharging(), which reflects
@@ -469,15 +386,9 @@ charge_enable = True
 
 last_valid_sample = None
 last_valid_sample_ms = None
-last_publish_ms = -HEARTBEAT_PERIOD_MS
-last_publish_attempt_ms = -PUBLISH_RETRY_MS
-last_sent_sample_ms = None
 sample_failure_count = 0
 touch_count = 0
 touch_pressed = False
-wifi_wait_log_at = time.ticks_ms()
-clock_synced = False
-ntp_attempt_at = time.ticks_ms()
 battery_v = None
 battery_level = None
 battery_charging = None
@@ -500,37 +411,10 @@ while True:
         log('Touch test accepted #{}'.format(touch_count))
 
     was_connected = wifi_connected
-    wifi_connected = wlan.isconnected()
+    (wifi_connected, network_traffic_allowed, clock_synced,
+     wifi_driver_status, wifi_ip, wifi_disconnect_events) = cloud.status_snapshot()
     if wifi_connected and not was_connected:
         shelly_resume_confirmation_pending = True
-        log_wifi_ap('got-IP')
-        quiet_period_deadline_ms = time.ticks_add(now, WIFI_QUIET_PERIOD_MS)
-        network_traffic_allowed = False
-        log('Wi-Fi connected; network traffic remains paused for {} ms'.format(WIFI_QUIET_PERIOD_MS))
-    elif not wifi_connected and was_connected:
-        wifi_disconnect_events += 1
-        network_traffic_allowed = False
-        log('Wi-Fi disconnected #{}'.format(wifi_disconnect_events))
-
-    if not wifi_connected and time.ticks_diff(now, wifi_wait_log_at) >= 10000:
-        try:
-            status = wlan.status()
-            status_name = WIFI_STATUS_NAMES.get(status, 'UNKNOWN')
-            log('Wi-Fi waiting for driver reconnect: status={} ({})'.format(status, status_name))
-        except Exception as e:
-            log('Wi-Fi reconnect status unavailable: {}'.format(e))
-        wifi_wait_log_at = now
-
-    if wifi_connected and not network_traffic_allowed and quiet_period_deadline_ms is not None:
-        if time.ticks_diff(now, quiet_period_deadline_ms) >= 0:
-            network_traffic_allowed = True
-            log('Wi-Fi quiet period complete; Shelly and Netlify traffic enabled')
-
-    if (wifi_connected and network_traffic_allowed and not clock_synced
-            and time.ticks_diff(now, ntp_attempt_at) >= 0):
-        clock_synced = try_ntp_sync()
-        if not clock_synced:
-            ntp_attempt_at = time.ticks_add(now, NTP_RETRY_MS)
 
     ads_uv = read_ads1110_microvolts()
 
@@ -562,17 +446,10 @@ while True:
         else:
             last_valid_sample = sample
             last_valid_sample_ms = now
+            cloud.submit_telemetry(sample)
             if shelly_resume_confirmation_pending:
-                try:
-                    wifi_status = wlan.status()
-                except Exception:
-                    wifi_status = 'unavailable'
-                try:
-                    wifi_ip = wlan.ifconfig()[0]
-                except Exception:
-                    wifi_ip = 'unavailable'
-                log('Shelly polling confirmed after connection: ticks_ms={}, isconnected={}, status={}, IP={}'.format(
-                    now, wlan.isconnected(), wifi_status, wifi_ip))
+                log('Shelly polling confirmed after connection: ticks_ms={}, connected={}, status={}, IP={}'.format(
+                    now, wifi_connected, wifi_driver_status, wifi_ip))
                 shelly_resume_confirmation_pending = False
 
     stale = last_valid_sample_ms is not None and time.ticks_diff(now, last_valid_sample_ms) > STALE_AFTER_MS
@@ -587,20 +464,6 @@ while True:
     voltage_v = last_valid_sample['voltage'] if last_valid_sample else None
     render(status_text, power_w, voltage_v, ads_uv, touch_count,
            battery_v, battery_level, battery_charging, battery_valid, charge_enable)
-
-    if wifi_connected and network_traffic_allowed and clock_synced and last_valid_sample is not None:
-        is_new = last_sent_sample_ms != last_valid_sample_ms
-        due_for_heartbeat = time.ticks_diff(now, last_publish_ms) >= HEARTBEAT_PERIOD_MS
-        retry_due = time.ticks_diff(now, last_publish_attempt_ms) >= PUBLISH_RETRY_MS
-        if retry_due and (is_new or due_for_heartbeat):
-            reason = 'state-change' if is_new else 'heartbeat'  # must match allowedReasons in power-contract.js
-            last_publish_attempt_ms = now
-            if publish_sample(last_valid_sample, reason):
-                last_publish_ms = now
-                last_sent_sample_ms = last_valid_sample_ms
-                log('Netlify publish succeeded ({})'.format(reason))
-            else:
-                log('Netlify publish failed ({})'.format(reason))
 
     # Sleep out the rest of the sample period, but poll touch every 50 ms so
     # taps are not missed. Sensor cadence stays at SAMPLE_PERIOD_MS.

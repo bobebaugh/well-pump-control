@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — extract Netlify publishing without behavior changes.
+# Release: 2026-08-22 — identify Netlify transport output as CPU B cloud work.
 
 import time
 import requests
@@ -12,7 +12,7 @@ PUBLISH_TIMEOUT_S = 3
 
 
 def log(msg):
-    print('[well-pilot] {}'.format(msg))
+    print('[well-cloud] {}'.format(msg))
 
 
 def format_timestamp_utc():

@@ -1,22 +1,20 @@
-# Release: 2026-08-22 — let the Wi-Fi driver own credential-free reconnect attempts.
+# Release: 2026-08-22 — start CPU B before entering the CPU A device application.
 # Crash-capturing wrapper. The pilot itself lives in pilot.py.
 # Any exception that escapes the main loop is written to /flash/crash.log
 # (with a timestamp if the RTC was set) as well as printed to serial, so a
 # failure that happens while nobody is watching is still recoverable.
 import sys
 import time
-import network
+import cloud
 
 
-wlan_sta = None
 try:
-    wlan_sta = network.WLAN(network.STA_IF)
-    wlan_sta.active(True)
-    wlan_sta.config(reconnects=-1)
-    wlan_sta.connect()
-    print('[well-main] credential-free Wi-Fi connect issued; driver reconnects unlimited')
-except Exception as wifi_err:
-    print('[well-main] credential-free Wi-Fi connect failed:', wifi_err)
+    if cloud.start():
+        print('[well-main] CPU B communications worker started')
+    else:
+        print('[well-main] CPU B communications worker was already running')
+except Exception as cloud_err:
+    print('[well-main] CPU B startup failed:', cloud_err)
 
 
 def _stamp():
