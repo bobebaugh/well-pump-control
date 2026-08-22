@@ -41,6 +41,7 @@ These instructions apply to all work under `tab5/`.
 
 - Provisioned UIFlow Wi-Fi is the preferred network source. Retain a short post-association delay and design reconnect behavior, but remove application-embedded Wi-Fi credentials only after real-device association and reconnect tests pass.
 - WebREPL is intended for LAN-only maintenance and file transfer. Do not expose it through router port forwarding or place it on the public Internet.
+- Preserve the hardware-verified Thonny reset procedure in `PROVISIONING.md`: issue `import machine; machine.reset()`, immediately switch Thonny to Local Python, wait for complete device startup, and only then select ESP32/WebREPL and reconnect. Leaving Thonny on WebREPL during reboot can prevent application startup and require physical power-button recovery.
 - Real device values belong in an uncommitted `device_secrets.py` on the Tab5. Commit only `device_secrets.example.py` with placeholders and provisioning documentation.
 - Expected secrets include the dedicated Firebase device login, Netlify ingest token, and WebREPL password. Wi-Fi belongs there only if testing proves an application fallback is necessary.
 - A Firebase web API key is a public project identifier, not device authentication. Never store a Firebase Admin/service-account private key on the Tab5.
