@@ -1,9 +1,11 @@
+# Release: 2026-08-22 — test whether importing network initializes UIFlow Wi-Fi.
 # Crash-capturing wrapper. The pilot itself lives in pilot.py.
 # Any exception that escapes the main loop is written to /flash/crash.log
 # (with a timestamp if the RTC was set) as well as printed to serial, so a
 # failure that happens while nobody is watching is still recoverable.
 import sys
 import time
+import network
 
 
 def _stamp():
