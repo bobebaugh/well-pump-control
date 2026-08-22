@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — start CPU B before entering the CPU A device application.
+# Release: 2026-08-22 — start LAN-only WebREPL before entering the CPU A application.
 # Crash-capturing wrapper. The pilot itself lives in pilot.py.
 # Any exception that escapes the main loop is written to /flash/crash.log
 # (with a timestamp if the RTC was set) as well as printed to serial, so a
@@ -15,6 +15,18 @@ try:
         print('[well-main] CPU B communications worker was already running')
 except Exception as cloud_err:
     print('[well-main] CPU B startup failed:', cloud_err)
+
+
+try:
+    import webrepl
+    import device_secrets
+    webrepl_password = getattr(
+        device_secrets, 'WEBREPL_PASSWORD', device_secrets.WIFI_PASSWORD)
+    webrepl.start(password=webrepl_password)
+    webrepl_password = None
+    print('[well-main] WebREPL service started on LAN port 8266')
+except Exception as webrepl_err:
+    print('[well-main] WebREPL startup failed:', webrepl_err)
 
 
 def _stamp():
