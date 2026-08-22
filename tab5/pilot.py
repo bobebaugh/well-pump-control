@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — run device work on CPU A and hand telemetry to CPU B v2.
+# Release: 2026-08-22 — build one extensible CPU A observation for CPU B.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -240,6 +240,65 @@ def read_shelly():
         return None
 
 
+def format_observed_at(clock_is_synced):
+    """Return the CPU A sample time in UTC, or None before SNTP is valid."""
+    if not clock_is_synced:
+        return None
+    try:
+        t = time.localtime()
+        return '{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}Z'.format(
+            t[0], t[1], t[2], t[3], t[4], t[5])
+    except Exception:
+        return None
+
+
+def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
+                      ads_microvolts, battery_voltage, battery_current,
+                      battery_percent, battery_is_charging, battery_is_valid,
+                      battery_charge_is_enabled, battery_sample_ticks_ms,
+                      wifi_is_connected, traffic_is_allowed, wifi_status,
+                      wifi_address, wifi_disconnect_count, shelly_failures):
+    """Build the variable-sized record whose ownership transfers to CPU B."""
+    return {
+        'schemaVersion': 1,
+        'sequence': sequence,
+        'observedTicksMs': observed_ticks_ms,
+        'observedAt': format_observed_at(clock_is_synced),
+        'source': 'tab5',
+        'values': {
+            # Preserve the complete Gen-1 Shelly EM source record unchanged.
+            # The units of total and total_returned remain source-native until
+            # they are independently confirmed.
+            'power': shelly.get('power'),
+            'reactive': shelly.get('reactive'),
+            'pf': shelly.get('pf'),
+            'voltage': shelly.get('voltage'),
+            'is_valid': shelly.get('is_valid'),
+            'total': shelly.get('total'),
+            'total_returned': shelly.get('total_returned'),
+            'adc_microvolts': ads_microvolts,
+            'battery_voltage': battery_voltage,
+            'battery_current': battery_current,
+            'battery_percent': battery_percent,
+            'battery_charging': battery_is_charging,
+            'battery_charge_enabled': battery_charge_is_enabled,
+        },
+        'status': {
+            'shelly_available': True,
+            'adc_available': ads_microvolts is not None,
+            'battery_available': battery_is_valid,
+            'battery_sample_ticks_ms': battery_sample_ticks_ms,
+            'shelly_failure_count': shelly_failures,
+            'wifi_connected': wifi_is_connected,
+            'network_traffic_allowed': traffic_is_allowed,
+            'clock_synced': clock_is_synced,
+            'wifi_driver_status': wifi_status,
+            'wifi_ip': wifi_address,
+            'wifi_disconnect_count': wifi_disconnect_count,
+        },
+    }
+
+
 # --- display --- (M5.begin() already ran at the top, before any I2C() objects existed)
 M5.Lcd.setRotation(1)
 M5.Lcd.fillScreen(BG)
@@ -390,15 +449,18 @@ sample_failure_count = 0
 touch_count = 0
 touch_pressed = False
 battery_v = None
+battery_a = None
 battery_level = None
 battery_charging = None
 battery_valid = False
 last_battery_poll_ms = -BATTERY_POLL_PERIOD_MS
+observation_sequence = 0
 
 log('Platform validation harness initialized')
 
 while True:
     now = time.ticks_ms()
+    observation_sequence += 1
     # M5.update() drives M5.Touch and is REQUIRED for it to report anything.
     # It reinitializes the ESP-IDF I2C peripheral, which used to invalidate the
     # machine.I2C handles for the ADC and the ST7123 - that is what caused the
@@ -423,7 +485,8 @@ while True:
         v, a, level, charging = read_battery()
         battery_valid = v is not None
         if battery_valid:
-            battery_v, battery_level, battery_charging = v, level, charging
+            battery_v, battery_a = v, a
+            battery_level, battery_charging = level, charging
             log('battery: {:.3f} V, {:.3f} A, {}%, {}, charge_enable={}'.format(
                 v, a, level, 'charging' if charging else 'not charging', charge_enable))
             if level <= BATTERY_LOW_PCT and not charge_enable:
@@ -446,7 +509,13 @@ while True:
         else:
             last_valid_sample = sample
             last_valid_sample_ms = now
-            cloud.submit_telemetry(sample)
+            observation = build_observation(
+                observation_sequence, now, clock_synced, sample, ads_uv,
+                battery_v, battery_a, battery_level, battery_charging,
+                battery_valid, charge_enable, last_battery_poll_ms,
+                wifi_connected, network_traffic_allowed, wifi_driver_status,
+                wifi_ip, wifi_disconnect_events, sample_failure_count)
+            cloud.submit_observation(observation)
             if shelly_resume_confirmation_pending:
                 log('Shelly polling confirmed after connection: ticks_ms={}, connected={}, status={}, IP={}'.format(
                     now, wifi_connected, wifi_driver_status, wifi_ip))
@@ -481,4 +550,3 @@ while True:
             render(status_text, power_w, voltage_v, ads_uv, touch_count,
                    battery_v, battery_level, battery_charging, battery_valid, charge_enable)
         time.sleep_ms(50)
-

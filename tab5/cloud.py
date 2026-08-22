@@ -1,13 +1,14 @@
-# Release: 2026-08-22 — publish material changes and honor web monitoring mode.
+# Release: 2026-08-22 — transport the complete CPU A observation unchanged.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
 SNTP, and remote Netlify traffic. CPU A may use the established LAN for
 Shelly observations, but it never changes the station interface.
 
-Routine telemetry crosses the CPU boundary as an immutable tuple through a
-single coalescing slot. If TLS is slow, a newer observation replaces an older
-unsent observation instead of blocking the one-second device loop.
+One variable-sized observation crosses the CPU boundary by ownership transfer
+through a single coalescing slot. CPU A never mutates it after submission and
+CPU B preserves every field. If TLS is slow, a newer observation replaces an
+older unsent observation instead of blocking the one-second device loop.
 """
 
 import _thread
@@ -46,20 +47,25 @@ def _format_timestamp_utc():
         t[0], t[1], t[2], t[3], t[4], t[5])
 
 
-def _publish_sample(sample, reason):
+def _publish_observation(observation, reason):
     """Publish one record and return (success, reported_monitoring_state)."""
+    values = observation.get('values', {})
     body = {
         'schemaVersion': 1,
         'deviceId': DEVICE_ID,
-        'observedAt': _format_timestamp_utc(),
+        'observedAt': observation.get('observedAt') or _format_timestamp_utc(),
         'publishReason': reason,
-        'power': sample.get('power', 0.0),
-        'reactive': sample.get('reactive', 0.0),
-        'pf': sample.get('pf', 0.0),
-        'voltage': sample.get('voltage', 0.0),
-        'is_valid': bool(sample.get('is_valid', False)),
-        'total': sample.get('total', 0.0),
-        'total_returned': sample.get('total_returned', 0.0),
+        'power': values.get('power', 0.0),
+        'reactive': values.get('reactive', 0.0),
+        'pf': values.get('pf', 0.0),
+        'voltage': values.get('voltage', 0.0),
+        'is_valid': bool(values.get('is_valid', False)),
+        'total': values.get('total', 0.0),
+        'total_returned': values.get('total_returned', 0.0),
+        # The current Netlify validator ignores this additive field. Including
+        # it now proves the complete CPU A record can cross CPU B and HTTPS
+        # unchanged; Netlify can persist it later without another CPU A rewrite.
+        'observation': observation,
     }
     try:
         response = requests.post(INGEST_URL, json=body, headers={
@@ -95,8 +101,8 @@ _state_lock = _thread.allocate_lock()
 _state = (False, False, False, None, 'unavailable', 0)
 # state fields: connected, traffic_ready, clock_synced, driver_status, IP, disconnect_count
 
-_telemetry_lock = _thread.allocate_lock()
-_pending_telemetry = None
+_observation_lock = _thread.allocate_lock()
+_pending_observation = None
 
 _start_lock = _thread.allocate_lock()
 _started = False
@@ -122,57 +128,38 @@ def status_snapshot():
         _state_lock.release()
 
 
-def submit_telemetry(sample):
-    """Copy a Shelly sample into the one-slot routine telemetry queue."""
-    global _pending_telemetry
-    message = (
-        sample.get('power', 0.0),
-        sample.get('reactive', 0.0),
-        sample.get('pf', 0.0),
-        sample.get('voltage', 0.0),
-        bool(sample.get('is_valid', False)),
-        sample.get('total', 0.0),
-        sample.get('total_returned', 0.0),
-    )
-    _telemetry_lock.acquire()
+def submit_observation(observation):
+    """Transfer ownership into the one-slot variable-sized observation queue."""
+    global _pending_observation
+    _observation_lock.acquire()
     try:
-        _pending_telemetry = message
+        _pending_observation = observation
     finally:
-        _telemetry_lock.release()
+        _observation_lock.release()
 
 
-def _take_pending_telemetry():
-    global _pending_telemetry
-    _telemetry_lock.acquire()
+def _take_pending_observation():
+    global _pending_observation
+    _observation_lock.acquire()
     try:
-        message = _pending_telemetry
-        _pending_telemetry = None
-        return message
+        observation = _pending_observation
+        _pending_observation = None
+        return observation
     finally:
-        _telemetry_lock.release()
+        _observation_lock.release()
 
 
-def _sample_from_message(message):
-    return {
-        'power': message[0],
-        'reactive': message[1],
-        'pf': message[2],
-        'voltage': message[3],
-        'is_valid': message[4],
-        'total': message[5],
-        'total_returned': message[6],
-    }
-
-
-def _material_change(message, previous):
+def _material_change(observation, previous):
     """Return True for fields that justify a normal-mode cloud write."""
     if previous is None:
         return True
-    if message[4] != previous[4]:
+    values = observation.get('values', {})
+    previous_values = previous.get('values', {})
+    if values.get('is_valid') != previous_values.get('is_valid'):
         return True
-    if abs(message[0] - previous[0]) >= POWER_CHANGE_W:
+    if abs(values.get('power', 0.0) - previous_values.get('power', 0.0)) >= POWER_CHANGE_W:
         return True
-    if abs(message[3] - previous[3]) >= VOLTAGE_CHANGE_V:
+    if abs(values.get('voltage', 0.0) - previous_values.get('voltage', 0.0)) >= VOLTAGE_CHANGE_V:
         return True
     return False
 
@@ -268,8 +255,8 @@ def _run():
     next_ntp_attempt = time.ticks_ms()
     next_publish_attempt = time.ticks_ms()
     last_publish = time.ticks_add(time.ticks_ms(), -HEARTBEAT_PERIOD_MS)
-    last_published_message = None
-    latest_message = None
+    last_published_observation = None
+    latest_observation = None
     monitoring_active = False
 
     while True:
@@ -315,16 +302,16 @@ def _run():
                    _safe_ip(wlan), disconnect_count)
 
         if connected and traffic_ready and clock_synced:
-            pending = _take_pending_telemetry()
+            pending = _take_pending_observation()
             if pending is not None:
-                latest_message = pending
+                latest_observation = pending
 
             retry_due = time.ticks_diff(now, next_publish_attempt) >= 0
             heartbeat_due = time.ticks_diff(now, last_publish) >= HEARTBEAT_PERIOD_MS
-            monitor_due = (monitoring_active and latest_message is not None and
+            monitor_due = (monitoring_active and latest_observation is not None and
                            time.ticks_diff(now, last_publish) >= MONITOR_PUBLISH_PERIOD_MS)
-            change_due = (not monitoring_active and latest_message is not None and
-                          _material_change(latest_message, last_published_message))
+            change_due = (not monitoring_active and latest_observation is not None and
+                          _material_change(latest_observation, last_published_observation))
 
             reason = None
             if monitor_due:
@@ -335,13 +322,13 @@ def _run():
                 reason = 'heartbeat'
 
             if retry_due and reason is not None:
-                message = latest_message if latest_message is not None else last_published_message
-                if message is not None:
-                    ok, reported_monitoring = _publish_sample(
-                        _sample_from_message(message), reason)
+                observation = (latest_observation if latest_observation is not None
+                               else last_published_observation)
+                if observation is not None:
+                    ok, reported_monitoring = _publish_observation(observation, reason)
                     if ok:
                         last_publish = now
-                        last_published_message = message
+                        last_published_observation = observation
                         next_publish_attempt = now
                         if (reported_monitoring is not None and
                                 reported_monitoring != monitoring_active):
