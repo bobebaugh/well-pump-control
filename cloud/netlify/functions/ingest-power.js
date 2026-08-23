@@ -112,7 +112,8 @@ exports.handler = async function ingestPower(event) {
       observedAt: Timestamp.fromDate(telemetry.observedAt),
       receivedAt: FieldValue.serverTimestamp(),
       publishReason: telemetry.publishReason,
-      values: telemetry.values
+      values: telemetry.values,
+      ...(telemetry.observation === undefined ? {} : { observation: telemetry.observation })
     };
 
     const outcome = await db.runTransaction(async transaction => {

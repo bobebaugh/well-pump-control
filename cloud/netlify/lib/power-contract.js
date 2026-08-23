@@ -23,6 +23,66 @@ function requireFiniteNumber(payload, field, minimum, maximum) {
   return value;
 }
 
+function requireObject(payload, field) {
+  const value = payload[field];
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ContractError("invalid_object", field);
+  }
+
+  return value;
+}
+
+function validateObservation(payload, observedAtMs) {
+  if (payload.observation === undefined) {
+    return undefined;
+  }
+
+  const observation = requireObject(payload, "observation");
+
+  if (observation.schemaVersion !== 1) {
+    throw new ContractError("unsupported_schema", "observation.schemaVersion");
+  }
+
+  if (!Number.isInteger(observation.sequence) || observation.sequence < 0) {
+    throw new ContractError("invalid_number", "observation.sequence");
+  }
+
+  if (!Number.isInteger(observation.observedTicksMs) || observation.observedTicksMs < 0) {
+    throw new ContractError("invalid_number", "observation.observedTicksMs");
+  }
+
+  const observationTimeMs = Date.parse(observation.observedAt);
+  if (typeof observation.observedAt !== "string" || !Number.isFinite(observationTimeMs)) {
+    throw new ContractError("invalid_timestamp", "observation.observedAt");
+  }
+
+  if (observationTimeMs !== observedAtMs) {
+    throw new ContractError("inconsistent_value", "observation.observedAt");
+  }
+
+  if (observation.source !== "tab5") {
+    throw new ContractError("invalid_value", "observation.source");
+  }
+
+  const values = requireObject(observation, "values");
+  requireObject(observation, "status");
+
+  for (const field of ["power", "reactive", "voltage", "is_valid", "total", "total_returned"]) {
+    if (values[field] !== payload[field]) {
+      throw new ContractError("inconsistent_value", `observation.values.${field}`);
+    }
+  }
+
+  if (payload.pf !== undefined && values.pf !== payload.pf) {
+    throw new ContractError("inconsistent_value", "observation.values.pf");
+  }
+
+  // Keep the original JSON object. Its required envelope and core values are
+  // checked above; all optional present and future fields remain untouched.
+  return observation;
+}
+
 function validatePowerTelemetry(payload, expectedDeviceId) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new ContractError("invalid_payload", "body");
@@ -66,12 +126,15 @@ function validatePowerTelemetry(payload, expectedDeviceId) {
     throw new ContractError("invalid_value", "publishReason");
   }
 
+  const observation = validateObservation(payload, observedAtMs);
+
   return {
     schemaVersion: 1,
     deviceId: payload.deviceId,
     observedAt: new Date(observedAtMs),
     publishReason,
-    values: normalized
+    values: normalized,
+    observation
   };
 }
 
