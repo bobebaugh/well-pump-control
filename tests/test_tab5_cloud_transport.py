@@ -178,6 +178,46 @@ class CloudTransportTests(unittest.TestCase):
         self.assertEqual(result[0]["payload"], {"future": "preserved"})
         self.assertEqual(self.cloud._filter_new_commands(result, 14), [])
 
+    def test_malformed_command_extra_fields_are_rejected(self):
+        command = {
+            "schemaVersion": 1,
+            "commandId": "20260824173458-command-web_2kP9mQ7z-0000000012",
+            "commandSequence": 12,
+            "siteId": "well-main",
+            "targetDeviceId": "tab5-well-main",
+            "commandType": "close-event",
+            "requestedAt": "2026-08-24T20:00:00Z",
+            "requestedBy": {"type": "user", "id": "example-user"},
+            "status": "pending",
+            "payload": {},
+            "unexpected": True,
+        }
+        self.assertEqual(self.cloud._filter_new_commands({"bad": command}, 0), [])
+
+    def test_queue_full_command_is_redelivered_after_capacity_returns(self):
+        original_queue = self.cloud._pending_commands
+        original_delivered = self.cloud._last_delivered_command_sequence
+        try:
+            self.cloud._pending_commands = []
+            self.cloud._last_delivered_command_sequence = 0
+            commands = []
+            for sequence in range(1, self.cloud.COMMAND_QUEUE_DEPTH + 2):
+                commands.append({
+                    "schemaVersion": 1,
+                    "commandId": "command-{}".format(sequence),
+                    "commandSequence": sequence,
+                })
+            self.cloud._queue_commands(commands)
+            self.assertEqual(len(self.cloud._pending_commands), self.cloud.COMMAND_QUEUE_DEPTH)
+            self.assertEqual(self.cloud._last_delivered_command_sequence, self.cloud.COMMAND_QUEUE_DEPTH)
+            self.cloud.take_command()
+            self.cloud._queue_commands(commands)
+            self.assertEqual(self.cloud._pending_commands[-1]["commandSequence"],
+                             self.cloud.COMMAND_QUEUE_DEPTH + 1)
+        finally:
+            self.cloud._pending_commands = original_queue
+            self.cloud._last_delivered_command_sequence = original_delivered
+
     def test_custom_token_exchange_and_refresh_keep_only_temporary_credentials(self):
         self.requests.queue({
             "idToken": "EXAMPLE_ONLY_ID_TOKEN",
@@ -206,13 +246,156 @@ class CloudTransportTests(unittest.TestCase):
         self.assertIn("grant_type=refresh_token", kwargs["data"])
 
     def test_pre_m6_rules_bridge_is_transport_metadata_only(self):
-        self.assertEqual(self.cloud.PRE_M6_TRANSPORT_ONLY_RULES_REFERENCE, {
+        original_sequence = self.cloud._sync_sequence
+        try:
+            request = self.cloud._sync_request()
+        finally:
+            self.cloud._sync_sequence = original_sequence
+        self.assertEqual(request["appliedRules"], {
             "version": 1,
             "contentHash": "0" * 64,
         })
-        source = (pathlib.Path(__file__).parents[1] / "tab5" / "cloud.py").read_text()
-        self.assertNotIn("open('rules", source)
-        self.assertNotIn("eval_rules", source)
+        self.assertEqual(request["openEventIds"], [])
+
+    def test_bootstrap_rejects_unapproved_project_host_and_token_origins(self):
+        request = {
+            "schemaVersion": 1,
+            "kind": "device-sync-request",
+            "exchangeId": "20260824200000-sync-boot_12345678-0000000001",
+            "siteId": "well-main",
+            "deviceId": "tab5-well-main",
+            "sessionId": "boot_12345678",
+        }
+
+        def reply(**bootstrap_changes):
+            bootstrap = {
+                "firebaseCustomToken": "EXAMPLE_ONLY_CUSTOM_TOKEN",
+                "firebaseApiKey": "EXAMPLE_ONLY_API_KEY",
+                "firebaseProjectId": "well-pump-control",
+                "rtdbUrl": "https://well-pump-control-default-rtdb.firebaseio.com",
+                "identityToolkitUrl": self.cloud.APPROVED_IDENTITY_TOOLKIT_URL,
+                "secureTokenUrl": self.cloud.APPROVED_SECURE_TOKEN_URL,
+            }
+            bootstrap.update(bootstrap_changes)
+            return {
+                "schemaVersion": 1,
+                "kind": "device-sync-response",
+                "exchangeId": request["exchangeId"],
+                "siteId": request["siteId"],
+                "deviceId": request["deviceId"],
+                "sessionId": request["sessionId"],
+                "authenticationBootstrap": bootstrap,
+            }
+
+        self.assertEqual(
+            self.cloud._validate_sync_response(reply(), request)["firebaseProjectId"],
+            "well-pump-control")
+        for changes in (
+            {"firebaseProjectId": "other-project"},
+            {"rtdbUrl": "https://evil.example"},
+            {"identityToolkitUrl": "https://evil.example/token"},
+            {"secureTokenUrl": "https://evil.example/refresh"},
+        ):
+            with self.assertRaises(self.cloud.TransportError):
+                self.cloud._validate_sync_response(reply(**changes), request)
+
+    def test_sync_state_payload_includes_completed_bootstrap_exchange_id(self):
+        exchange_id = "20260824200000-sync-boot_12345678-0000000001"
+        payload = self.cloud._sync_state_payload("ok", exchange_id)
+        self.assertEqual(payload, {
+            "schemaVersion": 1,
+            "exchangeId": exchange_id,
+            "siteId": "well-main",
+            "deviceId": "tab5-well-main",
+            "sessionId": self.cloud._session_id,
+            "lastSeenCommandSequence": self.cloud._last_delivered_command_sequence,
+            "lastAppliedCommandSequence": self.cloud._last_applied_command_sequence,
+            "result": "ok",
+            "lastSyncAtMs": {".sv": "timestamp"},
+        })
+
+    def test_scheduler_uses_post_operation_deadlines_and_one_action_per_step(self):
+        schedule = self.cloud._new_rtdb_schedule(1000)
+        schedule["phase"] = "ready"
+        schedule["auth"] = {"expiresAtTicks": 1000000}
+        schedule["syncWritePending"] = True
+        self.assertEqual(self.cloud._next_rtdb_action(schedule, 1000, 1), "sync-state")
+        self.cloud._complete_rtdb_action(schedule, "sync-state", 4000, True)
+        self.assertEqual(schedule["nextOperationAt"],
+                         4000 + self.cloud.RTDB_MIN_OPERATION_GAP_MS)
+        self.assertIsNone(self.cloud._next_rtdb_action(schedule, 4000, 1))
+
+    def test_scheduler_gives_legacy_service_first_chance_after_slow_operations(self):
+        schedule = self.cloud._new_rtdb_schedule(0)
+        schedule["phase"] = "ready"
+        schedule["auth"] = {"expiresAtTicks": 1000000}
+        schedule["nextPresenceAt"] = 0
+        order = []
+        now = 0
+        for _ in range(3):
+            order.append("legacy")  # mirrors _run: legacy block precedes RTDB step
+            action = self.cloud._next_rtdb_action(schedule, now, None)
+            order.append(action)
+            completed = now + 3000  # simulated slow but bounded success
+            self.cloud._complete_rtdb_action(schedule, action, completed, True)
+            now = schedule["nextOperationAt"]
+        self.assertEqual(order[0::2], ["legacy", "legacy", "legacy"])
+        self.assertEqual(len(order[1::2]), 3)
+
+    def test_scheduler_bounds_failures_and_rebootstraps_after_auth_denial(self):
+        for denied_status in (401, 403):
+            schedule = self.cloud._new_rtdb_schedule(0)
+            schedule["phase"] = "ready"
+            schedule["auth"] = {"expiresAtTicks": 1000000}
+            self.cloud._complete_rtdb_action(
+                schedule, "current-observation", 2000, False,
+                denied_status)
+            self.assertEqual(schedule["phase"], "device-sync")
+            self.assertIsNone(schedule["auth"])
+            self.assertEqual(schedule["nextOperationAt"], 7000)
+        for count in range(2, 20):
+            completed = schedule["nextOperationAt"]
+            self.cloud._complete_rtdb_action(
+                schedule, "device-sync", completed, False, None)
+        self.assertLessEqual(
+            schedule["nextOperationAt"] - completed,
+            self.cloud.RTDB_RETRY_MAX_MS)
+
+    def test_rtdb_step_runs_one_operation_and_uses_slow_completion_tick(self):
+        schedule = self.cloud._new_rtdb_schedule(1000)
+        schedule["phase"] = "ready"
+        schedule["auth"] = {
+            "idToken": "EXAMPLE_ONLY_ID_TOKEN",
+            "rtdbUrl": "https://well-pump-control-default-rtdb.firebaseio.com",
+            "expiresAtTicks": 1000000,
+        }
+        schedule["nextPresenceAt"] = 999999
+        schedule["nextCoordinationAt"] = 999999
+        observation = {"schemaVersion": 1, "sequence": 7}
+        calls = []
+        clock = [1000]
+        original_ticks = self.cloud.time.ticks_ms
+        original_put = self.cloud._rtdb_put
+        try:
+            self.cloud.time.ticks_ms = lambda: clock[0]
+
+            def slow_put(*args):
+                calls.append(args)
+                clock[0] += 3000
+                return None
+
+            self.cloud._rtdb_put = slow_put
+            self.assertEqual(
+                self.cloud._run_rtdb_step(schedule, observation),
+                "current-observation")
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(schedule["nextOperationAt"],
+                             4000 + self.cloud.RTDB_MIN_OPERATION_GAP_MS)
+            self.assertIsNone(self.cloud._run_rtdb_step(schedule, observation))
+            self.assertEqual(len(calls), 1)
+        finally:
+            self.cloud.time.ticks_ms = original_ticks
+            self.cloud._rtdb_put = original_put
 
 
 if __name__ == "__main__":

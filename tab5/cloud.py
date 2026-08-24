@@ -41,14 +41,23 @@ PUBLISH_TIMEOUT_S = 3
 SITE_ID = 'well-main'
 RTDB_DEVICE_ID = 'tab5-well-main'
 DEVICE_SYNC_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/device-sync'
-DEVICE_SYNC_TIMEOUT_S = 5
-RTDB_TIMEOUT_S = 3
+DEVICE_SYNC_TIMEOUT_S = 3
+RTDB_TIMEOUT_S = 1
 RTDB_COORDINATION_PERIOD_MS = 10000
 RTDB_PRESENCE_PERIOD_MS = 30000
 RTDB_RETRY_BASE_MS = 5000
 RTDB_RETRY_MAX_MS = 60000
+RTDB_MIN_OPERATION_GAP_MS = 100
 TOKEN_REFRESH_MARGIN_MS = 300000
 COMMAND_QUEUE_DEPTH = 8
+APPROVED_FIREBASE_PROJECT_ID = 'well-pump-control'
+APPROVED_RTDB_URLS = (
+    'https://well-pump-control-default-rtdb.firebaseio.com',
+    'https://well-pump-control-default-rtdb.firebasedatabase.app',
+)
+APPROVED_IDENTITY_TOOLKIT_URL = (
+    'https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken')
+APPROVED_SECURE_TOKEN_URL = 'https://securetoken.googleapis.com/v1/token'
 
 # M3 must send the required device-sync v1 appliedRules field before M6 creates
 # or adopts a real rules package. This unmistakable bridge is transport metadata
@@ -506,10 +515,20 @@ def _validate_sync_response(reply, request):
     bootstrap = reply.get('authenticationBootstrap')
     if not isinstance(bootstrap, dict):
         raise TransportError('device-sync authentication bootstrap missing')
-    for field in ('firebaseCustomToken', 'firebaseApiKey', 'rtdbUrl',
-                  'identityToolkitUrl', 'secureTokenUrl'):
+    for field in ('firebaseCustomToken', 'firebaseApiKey', 'firebaseProjectId',
+                  'rtdbUrl', 'identityToolkitUrl', 'secureTokenUrl'):
         if not isinstance(bootstrap.get(field), str) or not bootstrap.get(field):
             raise TransportError('device-sync bootstrap field missing: {}'.format(field))
+    if bootstrap.get('firebaseProjectId') != APPROVED_FIREBASE_PROJECT_ID:
+        raise TransportError('device-sync Firebase project is not approved')
+    rtdb_url = bootstrap.get('rtdbUrl').rstrip('/')
+    if rtdb_url not in APPROVED_RTDB_URLS:
+        raise TransportError('device-sync RTDB host is not approved')
+    if bootstrap.get('identityToolkitUrl') != APPROVED_IDENTITY_TOOLKIT_URL:
+        raise TransportError('device-sync token exchange endpoint is not approved')
+    if bootstrap.get('secureTokenUrl') != APPROVED_SECURE_TOKEN_URL:
+        raise TransportError('device-sync refresh endpoint is not approved')
+    bootstrap['rtdbUrl'] = rtdb_url
     return bootstrap
 
 
@@ -537,20 +556,19 @@ def _exchange_custom_token(bootstrap):
     }
 
 
-def _bootstrap_rtdb():
+def _request_device_sync():
     request = _sync_request()
     reply = _http_json('POST', DEVICE_SYNC_URL, body=request, headers={
         'Content-Type': 'application/json',
         'X-Pilot-Key': INGEST_TOKEN,
     }, timeout=DEVICE_SYNC_TIMEOUT_S)
     bootstrap = _validate_sync_response(reply, request)
-    auth = _exchange_custom_token(bootstrap)
     noncredential = dict(reply)
     noncredential.pop('authenticationBootstrap', None)
     _set_sync_state(noncredential)
     _queue_commands(_filter_new_commands(
         reply.get('pendingCommands'), _last_delivered_command_sequence))
-    return auth
+    return request, bootstrap
 
 
 def _refresh_firebase_token(auth):
@@ -583,43 +601,31 @@ def _rtdb_put(auth, path, value):
                       body=value, headers={'Content-Type': 'application/json'})
 
 
-def _poll_rtdb_coordination(auth):
-    global_enable = _rtdb_get(auth, 'v1/sites/{}/control/globalEnable'.format(SITE_ID))
-    rules = _rtdb_get(auth, 'v1/sites/{}/rules/current'.format(SITE_ID))
-    commands = _rtdb_get(auth, 'v1/sites/{}/devices/{}/commands'.format(
-        SITE_ID, RTDB_DEVICE_ID))
-    fresh = _filter_new_commands(commands, _last_delivered_command_sequence)
-    _queue_commands(fresh)
-    _set_sync_state({
-        'schemaVersion': 1,
-        'kind': 'rtdb-coordination-snapshot',
-        'siteId': SITE_ID,
-        'deviceId': RTDB_DEVICE_ID,
-        'sessionId': _session_id,
-        'globalEnable': global_enable,
-        'currentRules': rules,
-        'pendingCommandCount': len(fresh),
-    })
-
-
-def _write_sync_state(auth, result):
+def _sync_state_payload(result, exchange_id):
     _command_lock.acquire()
     try:
         last_seen = _last_delivered_command_sequence
         last_applied = _last_applied_command_sequence
     finally:
         _command_lock.release()
+    return {
+        'schemaVersion': 1,
+        'exchangeId': exchange_id,
+        'siteId': SITE_ID,
+        'deviceId': RTDB_DEVICE_ID,
+        'sessionId': _session_id,
+        'lastSeenCommandSequence': last_seen,
+        'lastAppliedCommandSequence': last_applied,
+        'result': result,
+        'lastSyncAtMs': {'.sv': 'timestamp'},
+    }
+
+
+def _write_sync_state(auth, result, exchange_id):
+    if not exchange_id:
+        raise TransportError('completed bootstrap exchangeId is unavailable')
     _rtdb_put(auth, 'v1/sites/{}/devices/{}/syncState'.format(
-        SITE_ID, RTDB_DEVICE_ID), {
-            'schemaVersion': 1,
-            'siteId': SITE_ID,
-            'deviceId': RTDB_DEVICE_ID,
-            'sessionId': _session_id,
-            'lastSeenCommandSequence': last_seen,
-            'lastAppliedCommandSequence': last_applied,
-            'result': result,
-            'lastSyncAtMs': {'.sv': 'timestamp'},
-        })
+        SITE_ID, RTDB_DEVICE_ID), _sync_state_payload(result, exchange_id))
 
 
 def _write_presence(auth):
@@ -631,6 +637,156 @@ def _write_presence(auth):
             'sessionId': _session_id,
             'lastSeenAtMs': {'.sv': 'timestamp'},
         })
+
+
+def _new_rtdb_schedule(now):
+    return {
+        'phase': 'device-sync',
+        'auth': None,
+        'bootstrap': None,
+        'exchangeId': None,
+        'failureCount': 0,
+        'nextOperationAt': now,
+        'lastCurrentSequence': None,
+        'nextPresenceAt': now,
+        'nextCoordinationAt': now,
+        'coordinationStage': None,
+        'coordination': {},
+        'syncWritePending': False,
+    }
+
+
+def _next_rtdb_action(schedule, now, current_sequence=None):
+    if time.ticks_diff(now, schedule['nextOperationAt']) < 0:
+        return None
+    if schedule['phase'] == 'device-sync':
+        return 'device-sync'
+    if schedule['phase'] == 'token-exchange':
+        return 'token-exchange'
+
+    auth = schedule.get('auth')
+    if auth is None:
+        schedule['phase'] = 'device-sync'
+        return 'device-sync'
+    if time.ticks_diff(auth['expiresAtTicks'], now) <= TOKEN_REFRESH_MARGIN_MS:
+        return 'token-refresh'
+    if schedule['syncWritePending']:
+        return 'sync-state'
+    if current_sequence is not None and current_sequence != schedule['lastCurrentSequence']:
+        return 'current-observation'
+    if time.ticks_diff(now, schedule['nextPresenceAt']) >= 0:
+        return 'presence'
+    if schedule['coordinationStage'] is None:
+        if time.ticks_diff(now, schedule['nextCoordinationAt']) < 0:
+            return None
+        schedule['coordinationStage'] = 'global-enable'
+    return schedule['coordinationStage']
+
+
+def _complete_rtdb_action(schedule, action, completed_at, success,
+                          status_code=None):
+    if success:
+        schedule['failureCount'] = 0
+        schedule['nextOperationAt'] = time.ticks_add(
+            completed_at, RTDB_MIN_OPERATION_GAP_MS)
+        return
+
+    schedule['failureCount'] += 1
+    schedule['nextOperationAt'] = time.ticks_add(
+        completed_at, _retry_delay_ms(schedule['failureCount']))
+    if status_code in (401, 403) or action == 'token-exchange':
+        schedule['phase'] = 'device-sync'
+        schedule['auth'] = None
+        schedule['bootstrap'] = None
+        schedule['syncWritePending'] = False
+        schedule['coordinationStage'] = None
+        schedule['coordination'] = {}
+
+
+def _run_rtdb_step(schedule, latest_observation):
+    """Perform at most one bounded RTDB/bootstrap network operation."""
+    now = time.ticks_ms()
+    sequence = (latest_observation.get('sequence')
+                if isinstance(latest_observation, dict) else None)
+    action = _next_rtdb_action(schedule, now, sequence)
+    if action is None:
+        return None
+
+    try:
+        auth = schedule.get('auth')
+        if action == 'device-sync':
+            request, bootstrap = _request_device_sync()
+            schedule['bootstrap'] = bootstrap
+            schedule['exchangeId'] = request['exchangeId']
+            schedule['phase'] = 'token-exchange'
+        elif action == 'token-exchange':
+            schedule['auth'] = _exchange_custom_token(schedule['bootstrap'])
+            schedule['phase'] = 'ready'
+            schedule['syncWritePending'] = True
+            log('Firebase temporary credentials established for {}'.format(
+                RTDB_DEVICE_ID))
+        elif action == 'token-refresh':
+            schedule['auth'] = _refresh_firebase_token(auth)
+            log('Firebase temporary credentials refreshed')
+        elif action == 'sync-state':
+            _write_sync_state(auth, 'ok', schedule['exchangeId'])
+            schedule['syncWritePending'] = False
+        elif action == 'current-observation':
+            current = _copy_current_observation(latest_observation, _session_id)
+            _rtdb_put(auth,
+                      'v1/sites/{}/devices/{}/currentObservation'.format(
+                          SITE_ID, RTDB_DEVICE_ID), current)
+            schedule['lastCurrentSequence'] = sequence
+        elif action == 'presence':
+            _write_presence(auth)
+        elif action == 'global-enable':
+            schedule['coordination']['globalEnable'] = _rtdb_get(
+                auth, 'v1/sites/{}/control/globalEnable'.format(SITE_ID))
+            schedule['coordinationStage'] = 'rules-metadata'
+        elif action == 'rules-metadata':
+            schedule['coordination']['currentRules'] = _rtdb_get(
+                auth, 'v1/sites/{}/rules/current'.format(SITE_ID))
+            schedule['coordinationStage'] = 'commands'
+        elif action == 'commands':
+            commands = _rtdb_get(
+                auth, 'v1/sites/{}/devices/{}/commands'.format(
+                    SITE_ID, RTDB_DEVICE_ID))
+            fresh = _filter_new_commands(
+                commands, _last_delivered_command_sequence)
+            _queue_commands(fresh)
+            _set_sync_state({
+                'schemaVersion': 1,
+                'kind': 'rtdb-coordination-snapshot',
+                'siteId': SITE_ID,
+                'deviceId': RTDB_DEVICE_ID,
+                'sessionId': _session_id,
+                'globalEnable': schedule['coordination'].get('globalEnable'),
+                'currentRules': schedule['coordination'].get('currentRules'),
+                'pendingCommandCount': len(fresh),
+            })
+            schedule['coordinationStage'] = None
+            schedule['coordination'] = {}
+            schedule['syncWritePending'] = True
+        else:
+            raise TransportError('unknown RTDB schedule action')
+
+        completed_at = time.ticks_ms()
+        if action == 'presence':
+            schedule['nextPresenceAt'] = time.ticks_add(
+                completed_at, RTDB_PRESENCE_PERIOD_MS)
+        elif action == 'commands':
+            schedule['nextCoordinationAt'] = time.ticks_add(
+                completed_at, RTDB_COORDINATION_PERIOD_MS)
+        _complete_rtdb_action(schedule, action, completed_at, True)
+        return action
+    except Exception as e:
+        completed_at = time.ticks_ms()
+        status_code = e.status_code if isinstance(e, TransportError) else None
+        _complete_rtdb_action(
+            schedule, action, completed_at, False, status_code)
+        delay = time.ticks_diff(schedule['nextOperationAt'], completed_at)
+        log('RTDB {} error: {}; retry in {} ms'.format(action, e, delay))
+        return action
 
 
 def _run():
@@ -649,12 +805,7 @@ def _run():
     last_published_observation = None
     latest_observation = None
     monitoring_active = False
-    rtdb_auth = None
-    rtdb_failure_count = 0
-    next_rtdb_attempt = time.ticks_ms()
-    next_coordination = time.ticks_ms()
-    next_presence = time.ticks_ms()
-    last_rtdb_sequence = None
+    rtdb_schedule = _new_rtdb_schedule(time.ticks_ms())
 
     while True:
         now = time.ticks_ms()
@@ -738,58 +889,9 @@ def _run():
                         log('Netlify publish failed ({}); retry in {} ms'.format(
                             reason, PUBLISH_RETRY_MS))
 
-            if rtdb_auth is None and time.ticks_diff(now, next_rtdb_attempt) >= 0:
-                try:
-                    rtdb_auth = _bootstrap_rtdb()
-                    rtdb_failure_count = 0
-                    next_rtdb_attempt = now
-                    next_coordination = now
-                    next_presence = now
-                    _write_sync_state(rtdb_auth, 'connected')
-                    log('Firebase temporary credentials established for {}'.format(
-                        RTDB_DEVICE_ID))
-                except Exception as e:
-                    rtdb_failure_count += 1
-                    delay = _retry_delay_ms(rtdb_failure_count)
-                    next_rtdb_attempt = time.ticks_add(now, delay)
-                    log('RTDB bootstrap failed: {}; retry in {} ms'.format(e, delay))
-
-            if (rtdb_auth is not None and
-                    time.ticks_diff(now, next_rtdb_attempt) >= 0):
-                try:
-                    remaining = time.ticks_diff(rtdb_auth['expiresAtTicks'], now)
-                    if remaining <= TOKEN_REFRESH_MARGIN_MS:
-                        rtdb_auth = _refresh_firebase_token(rtdb_auth)
-                        log('Firebase temporary credentials refreshed')
-
-                    if latest_observation is not None:
-                        sequence = latest_observation.get('sequence')
-                        if sequence != last_rtdb_sequence and time.ticks_diff(now, next_rtdb_attempt) >= 0:
-                            current = _copy_current_observation(
-                                latest_observation, _session_id)
-                            _rtdb_put(rtdb_auth,
-                                      'v1/sites/{}/devices/{}/currentObservation'.format(
-                                          SITE_ID, RTDB_DEVICE_ID), current)
-                            last_rtdb_sequence = sequence
-                            rtdb_failure_count = 0
-                            next_rtdb_attempt = now
-
-                    if time.ticks_diff(now, next_presence) >= 0:
-                        next_presence = time.ticks_add(now, RTDB_PRESENCE_PERIOD_MS)
-                        _write_presence(rtdb_auth)
-
-                    if time.ticks_diff(now, next_coordination) >= 0:
-                        next_coordination = time.ticks_add(
-                            now, RTDB_COORDINATION_PERIOD_MS)
-                        _poll_rtdb_coordination(rtdb_auth)
-                        _write_sync_state(rtdb_auth, 'ok')
-                except Exception as e:
-                    rtdb_failure_count += 1
-                    delay = _retry_delay_ms(rtdb_failure_count)
-                    next_rtdb_attempt = time.ticks_add(now, delay)
-                    if isinstance(e, TransportError) and e.status_code in (401, 403):
-                        rtdb_auth = None
-                    log('RTDB transport error: {}; retry in {} ms'.format(e, delay))
+            # Legacy Netlify publication above retains first service priority.
+            # This step performs at most one additional bounded network call.
+            _run_rtdb_step(rtdb_schedule, latest_observation)
 
         time.sleep_ms(100)
 
