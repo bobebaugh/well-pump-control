@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "siteId": "well-main",
+  "releaseId": "20260824170000-rules-v3",
+  "rulesVersion": 3,
+  "rulesSchemaVersion": 1,
+  "contentHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "hashAlgorithm": "sha256",
+  "publishedAtMs": 1787590800000,
+  "downloadPath": "/.netlify/functions/rules-release/20260824170000-rules-v3.json"
+}

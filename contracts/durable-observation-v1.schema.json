@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/durable-observation-v1.schema.json",
+  "title": "Durable Firestore observation v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schemaVersion", "recordType", "recordId", "siteId", "deviceId", "sessionId", "sequence", "observedAt", "receivedAt", "source", "publishReason", "rulesRelease", "values", "status"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "recordType": { "const": "observation" },
+    "recordId": { "type": "string", "pattern": "^[0-9]{14}-observation-[A-Za-z0-9_-]{8,64}-[0-9]{10}$" },
+    "siteId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "deviceId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "sessionId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "observedAt": { "type": "string", "format": "date-time" },
+    "receivedAt": { "type": "string", "format": "date-time" },
+    "source": { "const": "tab5" },
+    "publishReason": { "type": "string", "enum": ["material-change", "maximum-interval", "event-boundary", "manual"] },
+    "rulesRelease": { "$ref": "#/$defs/rulesReference" },
+    "values": { "type": "object", "additionalProperties": true },
+    "status": { "type": "object", "additionalProperties": true }
+  },
+  "$defs": {
+    "rulesReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "contentHash"],
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 },
+        "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  }
+}

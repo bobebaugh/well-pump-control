@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "recordType": "event-open",
+  "recordId": "20260824173102-event-open-boot_A7f93k2Q-0000000043",
+  "eventId": "20260824173102-high-pressure-boot_A7f93k2Q-0000000043",
+  "siteId": "well-main",
+  "deviceId": "tab5-well-main",
+  "sessionId": "boot_A7f93k2Q",
+  "sequence": 43,
+  "observedAt": "2026-08-24T17:31:02.000Z",
+  "receivedAt": "2026-08-24T17:31:02.110Z",
+  "ruleId": "high-pressure",
+  "severity": "red",
+  "latched": true,
+  "consequence": "inhibit",
+  "rulesRelease": {
+    "version": 3,
+    "contentHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "condition": {
+    "pressurePsi": 81.1,
+    "thresholdPsi": 80
+  },
+  "actor": {
+    "type": "device",
+    "id": "tab5-well-main"
+  }
+}

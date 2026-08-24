@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "recordType": "event-close",
+  "recordId": "20260824173520-event-close-boot_A7f93k2Q-0000000068",
+  "eventId": "20260824173102-high-pressure-boot_A7f93k2Q-0000000043",
+  "siteId": "well-main",
+  "deviceId": "tab5-well-main",
+  "sessionId": "boot_A7f93k2Q",
+  "sequence": 68,
+  "observedAt": "2026-08-24T17:35:20.000Z",
+  "receivedAt": "2026-08-24T17:35:20.092Z",
+  "ruleId": "high-pressure",
+  "rulesRelease": {
+    "version": 3,
+    "contentHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "condition": {
+    "pressurePsi": 59.8,
+    "eligibleForClose": true
+  },
+  "actor": {
+    "type": "user",
+    "id": "firebase-uid-example"
+  },
+  "closeReason": "user-request",
+  "commandId": "20260824173458-command-web_2kP9mQ7z-0000000012"
+}

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/device-command-v1.schema.json",
+  "title": "RTDB device command v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "commandId", "commandSequence", "siteId", "targetDeviceId", "commandType", "requestedAt", "requestedBy", "status", "payload"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "commandId": { "type": "string", "pattern": "^[0-9]{14}-command-[A-Za-z0-9_-]{8,64}-[0-9]{10}$" },
+    "commandSequence": { "type": "integer", "minimum": 1 },
+    "siteId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "targetDeviceId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "commandType": { "type": "string", "enum": ["close-event", "set-event-override", "set-global-enable", "reset-shelly-lockout"] },
+    "requestedAt": { "type": "string", "format": "date-time" },
+    "requestedBy": { "$ref": "#/$defs/actor" },
+    "status": { "type": "string", "enum": ["pending", "cancelled", "completed", "rejected"] },
+    "payload": { "type": "object", "additionalProperties": true },
+    "completedAt": { "type": "string", "format": "date-time" },
+    "resultRecordId": { "type": "string", "pattern": "^[0-9]{14}-.+$" },
+    "rejectionReason": { "type": "string", "minLength": 1, "maxLength": 256 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "enum": ["completed", "rejected"] } }, "required": ["status"] },
+      "then": {
+        "required": ["completedAt", "resultRecordId"],
+        "properties": { "completedAt": true, "resultRecordId": true }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "rejected" } }, "required": ["status"] },
+      "then": {
+        "required": ["rejectionReason"],
+        "properties": { "rejectionReason": true }
+      }
+    }
+  ],
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "type": "string", "enum": ["user", "device", "system"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    }
+  }
+}

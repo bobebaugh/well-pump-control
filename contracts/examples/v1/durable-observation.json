@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "recordType": "observation",
+  "recordId": "20260824173045-observation-boot_A7f93k2Q-0000000042",
+  "siteId": "well-main",
+  "deviceId": "tab5-well-main",
+  "sessionId": "boot_A7f93k2Q",
+  "sequence": 42,
+  "observedAt": "2026-08-24T17:30:45.125Z",
+  "receivedAt": "2026-08-24T17:30:45.258Z",
+  "source": "tab5",
+  "publishReason": "material-change",
+  "rulesRelease": {
+    "version": 3,
+    "contentHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "values": {
+    "powerW": 2487.4,
+    "voltageV": 247.8,
+    "pressurePsi": 51.2,
+    "pumpRunning": true,
+    "futureCalculatedValue": {
+      "value": 3.2,
+      "unit": "gpm"
+    }
+  },
+  "status": {
+    "shellyEmAvailable": true,
+    "pressureAvailable": true,
+    "wifiConnected": true
+  },
+  "futureEnvelopeField": ["preserved"]
+}

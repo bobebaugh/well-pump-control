@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/event-record-v1.schema.json",
+  "title": "Event open or close Firestore record v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schemaVersion", "recordType", "recordId", "eventId", "siteId", "deviceId", "sessionId", "sequence", "observedAt", "receivedAt", "ruleId", "rulesRelease", "condition", "actor"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "recordType": { "type": "string", "enum": ["event-open", "event-close"] },
+    "recordId": { "type": "string", "pattern": "^[0-9]{14}-event-(open|close)-[A-Za-z0-9_-]{8,64}-[0-9]{10}$" },
+    "eventId": { "type": "string", "pattern": "^[0-9]{14}-[a-z0-9][a-z0-9-]{0,63}-[A-Za-z0-9_-]{8,64}-[0-9]{10}$" },
+    "siteId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "deviceId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "sessionId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "observedAt": { "type": "string", "format": "date-time" },
+    "receivedAt": { "type": "string", "format": "date-time" },
+    "ruleId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "severity": { "type": "string", "enum": ["yellow", "red"] },
+    "latched": { "type": "boolean" },
+    "consequence": { "type": "string", "enum": ["log-only", "inhibit"] },
+    "rulesRelease": { "$ref": "#/$defs/rulesReference" },
+    "condition": { "type": "object", "additionalProperties": true },
+    "actor": { "$ref": "#/$defs/actor" },
+    "closeReason": { "type": "string", "enum": ["condition-cleared", "user-request", "rules-updated", "rule-disabled", "rule-removed", "restart-reconciliation"] },
+    "commandId": { "type": "string", "pattern": "^[0-9]{14}-command-[A-Za-z0-9_-]{8,64}-[0-9]{10}$" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "recordType": { "const": "event-open" } }, "required": ["recordType"] },
+      "then": {
+        "required": ["severity", "latched", "consequence"],
+        "properties": { "severity": true, "latched": true, "consequence": true }
+      }
+    },
+    {
+      "if": { "properties": { "recordType": { "const": "event-close" } }, "required": ["recordType"] },
+      "then": {
+        "required": ["closeReason"],
+        "properties": { "closeReason": true }
+      }
+    }
+  ],
+  "$defs": {
+    "rulesReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "contentHash"],
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 },
+        "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "type": "string", "enum": ["device", "user", "system"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "siteId": "well-main",
+  "deviceId": "tab5-well-main",
+  "sessionId": "boot_A7f93k2Q",
+  "sequence": 42,
+  "observedAt": "2026-08-24T17:30:45.125Z",
+  "receivedAtMs": 1787592645258,
+  "source": "tab5",
+  "rulesRelease": {
+    "version": 3,
+    "contentHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "values": {
+    "powerW": 2487.4,
+    "voltageV": 247.8,
+    "pressurePsi": 51.2,
+    "pumpRunning": true
+  },
+  "status": {
+    "shellyEmAvailable": true,
+    "pressureAvailable": true,
+    "wifiConnected": true
+  },
+  "futureObservationField": {
+    "preserved": true
+  }
+}

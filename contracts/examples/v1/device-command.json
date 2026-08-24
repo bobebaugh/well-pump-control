@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "commandId": "20260824173458-command-web_2kP9mQ7z-0000000012",
+  "commandSequence": 12,
+  "siteId": "well-main",
+  "targetDeviceId": "tab5-well-main",
+  "commandType": "close-event",
+  "requestedAt": "2026-08-24T17:34:58.000Z",
+  "requestedBy": {
+    "type": "user",
+    "id": "firebase-uid-example"
+  },
+  "status": "pending",
+  "payload": {
+    "eventId": "20260824173102-high-pressure-boot_A7f93k2Q-0000000043"
+  }
+}

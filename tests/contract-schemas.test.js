@@ -1,0 +1,156 @@
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
+const { readFileSync } = require("node:fs");
+const path = require("node:path");
+
+const root = path.resolve(__dirname, "..");
+const readJson = relative => JSON.parse(readFileSync(path.join(root, relative), "utf8"));
+
+const schemas = [
+  "contracts/current-observation-v1.schema.json",
+  "contracts/durable-observation-v1.schema.json",
+  "contracts/event-record-v1.schema.json",
+  "contracts/device-command-v1.schema.json",
+  "contracts/device-sync-v1.schema.json",
+  "contracts/rules-release-metadata-v1.schema.json"
+];
+
+const examples = [
+  ["contracts/current-observation-v1.schema.json", "contracts/examples/v1/current-observation.json"],
+  ["contracts/durable-observation-v1.schema.json", "contracts/examples/v1/durable-observation.json"],
+  ["contracts/event-record-v1.schema.json", "contracts/examples/v1/event-open.json"],
+  ["contracts/event-record-v1.schema.json", "contracts/examples/v1/event-close.json"],
+  ["contracts/device-command-v1.schema.json", "contracts/examples/v1/device-command.json"],
+  ["contracts/device-sync-v1.schema.json", "contracts/examples/v1/device-sync-request.json"],
+  ["contracts/device-sync-v1.schema.json", "contracts/examples/v1/device-sync-response.json"],
+  ["contracts/rules-release-metadata-v1.schema.json", "contracts/examples/v1/rules-release-metadata.json"]
+];
+
+const schemaRegistry = new Map(schemas.flatMap(relative => {
+  const schema = readJson(relative);
+  return [[relative.replace("contracts/", ""), schema], [schema.$id, schema]];
+}));
+
+function same(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function resolvePointer(document, pointer) {
+  return pointer.split("/").slice(1).reduce(
+    (value, token) => value[token.replace(/~1/g, "/").replace(/~0/g, "~")],
+    document
+  );
+}
+
+function validate(schema, value, rootSchema = schema, location = "$") {
+  if (schema === true) return [];
+  if (schema === false) return [`${location} is disallowed`];
+
+  if (schema.$ref) {
+    if (schema.$ref.startsWith("#")) {
+      return validate(resolvePointer(rootSchema, schema.$ref.slice(1)), value, rootSchema, location);
+    }
+    const target = schemaRegistry.get(schema.$ref);
+    return target ? validate(target, value, target, location) : [`${location} has unresolved ref ${schema.$ref}`];
+  }
+
+  const errors = [];
+  if (schema.allOf) {
+    for (const part of schema.allOf) errors.push(...validate(part, value, rootSchema, location));
+  }
+  if (schema.oneOf) {
+    const matches = schema.oneOf.filter(part => validate(part, value, rootSchema, location).length === 0);
+    if (matches.length !== 1) errors.push(`${location} matched ${matches.length} oneOf branches`);
+  }
+  if (schema.if && validate(schema.if, value, rootSchema, location).length === 0 && schema.then) {
+    errors.push(...validate(schema.then, value, rootSchema, location));
+  }
+
+  const isObject = value !== null && typeof value === "object" && !Array.isArray(value);
+  const types = {
+    object: isObject,
+    array: Array.isArray(value),
+    string: typeof value === "string",
+    boolean: typeof value === "boolean",
+    number: typeof value === "number" && Number.isFinite(value),
+    integer: Number.isInteger(value)
+  };
+  if (schema.type && !types[schema.type]) return [...errors, `${location} is not ${schema.type}`];
+  if (schema.const !== undefined && !same(value, schema.const)) errors.push(`${location} is not the required constant`);
+  if (schema.enum && !schema.enum.some(candidate => same(value, candidate))) errors.push(`${location} is not in enum`);
+  if (typeof value === "number" && schema.minimum !== undefined && value < schema.minimum) errors.push(`${location} is below minimum`);
+  if (typeof value === "string") {
+    if (schema.minLength !== undefined && value.length < schema.minLength) errors.push(`${location} is too short`);
+    if (schema.maxLength !== undefined && value.length > schema.maxLength) errors.push(`${location} is too long`);
+    if (schema.pattern && !(new RegExp(schema.pattern).test(value))) errors.push(`${location} does not match pattern`);
+    if (schema.format === "date-time" && !Number.isFinite(Date.parse(value))) errors.push(`${location} is not date-time`);
+  }
+  if (Array.isArray(value)) {
+    if (schema.uniqueItems && new Set(value.map(item => JSON.stringify(item))).size !== value.length) errors.push(`${location} has duplicate items`);
+    if (schema.items) value.forEach((item, index) => errors.push(...validate(schema.items, item, rootSchema, `${location}[${index}]`)));
+  }
+  if (isObject) {
+    for (const required of schema.required || []) {
+      if (!Object.hasOwn(value, required)) errors.push(`${location}.${required} is required`);
+    }
+    for (const [key, propertySchema] of Object.entries(schema.properties || {})) {
+      if (Object.hasOwn(value, key)) errors.push(...validate(propertySchema, value[key], rootSchema, `${location}.${key}`));
+    }
+    if (schema.additionalProperties === false) {
+      const allowed = new Set(Object.keys(schema.properties || {}));
+      for (const key of Object.keys(value)) if (!allowed.has(key)) errors.push(`${location}.${key} is not allowed`);
+    }
+  }
+  return errors;
+}
+
+test("all M2 examples validate against their versioned schemas", () => {
+  for (const [schemaPath, examplePath] of examples) {
+    const schema = readJson(schemaPath);
+    const example = readJson(examplePath);
+    assert.deepEqual(validate(schema, example), [], examplePath);
+  }
+});
+
+test("observation contracts preserve unknown future fields", () => {
+  const current = readJson("contracts/examples/v1/current-observation.json");
+  const durable = readJson("contracts/examples/v1/durable-observation.json");
+
+  current.values.newSensor = { value: 12.3, unit: "example" };
+  current.status.newStatus = "available";
+  current.futureEnvelope = true;
+  durable.values.newCalculation = [1, 2, 3];
+  durable.status.newStatus = { valid: true };
+  durable.futureEnvelope = true;
+
+  assert.deepEqual(validate(readJson("contracts/current-observation-v1.schema.json"), current), []);
+  assert.deepEqual(validate(readJson("contracts/durable-observation-v1.schema.json"), durable), []);
+});
+
+test("coordination contracts reject unsupported schema versions", () => {
+  for (const [schemaPath, examplePath] of examples) {
+    const schema = readJson(schemaPath);
+    const example = { ...readJson(examplePath), schemaVersion: 2 };
+    assert.notDeepEqual(validate(schema, example), [], `${examplePath} accepted schemaVersion 2`);
+  }
+});
+
+test("legacy pilot functions and telemetry contract are byte-for-byte unchanged", () => {
+  const expected = {
+    "cloud/netlify/functions/ingest-power.js": "70986d473b9ede3d3589193a5d38b20c80af54a0655bbf46f80da074141a362e",
+    "cloud/netlify/functions/current-power.js": "50c533276bf1b8030a8d246ec5d85eb47f52e70404a2ff29660f691e74954dbc",
+    "cloud/netlify/functions/monitor-session.js": "14b7b478a92872e2276d7b359212aa56c5324b0b3ebccd08762a16843553e177",
+    "cloud/netlify/functions/firebase-status.js": "056590d9bd3b034cb8edba81822685bfee71ad24f0dc37d71d94f1cae36c0fe0",
+    "cloud/netlify/functions/health.js": "59b3b43001d439108faee31fe566f2ae4f79346887692c2a75b44d2d23d73421",
+    "cloud/netlify/lib/power-contract.js": "78eeed600c71cb1da373e12f3e677889b1b6894d27a7c0fdc5be296f60cb258f",
+    "contracts/power-telemetry-v1.schema.json": "4fd6f6a5ccac0f488efc14cec8cf8bf568dbcbb428fc3144462b1d0cdd2ec012"
+  };
+
+  for (const [relative, digest] of Object.entries(expected)) {
+    const actual = createHash("sha256").update(readFileSync(path.join(root, relative))).digest("hex");
+    assert.equal(actual, digest, `${relative} changed from verified pilot commit 929d46c`);
+  }
+});

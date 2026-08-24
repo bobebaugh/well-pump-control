@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/device-sync-v1.schema.json",
+  "title": "Device synchronization request or response v1",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/response" }
+  ],
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "required": ["schemaVersion", "exchangeId", "siteId", "deviceId", "sessionId"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "exchangeId": { "type": "string", "pattern": "^[0-9]{14}-sync-[A-Za-z0-9_-]{8,64}-[0-9]{10}$" },
+        "siteId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+        "deviceId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+        "sessionId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" }
+      }
+    },
+    "rulesReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "contentHash"],
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 },
+        "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "request": {
+      "allOf": [
+        { "$ref": "#/$defs/identity" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "requestedAt", "lastAppliedCommandSequence", "appliedRules", "openEventIds", "globalEnable"],
+          "properties": {
+            "schemaVersion": true,
+            "exchangeId": true,
+            "siteId": true,
+            "deviceId": true,
+            "sessionId": true,
+            "kind": { "const": "device-sync-request" },
+            "requestedAt": { "type": "string", "format": "date-time" },
+            "lastAppliedCommandSequence": { "type": "integer", "minimum": 0 },
+            "appliedRules": { "$ref": "#/$defs/rulesReference" },
+            "openEventIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 160 } },
+            "globalEnable": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "response": {
+      "allOf": [
+        { "$ref": "#/$defs/identity" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "issuedAt", "highWaterCommandSequence", "currentRules", "canonicalOpenEvents", "globalEnable", "pendingCommands"],
+          "properties": {
+            "schemaVersion": true,
+            "exchangeId": true,
+            "siteId": true,
+            "deviceId": true,
+            "sessionId": true,
+            "kind": { "const": "device-sync-response" },
+            "issuedAt": { "type": "string", "format": "date-time" },
+            "highWaterCommandSequence": { "type": "integer", "minimum": 0 },
+            "currentRules": { "$ref": "#/$defs/rulesReference" },
+            "canonicalOpenEvents": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 160 } },
+            "globalEnable": { "type": "boolean" },
+            "pendingCommands": { "type": "array", "items": { "$ref": "device-command-v1.schema.json" } }
+          }
+        }
+      ]
+    }
+  }
+}

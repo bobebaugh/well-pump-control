@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "kind": "device-sync-request",
+  "exchangeId": "20260824174000-sync-boot_A7f93k2Q-0000000075",
+  "siteId": "well-main",
+  "deviceId": "tab5-well-main",
+  "sessionId": "boot_A7f93k2Q",
+  "requestedAt": "2026-08-24T17:40:00.000Z",
+  "lastAppliedCommandSequence": 11,
+  "appliedRules": {
+    "version": 3,
+    "contentHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "openEventIds": [
+    "20260824173102-high-pressure-boot_A7f93k2Q-0000000043"
+  ],
+  "globalEnable": false
+}

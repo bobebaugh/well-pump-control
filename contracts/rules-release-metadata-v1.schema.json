@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/rules-release-metadata-v1.schema.json",
+  "title": "RTDB current rules-release metadata v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "siteId", "releaseId", "rulesVersion", "rulesSchemaVersion", "contentHash", "hashAlgorithm", "publishedAtMs", "downloadPath"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "siteId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "releaseId": { "type": "string", "pattern": "^[0-9]{14}-rules-v[0-9]+$" },
+    "rulesVersion": { "type": "integer", "minimum": 1 },
+    "rulesSchemaVersion": { "type": "integer", "minimum": 1 },
+    "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "hashAlgorithm": { "const": "sha256" },
+    "publishedAtMs": { "type": "integer", "minimum": 0 },
+    "downloadPath": { "type": "string", "pattern": "^/\\.netlify/functions/rules-release/[A-Za-z0-9._-]+$" }
+  }
+}
