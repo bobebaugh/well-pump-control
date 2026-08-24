@@ -33,5 +33,14 @@
         "eventId": "20260824173102-high-pressure-boot_A7f93k2Q-0000000043"
       }
     }
-  ]
+  ],
+  "authenticationBootstrap": {
+    "firebaseCustomToken": "EXAMPLE_ONLY_CUSTOM_TOKEN_DO_NOT_USE",
+    "firebaseApiKey": "EXAMPLE_ONLY_FIREBASE_API_KEY_DO_NOT_USE",
+    "firebaseProjectId": "example-well-pump-project",
+    "rtdbUrl": "https://example-well-pump-project-default-rtdb.example.invalid",
+    "identityToolkitUrl": "https://identitytoolkit.example.invalid/v1/accounts:signInWithCustomToken",
+    "secureTokenUrl": "https://securetoken.example.invalid/v1/token",
+    "expiresAt": "2026-08-24T17:55:00.000Z"
+  }
 }
