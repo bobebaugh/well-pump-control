@@ -28,7 +28,7 @@ All target data is rooted below a versioned namespace. `{siteId}` is `well-main`
 | `/v1/sites/{siteId}/devices/{deviceId}/currentObservation` | CPU B | Web/Home, cloud diagnostics | Complete disposable current observation; overwrite only |
 | `/v1/sites/{siteId}/devices/{deviceId}/syncState` | CPU B | Web/System, `device-sync` | Last completed exchange ID, session, sequence high-water marks, and last-sync result |
 | `/v1/sites/{siteId}/devices/{deviceId}/presence` | CPU B | Web/System, absence monitor | Session and server-resolved `lastSeenAtMs`; diagnostic only |
-| `/v1/sites/{siteId}/commands/{commandId}` | `control-request`; CPU B updates terminal coordination state | CPU B, web | Unique ordered command; never a direct relay instruction |
+| `/v1/sites/{siteId}/devices/{deviceId}/commands/{commandId}` | `control-request`; CPU B updates terminal coordination state | addressed CPU B, web | Unique ordered command; never a direct relay instruction |
 | `/v1/sites/{siteId}/commandSequence` | `control-request` transaction | `control-request` | Monotonic allocator for `commandSequence` |
 | `/v1/sites/{siteId}/control/globalEnable` | `control-request`; CPU B reports applied state | CPU B, web | Desired and applied Global Enable coordination; CPU A applies priority locally |
 | `/v1/sites/{siteId}/rules/current` | Rules publication service | CPU B, web | `rules-release-metadata-v1` current pointer |
@@ -73,7 +73,7 @@ The durable resulting event record is the authoritative acknowledgement. RTDB co
 
 ### Synchronization
 
-`exchangeId` makes a `device-sync` retry idempotent. The response echoes it and includes the command high-water mark, current rules pointer, canonical open event IDs, Global Enable, and pending commands. CPU B transports the response to CPU A. CPU A decides reconciliation consequences under the architecture baseline.
+`exchangeId` makes a `device-sync` retry idempotent. The response echoes it and includes the command high-water mark, current rules pointer, canonical open event IDs, Global Enable, pending commands, and an authentication bootstrap. CPU B exchanges the short-lived Firebase custom token, retains ID and refresh tokens, refreshes when required, and uses the ID token with the returned RTDB URL. CPU A receives only noncredential synchronization content and decides reconciliation consequences.
 
 ## Endpoint migration map
 
@@ -100,8 +100,18 @@ Target rollout order is: define contracts (M2), implement CPU B RTDB transport (
 - No file under `tab5/`, `firmware/tab5/`, or `C:\\Tab5\\pilot-micropython` changes in M2.
 - Netlify and Firebase remain outside the immediate protective path.
 
-## Decision required before M3
+## Settled authentication design — no M3 blocker
 
-One security decision blocks direct RTDB implementation: choose the device authentication flow for CPU B. The v1 paths assume CPU B writes RTDB with a short-lived, least-privilege Firebase credential scoped to its site/device, but the repository does not yet define how Netlify mints/refreshes that credential from the existing device secret. The alternative is a Netlify current-state proxy, which avoids Firebase credentials on Tab5 but adds a 1 Hz function hop and needs an additional target endpoint. M3 should not begin until one route is explicitly selected.
+Netlify reuses the existing well-pump-netlify service account and existing Netlify-held service-account JSON/private key. It retains Cloud Datastore User only. No additional service account or permanent key will be created; Editor, Firebase Admin, and Realtime Database Admin are not granted.
 
-No other schema or sequencing decision blocks M3.
+After authenticating the existing device request, device-sync locally signs a short-lived Firebase custom token for the fixed identity tab5-well-main. Its response authenticationBootstrap contains the custom token, Firebase API key, project ID, RTDB URL, token-exchange URL, refresh URL, and expiry. CPU B exchanges it for Firebase ID and refresh tokens, refreshes when required, then writes RTDB directly. This documents the exchange only: M2 does not implement Netlify, Firebase Auth, RTDB, or CPU B work.
+
+No service-account key or Firebase administrative credential is on Tab5. Committed examples use unmistakably fake values only. The actual private key remains only in Netlify environment variables.
+
+Proposed RTDB rules grant only tab5-well-main write access to its currentObservation, presence, and syncState; and read access to its addressed commands, Global Enable coordination, and current rules-release metadata. They deny writes to commands, control requests, rules publication, other devices, and unrelated paths. RTDB Security Rules—not the service-account IAM role—enforce those limits. CPU A remains the sole operational decision authority.
+
+No authentication, schema, or sequencing decision remains blocking M3.
+
+## Deliberate branch separation
+
+Cloud/Netlify development continues on a nondeploying feature branch descended from M2. Tab5 runtime development remains on Tab5. Do not merge, cherry-pick, or copy Tab5 runtime code into pilot or a cloud branch, and do not incorporate cloud commits into Tab5 history.
