@@ -73,7 +73,7 @@ The durable resulting event record is the authoritative acknowledgement. RTDB co
 
 ### Synchronization
 
-`exchangeId` makes a `device-sync` retry idempotent. The response echoes it and includes the command high-water mark, current rules pointer, canonical open event IDs, Global Enable, pending commands, and an authentication bootstrap. CPU B exchanges the short-lived Firebase custom token, retains ID and refresh tokens, refreshes when required, and uses the ID token with the returned RTDB URL. CPU A receives only noncredential synchronization content and decides reconciliation consequences.
+`device-sync` retries are idempotent in operational effect, not byte-identical response replay. The endpoint validates and echoes the request's `exchangeId`, performs no control/data mutation, and filters pending commands above the supplied applied-sequence high-water mark. A retry with the same `exchangeId` may mint a fresh single-use custom token, carry a later `issuedAt`, and reflect newer coordination state. Sequence and command identity handling—not replaying a cached response—makes repeated or stale delivery harmless. The response includes the command high-water mark, current rules pointer, canonical open event IDs, Global Enable, pending commands, and an authentication bootstrap. CPU B exchanges the short-lived Firebase custom token, retains ID and refresh tokens, refreshes when required, and uses the ID token with the returned RTDB URL. CPU A receives only noncredential synchronization content and decides reconciliation consequences.
 
 ## Endpoint migration map
 

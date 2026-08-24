@@ -8,15 +8,12 @@
           "devices": {
             "tab5-well-main": {
               "currentObservation": {
-                ".read": "auth != null && auth.uid == 'tab5-well-main'",
                 ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.child('schemaVersion').val() == 1 && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main'"
               },
               "presence": {
-                ".read": "auth != null && auth.uid == 'tab5-well-main'",
                 ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.child('schemaVersion').val() == 1 && newData.child('sessionId').isString()"
               },
               "syncState": {
-                ".read": "auth != null && auth.uid == 'tab5-well-main'",
                 ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.child('schemaVersion').val() == 1 && newData.child('sessionId').isString()"
               },
               "commands": {

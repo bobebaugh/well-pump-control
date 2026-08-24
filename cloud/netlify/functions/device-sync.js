@@ -1,6 +1,6 @@
 "use strict";
 
-const { timingSafeEqual } = require("node:crypto");
+const { createHash, timingSafeEqual } = require("node:crypto");
 const { ConfigurationError, getPilotAuth } = require("../lib/firebase");
 const {
   DeviceSyncError,
@@ -31,9 +31,9 @@ function getHeader(headers, name) {
 
 function tokenMatches(provided, expected) {
   if (!provided || !expected) return false;
-  const providedBytes = Buffer.from(provided, "utf8");
-  const expectedBytes = Buffer.from(expected, "utf8");
-  return providedBytes.length === expectedBytes.length && timingSafeEqual(providedBytes, expectedBytes);
+  const providedDigest = createHash("sha256").update(provided, "utf8").digest();
+  const expectedDigest = createHash("sha256").update(expected, "utf8").digest();
+  return timingSafeEqual(providedDigest, expectedDigest);
 }
 
 function parseBody(event) {
@@ -50,15 +50,36 @@ function parseBody(event) {
   }
 }
 
+function approvedRtdbUrl(raw, projectId) {
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new ConfigurationError("FIREBASE_RTDB_URL is not a valid URL");
+  }
+  const approvedHosts = new Set([
+    `${projectId}-default-rtdb.firebaseio.com`,
+    `${projectId}-default-rtdb.firebasedatabase.app`
+  ]);
+  if (parsed.protocol !== "https:" || !approvedHosts.has(parsed.hostname) ||
+      (parsed.pathname !== "/" && parsed.pathname !== "") || parsed.search || parsed.hash) {
+    throw new ConfigurationError("FIREBASE_RTDB_URL is not the approved project database host");
+  }
+  return parsed.origin;
+}
+
 function requireConfiguration(env) {
   const firebaseApiKey = env.FIREBASE_WEB_API_KEY;
-  const rtdbUrl = (env.FIREBASE_RTDB_URL || "").replace(/\/$/, "");
-  if (!firebaseApiKey || !/^https:\/\//.test(rtdbUrl)) {
+  const projectId = env.FIREBASE_PROJECT_ID || "well-pump-control";
+  if (projectId !== "well-pump-control") {
+    throw new ConfigurationError("FIREBASE_PROJECT_ID is not the approved pilot project");
+  }
+  if (!firebaseApiKey || !env.FIREBASE_RTDB_URL) {
     throw new ConfigurationError("FIREBASE_WEB_API_KEY and FIREBASE_RTDB_URL are required");
   }
   return {
     firebaseApiKey,
-    rtdbUrl,
+    rtdbUrl: approvedRtdbUrl(env.FIREBASE_RTDB_URL, projectId),
     identityToolkitUrl: "https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken",
     secureTokenUrl: "https://securetoken.googleapis.com/v1/token"
   };
@@ -113,6 +134,9 @@ function createHandler(dependencies = {}) {
 
       const config = requireConfiguration(env);
       const { auth, projectId } = authProvider();
+      if (projectId !== "well-pump-control") {
+        throw new ConfigurationError("Firebase Auth project is not the approved pilot project");
+      }
       // Firebase custom tokens are single-use. Use a distinct probe token for
       // the Security-Rules-scoped server read and return an unconsumed token
       // for CPU B's own exchange.
@@ -184,4 +208,6 @@ function createHandler(dependencies = {}) {
 
 exports.handler = createHandler();
 exports._createHandler = createHandler;
+exports._approvedRtdbUrl = approvedRtdbUrl;
 exports._rtdbPath = rtdbPath;
+exports._tokenMatches = tokenMatches;

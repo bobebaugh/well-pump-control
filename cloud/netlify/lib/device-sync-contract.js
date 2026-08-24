@@ -57,8 +57,15 @@ function validateDeviceSyncRequest(value) {
 
 function pendingCommands(raw, request) {
   const commands = isPlainObject(raw) ? Object.values(raw) : [];
+  const allowed = new Set([
+    "schemaVersion", "commandId", "commandSequence", "siteId",
+    "targetDeviceId", "commandType", "requestedAt", "requestedBy",
+    "status", "payload", "completedAt", "resultRecordId",
+    "rejectionReason"
+  ]);
   return commands.filter(command => (
     isPlainObject(command) &&
+    Object.keys(command).every(key => allowed.has(key)) &&
     command.schemaVersion === 1 &&
     typeof command.commandId === "string" && COMMAND_PATTERN.test(command.commandId) &&
     command.siteId === request.siteId &&
