@@ -14,3 +14,7 @@ The M2 v1 contracts define the target cloud/RTDB boundary without implementing o
 - `rules-release-metadata-v1.schema.json` — RTDB current rules pointer.
 
 Every schema has one or more valid examples under `examples/v1/`. Unknown observation fields are deliberately preserved. See `docs/cloud-rtdb-contracts-v1.md` for paths, identifiers, idempotency, and the staged endpoint migration.
+
+For durable observations and event transitions, `receivedAt` is cloud-owned. An
+ingest request may omit it; Firestore stores a server Timestamp, and JSON
+serialization represents that value as the schema's ISO date-time string.

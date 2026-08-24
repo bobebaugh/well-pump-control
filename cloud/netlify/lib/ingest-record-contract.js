@@ -1,0 +1,189 @@
+"use strict";
+
+class IngestRecordError extends Error {
+  constructor(code, field) {
+    super(code);
+    this.name = "IngestRecordError";
+    this.code = code;
+    this.field = field;
+  }
+}
+
+const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const SESSION_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
+const HASH_PATTERN = /^[a-f0-9]{64}$/;
+const EVENT_ID_PATTERN = /^[0-9]{14}-[a-z0-9][a-z0-9-]{0,63}-[A-Za-z0-9_-]{8,64}-[0-9]{10}$/;
+const COMMAND_ID_PATTERN = /^[0-9]{14}-command-[A-Za-z0-9_-]{8,64}-[0-9]{10}$/;
+const RFC3339_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})$/;
+const PUBLISH_REASONS = new Set(["material-change", "maximum-interval", "event-boundary", "manual"]);
+const CLOSE_REASONS = new Set([
+  "condition-cleared", "user-request", "rules-updated", "rule-disabled",
+  "rule-removed", "restart-reconciliation"
+]);
+const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function isPlainObject(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function fail(field, code = "invalid_record") {
+  throw new IngestRecordError(code, field);
+}
+
+function requireCondition(condition, field, code) {
+  if (!condition) fail(field, code);
+}
+
+function validateSafeTree(value, field = "body", depth = 0) {
+  requireCondition(depth <= 16, field);
+  if (typeof value === "number") {
+    requireCondition(Number.isFinite(value), field);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => validateSafeTree(item, `${field}[${index}]`, depth + 1));
+    return;
+  }
+  if (!isPlainObject(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    requireCondition(!FORBIDDEN_KEYS.has(key), `${field}.${key}`);
+    validateSafeTree(child, `${field}.${key}`, depth + 1);
+  }
+}
+
+function validateDateTime(value, field) {
+  requireCondition(typeof value === "string", field);
+  const match = RFC3339_PATTERN.exec(value);
+  requireCondition(match !== null, field);
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, , zone] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const calendarCheck = new Date(Date.UTC(year, month - 1, day));
+  requireCondition(
+    year >= 1 && month >= 1 && month <= 12 && day >= 1 &&
+    calendarCheck.getUTCFullYear() === year &&
+    calendarCheck.getUTCMonth() === month - 1 &&
+    calendarCheck.getUTCDate() === day,
+    field
+  );
+  requireCondition(hour <= 23 && minute <= 59 && second <= 59, field);
+  if (zone !== "Z") {
+    const zoneHour = Number(zone.slice(1, 3));
+    const zoneMinute = Number(zone.slice(4, 6));
+    requireCondition(zoneHour <= 23 && zoneMinute <= 59, field);
+  }
+  requireCondition(Number.isFinite(Date.parse(value)), field);
+}
+
+function validateRulesReference(value, field) {
+  requireCondition(isPlainObject(value), field);
+  requireCondition(Object.keys(value).every(key => key === "version" || key === "contentHash"), field);
+  requireCondition(Number.isInteger(value.version) && value.version >= 1, `${field}.version`);
+  requireCondition(typeof value.contentHash === "string" && HASH_PATTERN.test(value.contentHash), `${field}.contentHash`);
+}
+
+function utcPrefix(value) {
+  const date = new Date(value);
+  return date.toISOString().slice(0, 19).replace(/[-T:]/g, "");
+}
+
+function sequenceText(sequence) {
+  return String(sequence).padStart(10, "0");
+}
+
+function validateCommon(value) {
+  requireCondition(isPlainObject(value), "body");
+  validateSafeTree(value);
+  requireCondition(value.schemaVersion === 1, "schemaVersion", "unsupported_schema_version");
+  requireCondition(["observation", "event-open", "event-close"].includes(value.recordType), "recordType");
+  requireCondition(typeof value.recordId === "string", "recordId");
+  requireCondition(typeof value.siteId === "string" && ID_PATTERN.test(value.siteId), "siteId");
+  requireCondition(typeof value.deviceId === "string" && ID_PATTERN.test(value.deviceId), "deviceId");
+  requireCondition(typeof value.sessionId === "string" && SESSION_PATTERN.test(value.sessionId), "sessionId");
+  requireCondition(Number.isInteger(value.sequence) && value.sequence >= 0 && value.sequence <= 9999999999, "sequence");
+  validateDateTime(value.observedAt, "observedAt");
+  if (value.receivedAt !== undefined) validateDateTime(value.receivedAt, "receivedAt");
+  validateRulesReference(value.rulesRelease, "rulesRelease");
+}
+
+function validateObservation(value) {
+  const required = ["source", "publishReason", "values", "status"];
+  required.forEach(field => requireCondition(Object.hasOwn(value, field), field));
+  requireCondition(value.source === "tab5", "source");
+  requireCondition(PUBLISH_REASONS.has(value.publishReason), "publishReason");
+  requireCondition(isPlainObject(value.values), "values");
+  requireCondition(isPlainObject(value.status), "status");
+  const expected = `${utcPrefix(value.observedAt)}-observation-${value.sessionId}-${sequenceText(value.sequence)}`;
+  requireCondition(value.recordId === expected, "recordId");
+}
+
+function validateActor(value) {
+  requireCondition(isPlainObject(value), "actor");
+  requireCondition(Object.keys(value).every(key => key === "type" || key === "id"), "actor");
+  requireCondition(["device", "user", "system"].includes(value.type), "actor.type");
+  requireCondition(typeof value.id === "string" && value.id.length >= 1 && value.id.length <= 128, "actor.id");
+}
+
+function validateEvent(value) {
+  ["eventId", "ruleId", "condition", "actor"].forEach(field => requireCondition(Object.hasOwn(value, field), field));
+  requireCondition(typeof value.eventId === "string" && EVENT_ID_PATTERN.test(value.eventId), "eventId");
+  requireCondition(typeof value.ruleId === "string" && ID_PATTERN.test(value.ruleId), "ruleId");
+  requireCondition(value.eventId.slice(15).startsWith(`${value.ruleId}-`), "eventId");
+  requireCondition(isPlainObject(value.condition), "condition");
+  validateActor(value.actor);
+  if (value.severity !== undefined) requireCondition(["yellow", "red"].includes(value.severity), "severity");
+  if (value.latched !== undefined) requireCondition(typeof value.latched === "boolean", "latched");
+  if (value.consequence !== undefined) requireCondition(["log-only", "inhibit"].includes(value.consequence), "consequence");
+  if (value.closeReason !== undefined) requireCondition(CLOSE_REASONS.has(value.closeReason), "closeReason");
+  if (value.commandId !== undefined) {
+    requireCondition(typeof value.commandId === "string" && COMMAND_ID_PATTERN.test(value.commandId), "commandId");
+  }
+  const transition = value.recordType === "event-open" ? "open" : "close";
+  const expected = `${utcPrefix(value.observedAt)}-event-${transition}-${value.sessionId}-${sequenceText(value.sequence)}`;
+  requireCondition(value.recordId === expected, "recordId");
+
+  if (value.recordType === "event-open") {
+    requireCondition(["yellow", "red"].includes(value.severity), "severity");
+    requireCondition(typeof value.latched === "boolean", "latched");
+    requireCondition(["log-only", "inhibit"].includes(value.consequence), "consequence");
+    const expectedEventId = `${utcPrefix(value.observedAt)}-${value.ruleId}-${value.sessionId}-${sequenceText(value.sequence)}`;
+    requireCondition(value.eventId === expectedEventId, "eventId");
+  } else {
+    requireCondition(CLOSE_REASONS.has(value.closeReason), "closeReason");
+  }
+}
+
+function validateIngestRecord(value) {
+  validateCommon(value);
+  if (value.recordType === "observation") validateObservation(value);
+  else validateEvent(value);
+  return value;
+}
+
+function canonicalRecord(value) {
+  const copy = JSON.parse(JSON.stringify(value));
+  delete copy.receivedAt;
+  copy.observedAt = new Date(copy.observedAt).toISOString();
+  return copy;
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (isPlainObject(value)) {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+module.exports = {
+  IngestRecordError,
+  canonicalRecord,
+  stableJson,
+  validateIngestRecord
+};

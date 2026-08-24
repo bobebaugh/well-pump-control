@@ -12,3 +12,7 @@ Pilot responsibilities:
 - never participate in immediate pump protection.
 
 The `pilot` branch is the Netlify branch-deploy source. Secrets belong in Netlify environment variables for the branch-deploy context and must not be committed.
+
+M4 adds `ingest-record` on a nondeploying feature branch. It appends authenticated,
+versioned durable observations and event transitions idempotently while the legacy
+pilot functions and current record remain in service.

@@ -130,6 +130,18 @@ test("observation contracts preserve unknown future fields", () => {
   assert.deepEqual(validate(readJson("contracts/durable-observation-v1.schema.json"), durable), []);
 });
 
+test("durable ingest contracts allow cloud-owned receipt time to be omitted", () => {
+  for (const [schemaPath, examplePath] of [
+    ["contracts/durable-observation-v1.schema.json", "contracts/examples/v1/durable-observation.json"],
+    ["contracts/event-record-v1.schema.json", "contracts/examples/v1/event-open.json"],
+    ["contracts/event-record-v1.schema.json", "contracts/examples/v1/event-close.json"]
+  ]) {
+    const example = readJson(examplePath);
+    delete example.receivedAt;
+    assert.deepEqual(validate(readJson(schemaPath), example), [], examplePath);
+  }
+});
+
 test("coordination contracts reject unsupported schema versions", () => {
   for (const [schemaPath, examplePath] of examples) {
     const schema = readJson(schemaPath);
