@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
-const { readFileSync } = require("node:fs");
+const { readFileSync, readdirSync } = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
@@ -154,3 +154,8 @@ test("legacy pilot functions and telemetry contract are byte-for-byte unchanged"
     assert.equal(actual, digest, `${relative} changed from verified pilot commit 929d46c`);
   }
 });
+
+
+test("authentication bootstrap example agrees with the versioned schema", () => { const response = readJson("contracts/examples/v1/device-sync-response.json"); assert.deepEqual(validate(readJson("contracts/device-sync-v1.schema.json"), response), []); assert.equal(response.authenticationBootstrap.firebaseCustomToken, "EXAMPLE_ONLY_CUSTOM_TOKEN_DO_NOT_USE"); });
+
+test("committed examples contain no real-looking credentials", () => { for (const name of readdirSync(path.join(root, "contracts/examples/v1")).filter(name => name.endsWith(".json"))) { const text = readFileSync(path.join(root, "contracts/examples/v1", name), "utf8"); assert.doesNotMatch(text, /-----BEGIN (?:RSA )?PRIVATE KEY-----|AIza[\\w-]{20,}|eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\./); } });
