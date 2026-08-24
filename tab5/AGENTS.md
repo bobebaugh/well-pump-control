@@ -1,54 +1,69 @@
 # Tab5 interpreted MicroPython instructions
 
-These instructions apply to all work under `tab5/`.
+These instructions apply to work under `tab5/`.
 
-## Current platform
+## Current platform and authority
 
-- The supported path is interpreted MicroPython on the M5Stack Tab5 using the stock M5Stack UIFlow 2.5.0 image installed with M5Burner.
-- The owner performs M5Burner flashes and device file installation. Agents do not build firmware, flash hardware, erase flash/NVS, format media, or operate the physical device unless the user explicitly requests a supervised hardware session.
-- Do not use ESP-IDF, CMake, compiled firmware, microSD, the old build scripts, or the old platform runbook for current development.
-- `firmware/tab5/`, `docs/tab5-platform-runbook.md`, and the `agent/tab5-*` branches describe an abandoned compiled approach. They are not implementation authority.
+- The supported device path is interpreted MicroPython on the M5Stack Tab5 using the stock UIFlow 2.5.0 image installed with M5Burner.
+- The authoritative workflow is `PROJECT_WORKFLOW.md` in the Google Drive Well Pump folder. Read it first.
+- The settled design authority is the Google Doc `Well Pump Current Architecture Baseline`. Follow it when older repository notes, compiled branches, or historical summaries disagree.
+- Committed interpreted source under `tab5/` on the `Tab5` branch is the software source of truth. Physical behavior is verified only when the owner reports the Tab5 result.
+- `firmware/tab5/`, `docs/tab5-platform-runbook.md`, compiled build machinery, and old `agent/tab5-*` branches are historical evidence. Do not build, flash, repair, or extend them.
 
-## Baseline and delivery
+## Branch and delivery boundary
 
-- Until the first interpreted baseline is imported, the hardware-working source is the owner's plain-file directory `C:\Tab5\pilot-micropython`.
-- After import, committed files under `tab5/` on the `Tab5` branch are the source authority. Hardware truth still requires the owner's physical verification.
-- `C:\Tab5\pilot-micropython` is never a Git checkout. Copy a release candidate there only when the user explicitly says it is ready to install.
-- The owner manually installs the runtime files and reports the result. Do not call a revision known-good until that report is received; then preserve it with a clear commit and, when requested, a known-good tag.
-- UIFlow's stock boot process and flashed Wi-Fi configuration are the current baseline. `boot.py` behavior, the boot menu, and recovery modes remain deliberate architecture decisions; do not silently replace the stock file.
+- All interpreted Tab5 development belongs on the `Tab5` branch.
+- `main` and `pilot` are deployment branches and are off limits during Tab5-only work unless the owner explicitly opens that scope.
+- `C:\Tab5\pilot-micropython` is a device-upload mirror, never a Git checkout. Populate it only when the owner says a candidate is ready for installation.
+- Keep the runtime intentionally small: `main.py`, `pilot.py`, `cloud.py`, `webrepl.py`, the validated rules file when implemented, and uncommitted device secrets. Do not create more MicroPython modules without a reviewed need.
+- Make one bounded work unit per commit. State host-test evidence separately from hardware verification.
+- Put a one-line release description in the opening comments of each changed upload file.
 
-## Change discipline
+## Runtime ownership
 
-- First preserve and import the working interpreted baseline without redesign.
-- Split `pilot.py` mechanically into clearly named modules before adding application functionality. Preserve observable behavior at each split.
-- Make one bounded work unit per commit. State what can be checked without hardware and what still needs owner verification.
-- Prefer plain MicroPython modules and explicit data structures over frameworks, generators, build systems, or dependency managers.
-- Do not implement future rules, controls, logging, watch mode, boot options, or recovery behavior merely because they appear in planning records. Implement only the work unit the user approved.
-- A syntax check or host-side test is not physical proof. Never claim display, touch, ADC, battery, Wi-Fi, Shelly, TLS, reset, threading, or timing behavior without a reported Tab5 test.
+- `main.py` is the thin startup and supervision layer. It starts WebREPL and the two application workers and must not return into an unwanted UIFlow relaunch path.
+- `pilot.py` is CPU A. It owns all hardware access, matched observations, calculated values, HMI servicing, rules, operational events, timers, Shelly polling, and Shelly relay consequences.
+- `cloud.py` is CPU B. It owns Wi-Fi recovery, time synchronization, Netlify, Firebase RTDB, Firestore-facing transport, authentication refresh, and network waits.
+- CPU B never manipulates hardware or HMI objects. CPU A never waits for cloud completion.
+- Exchange complete extensible messages through bounded RAM queues/mailboxes. Do not share mutable hardware objects or working dictionaries across CPUs.
+- Disposable current observations may be coalesced or dropped when stale. Durable event transitions, rule results, and audit records receive higher delivery priority.
+- RAM is the normal working store. Do not add routine telemetry filesystem persistence.
 
-## Accepted architecture boundary
+## Data and cloud boundary
 
-- One CPU/thread owns device work: ADC sampling, touch, display, battery, Shelly interaction, control decisions, event state, and the one-second application loop.
-- The other CPU/thread owns remote communications: Netlify, Firebase RTDB, TLS, authentication refresh, reconnects, and network waits.
-- Exchange complete immutable messages through small bounded inbound and outbound queues. Do not share mutable working dictionaries, hardware objects, or application state across threads.
-- Device work must continue when communications stall. Network work must not directly manipulate hardware or HMI objects.
-- Routine telemetry may be coalesced or discarded when stale. Event transitions and acknowledgements require a separate bounded priority path. Ephemeral watch samples are never backlogged.
-- RAM is the default device store. Firestore is durable history/configuration; RTDB is the approved low-latency command/watch transport. Do not add device filesystem persistence without an essential, reviewed reason.
-- Keep active events on the device until cleared. Keep their cloud-delivery queue separate from the active-event table.
-- The detailed rules engine and event schema are future work. Read the records selected by `PROJECT_WORKFLOW.md` before touching those areas.
+- CPU A is the sole operational decision authority.
+- CPU B preserves complete messages and does not reinterpret materiality, events, or pump consequences.
+- RTDB carries disposable current state and short-term coordination. Firestore carries sparse durable observations, events, and audit history.
+- If CPU A sends a durable observation, cloud transport preserves the complete valid record, including unknown future fields.
+- The resulting event/open/close/adoption/rejection record is the acknowledgement of a command; do not invent a second acknowledgement record unless the architecture baseline changes.
+- Netlify, RTDB, and Firestore must never be placed in the immediate protective path.
 
-## Startup, networking, and secrets
+## Rules, events, and restart
 
-- Provisioned UIFlow Wi-Fi is the preferred network source. Retain a short post-association delay and design reconnect behavior, but remove application-embedded Wi-Fi credentials only after real-device association and reconnect tests pass.
-- WebREPL is intended for LAN-only maintenance and file transfer. Do not expose it through router port forwarding or place it on the public Internet.
-- Preserve the hardware-verified Thonny reset procedure in `PROVISIONING.md`: issue `import machine; machine.reset()`, immediately switch Thonny to Local Python, wait for complete device startup, and only then select ESP32/WebREPL and reconnect. Leaving Thonny on WebREPL during reboot can prevent application startup and require physical power-button recovery.
-- Real device values belong in an uncommitted `device_secrets.py` on the Tab5. Commit only `device_secrets.example.py` with placeholders and provisioning documentation.
-- Expected secrets include the dedicated Firebase device login, Netlify ingest token, and WebREPL password. Wi-Fi belongs there only if testing proves an application fallback is necessary.
-- A Firebase web API key is a public project identifier, not device authentication. Never store a Firebase Admin/service-account private key on the Tab5.
+- Implement only an owner-approved work unit from the current Excel operational-rules workbook. Do not treat historical rule prose or the old CSV as current authority.
+- A valid ruleset always exists on Tab5. Keep using the last validated version while offline.
+- Download a changed release to a temporary file, validate its supported schema, completeness, and hash, then atomically replace the active rules file. Reject incomplete releases and retry later.
+- New rules take effect immediately. Reevaluate open events using the adopted rules and log the adoption or rejection.
+- Firebase is canonical for durable open/close history. On restart, synchronize open events and control state.
+- Restore an open latched event without a closing record and reapply its consequence. If its condition has cleared, it remains eligible for user closure according to the architecture baseline.
+- Close other previously open events during restart reconciliation; current evaluation may open a new event immediately.
+- Volatile timers restart from zero. Do not reconstruct elapsed runtime from ordinary telemetry history.
+- Global Enable is the top-priority fail-allow state. Store its minimal mutable state separately from the versioned rules file and synchronize it with RTDB.
 
-## Safety behavior
+## Networking, WebREPL, and secrets
 
-- Missed telemetry, a lost log record, or reconstructed short-lived state is acceptable; blocking the local control loop is not.
-- After restart, rebuild decisions from current observations and normal rule evaluation.
-- Never restore a stale inhibit blindly. Any future Tab5-requested Shelly lockout must expire or be released if healthy Tab5 polling disappears, while Shelly-local anti-cycle behavior remains independent.
-- Physical HAND operation remains outside software authority.
+- UIFlow-provisioned Wi-Fi is the preferred credential source. Application code uses credential-free association and recovery; do not embed the Wi-Fi password.
+- WebREPL is LAN-only maintenance. Never expose it by router port forwarding or on the public Internet.
+- Preserve the verified Thonny reset procedure in `PROVISIONING.md`: execute `import machine; machine.reset()`, immediately switch Thonny to Local Python, wait for complete startup, then reconnect to ESP32/WebREPL.
+- Real device values belong in uncommitted `device_secrets.py`. Commit only `device_secrets.example.py` with placeholders.
+- Never commit or print credentials, passwords, tokens, Wi-Fi data, Firebase administrative keys, or production secret values.
+- A Firebase web API key identifies the project; it is not device authentication. Never place a Firebase Admin/service-account private key on Tab5.
+
+## Safety and verification
+
+- Tab5 may inhibit automatic pump permission only through an explicitly approved control work unit. It never manufactures ordinary pump demand.
+- A forgotten persistent inhibit is the principal software hazard. Implement clearing, latching, Global Enable, restart, and synchronization exactly as defined in the architecture baseline.
+- Existing hardwired protection, HAND operation, Shelly-local anti-cycle behavior, and independent timer protection remain outside cloud authority.
+- Missed telemetry or a lost log record is acceptable; blocking CPU A is not.
+- Do not build firmware, flash hardware, erase flash/NVS, format media, or operate the physical device unless the owner explicitly requests a supervised hardware action.
+- Syntax checks and host tests do not prove display, touch, ADC, battery, Wi-Fi, Shelly, TLS, reset, threading, timing, or field behavior.
