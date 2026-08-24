@@ -152,6 +152,28 @@ def _form_value(value):
     return str(value).replace('%', '%25').replace('+', '%2B').replace('&', '%26').replace('=', '%3D')
 
 
+def _valid_command_id(value):
+    if not isinstance(value, str) or len(value) < 42 or len(value) > 98:
+        return False
+    if value[14:23] != '-command-' or value[-11] != '-':
+        return False
+    session = value[23:-11]
+    if (not value[:14].isdigit() or not value[-10:].isdigit() or
+            len(session) < 8 or len(session) > 64):
+        return False
+    for char in session:
+        if not (('0' <= char <= '9') or ('A' <= char <= 'Z') or
+                ('a' <= char <= 'z') or char in '_-'):
+            return False
+    return True
+
+
+def _valid_command_time(value):
+    return (isinstance(value, str) and 20 <= len(value) <= 35 and
+            value[4] == '-' and value[7] == '-' and value[10] in 'Tt' and
+            (value[-1] in 'Zz' or '+' in value[11:] or '-' in value[11:]))
+
+
 def _filter_new_commands(raw_commands, last_sequence):
     if isinstance(raw_commands, dict):
         candidates = raw_commands.values()
@@ -181,19 +203,22 @@ def _filter_new_commands(raw_commands, last_sequence):
             continue
         if command.get('commandType') not in command_types:
             continue
-        if not isinstance(command.get('requestedAt'), str):
+        if not _valid_command_time(command.get('requestedAt')):
             continue
         actor = command.get('requestedBy')
         if not isinstance(actor, dict) or actor.get('type') not in ('user', 'device', 'system'):
             continue
-        if not isinstance(actor.get('id'), str) or not actor.get('id'):
+        if len(actor) != 2 or 'type' not in actor or 'id' not in actor:
+            continue
+        if (not isinstance(actor.get('id'), str) or
+                len(actor.get('id')) < 1 or len(actor.get('id')) > 128):
             continue
         if not isinstance(command.get('payload'), dict):
             continue
         sequence = command.get('commandSequence')
         if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence <= last_sequence:
             continue
-        if not isinstance(command.get('commandId'), str):
+        if not _valid_command_id(command.get('commandId')):
             continue
         accepted.append(command)
     accepted.sort(key=lambda item: item.get('commandSequence'))
@@ -672,15 +697,22 @@ def _next_rtdb_action(schedule, now, current_sequence=None):
         return 'token-refresh'
     if schedule['syncWritePending']:
         return 'sync-state'
-    if current_sequence is not None and current_sequence != schedule['lastCurrentSequence']:
-        return 'current-observation'
+    # Finish an in-progress coordination snapshot before selecting another
+    # class of work. It is a fixed three-read exchange followed by one pending
+    # sync-state write, so this cannot create an unbounded current blackout.
+    if schedule['coordinationStage'] is not None:
+        return schedule['coordinationStage']
+    # Disposable current is intentionally lower priority than overdue durable
+    # coordination and presence. Fresh observations coalesce while those
+    # bounded exchanges run instead of starving command delivery forever.
+    if time.ticks_diff(now, schedule['nextCoordinationAt']) >= 0:
+        schedule['coordinationStage'] = 'global-enable'
+        return schedule['coordinationStage']
     if time.ticks_diff(now, schedule['nextPresenceAt']) >= 0:
         return 'presence'
-    if schedule['coordinationStage'] is None:
-        if time.ticks_diff(now, schedule['nextCoordinationAt']) < 0:
-            return None
-        schedule['coordinationStage'] = 'global-enable'
-    return schedule['coordinationStage']
+    if current_sequence is not None and current_sequence != schedule['lastCurrentSequence']:
+        return 'current-observation'
+    return None
 
 
 def _complete_rtdb_action(schedule, action, completed_at, success,

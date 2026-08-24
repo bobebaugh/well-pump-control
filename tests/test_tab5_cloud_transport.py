@@ -154,7 +154,7 @@ class CloudTransportTests(unittest.TestCase):
         def command(sequence, **changes):
             value = {
                 "schemaVersion": 1,
-                "commandId": "command-{}".format(sequence),
+                "commandId": "20260824173458-command-web_2kP9mQ7z-{:010d}".format(sequence),
                 "commandSequence": sequence,
                 "siteId": "well-main",
                 "targetDeviceId": "tab5-well-main",
@@ -193,6 +193,18 @@ class CloudTransportTests(unittest.TestCase):
             "unexpected": True,
         }
         self.assertEqual(self.cloud._filter_new_commands({"bad": command}, 0), [])
+        del command["unexpected"]
+        for changes in (
+            {"requestedBy": {"type": "user", "id": "example-user", "role": "admin"}},
+            {"requestedBy": {"type": "user", "id": "x" * 129}},
+            {"requestedAt": "not-a-date"},
+            {"commandId": "command-12"},
+            {"commandSequence": 0},
+        ):
+            malformed = dict(command)
+            malformed.update(changes)
+            self.assertEqual(
+                self.cloud._filter_new_commands({"bad": malformed}, 0), [])
 
     def test_queue_full_command_is_redelivered_after_capacity_returns(self):
         original_queue = self.cloud._pending_commands
@@ -369,6 +381,8 @@ class CloudTransportTests(unittest.TestCase):
             "rtdbUrl": "https://well-pump-control-default-rtdb.firebaseio.com",
             "expiresAtTicks": 1000000,
         }
+        schedule["exchangeId"] = (
+            "20260824200000-sync-boot_12345678-0000000001")
         schedule["nextPresenceAt"] = 999999
         schedule["nextCoordinationAt"] = 999999
         observation = {"schemaVersion": 1, "sequence": 7}
@@ -396,6 +410,57 @@ class CloudTransportTests(unittest.TestCase):
         finally:
             self.cloud.time.ticks_ms = original_ticks
             self.cloud._rtdb_put = original_put
+
+    def test_slow_fresh_current_cannot_starve_presence_or_coordination(self):
+        schedule = self.cloud._new_rtdb_schedule(0)
+        schedule["phase"] = "ready"
+        schedule["auth"] = {
+            "idToken": "EXAMPLE_ONLY_ID_TOKEN",
+            "rtdbUrl": "https://well-pump-control-default-rtdb.firebaseio.com",
+            "expiresAtTicks": 1000000,
+        }
+        schedule["exchangeId"] = (
+            "20260824200000-sync-boot_12345678-0000000001")
+        clock = [0]
+        actions = []
+        order = []
+        original_ticks = self.cloud.time.ticks_ms
+        original_put = self.cloud._rtdb_put
+        original_get = self.cloud._rtdb_get
+        try:
+            self.cloud.time.ticks_ms = lambda: clock[0]
+
+            def slow_put(*_args):
+                clock[0] += 900
+
+            def slow_get(_auth, path):
+                clock[0] += 900
+                if path.endswith("globalEnable"):
+                    return False
+                return {} if path.endswith("commands") else None
+
+            self.cloud._rtdb_put = slow_put
+            self.cloud._rtdb_get = slow_get
+            for sequence in range(1, 25):
+                order.append("legacy")
+                action = self.cloud._run_rtdb_step(
+                    schedule, {"schemaVersion": 1, "sequence": sequence})
+                order.append(action)
+                actions.append(action)
+                clock[0] = schedule["nextOperationAt"]
+        finally:
+            self.cloud.time.ticks_ms = original_ticks
+            self.cloud._rtdb_put = original_put
+            self.cloud._rtdb_get = original_get
+
+        self.assertEqual(order[0::2], ["legacy"] * 24)
+        self.assertLessEqual(actions.index("global-enable"), 0)
+        self.assertLessEqual(actions.index("rules-metadata"), 1)
+        self.assertLessEqual(actions.index("commands"), 2)
+        self.assertLessEqual(actions.index("presence"), 4)
+        self.assertIn("current-observation", actions[5:])
+        self.assertGreater(actions.count("current-observation"), 1)
+        self.assertGreater(actions.count("global-enable"), 1)
 
 
 if __name__ == "__main__":
