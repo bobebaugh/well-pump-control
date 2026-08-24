@@ -3,76 +3,222 @@
   "$id": "https://well-pump-control.local/contracts/device-sync-v1.schema.json",
   "title": "Device synchronization request or response v1",
   "oneOf": [
-    { "$ref": "#/$defs/request" },
-    { "$ref": "#/$defs/response" }
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
   ],
   "$defs": {
     "identity": {
       "type": "object",
-      "required": ["schemaVersion", "exchangeId", "siteId", "deviceId", "sessionId"],
+      "required": [
+        "schemaVersion",
+        "exchangeId",
+        "siteId",
+        "deviceId",
+        "sessionId"
+      ],
       "properties": {
-        "schemaVersion": { "const": 1 },
-        "exchangeId": { "type": "string", "pattern": "^[0-9]{14}-sync-[A-Za-z0-9_-]{8,64}-[0-9]{10}$" },
-        "siteId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
-        "deviceId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
-        "sessionId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" }
+        "schemaVersion": {
+          "const": 1
+        },
+        "exchangeId": {
+          "type": "string",
+          "pattern": "^[0-9]{14}-sync-[A-Za-z0-9_-]{8,64}-[0-9]{10}$"
+        },
+        "siteId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+        },
+        "deviceId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,64}$"
+        }
       }
     },
     "rulesReference": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "contentHash"],
+      "required": [
+        "version",
+        "contentHash"
+      ],
       "properties": {
-        "version": { "type": "integer", "minimum": 1 },
-        "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "contentHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
       }
     },
     "request": {
       "allOf": [
-        { "$ref": "#/$defs/identity" },
+        {
+          "$ref": "#/$defs/identity"
+        },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["kind", "requestedAt", "lastAppliedCommandSequence", "appliedRules", "openEventIds", "globalEnable"],
+          "required": [
+            "kind",
+            "requestedAt",
+            "lastAppliedCommandSequence",
+            "appliedRules",
+            "openEventIds",
+            "globalEnable"
+          ],
           "properties": {
             "schemaVersion": true,
             "exchangeId": true,
             "siteId": true,
             "deviceId": true,
             "sessionId": true,
-            "kind": { "const": "device-sync-request" },
-            "requestedAt": { "type": "string", "format": "date-time" },
-            "lastAppliedCommandSequence": { "type": "integer", "minimum": 0 },
-            "appliedRules": { "$ref": "#/$defs/rulesReference" },
-            "openEventIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 160 } },
-            "globalEnable": { "type": "boolean" }
+            "kind": {
+              "const": "device-sync-request"
+            },
+            "requestedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "lastAppliedCommandSequence": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "appliedRules": {
+              "$ref": "#/$defs/rulesReference"
+            },
+            "openEventIds": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "globalEnable": {
+              "type": "boolean"
+            }
           }
         }
       ]
     },
     "response": {
       "allOf": [
-        { "$ref": "#/$defs/identity" },
+        {
+          "$ref": "#/$defs/identity"
+        },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["kind", "issuedAt", "highWaterCommandSequence", "currentRules", "canonicalOpenEvents", "globalEnable", "pendingCommands"],
+          "required": [
+            "kind",
+            "issuedAt",
+            "highWaterCommandSequence",
+            "currentRules",
+            "canonicalOpenEvents",
+            "globalEnable",
+            "pendingCommands",
+            "authenticationBootstrap"
+          ],
           "properties": {
             "schemaVersion": true,
             "exchangeId": true,
             "siteId": true,
             "deviceId": true,
             "sessionId": true,
-            "kind": { "const": "device-sync-response" },
-            "issuedAt": { "type": "string", "format": "date-time" },
-            "highWaterCommandSequence": { "type": "integer", "minimum": 0 },
-            "currentRules": { "$ref": "#/$defs/rulesReference" },
-            "canonicalOpenEvents": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 160 } },
-            "globalEnable": { "type": "boolean" },
-            "pendingCommands": { "type": "array", "items": { "$ref": "device-command-v1.schema.json" } }
+            "kind": {
+              "const": "device-sync-response"
+            },
+            "issuedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "highWaterCommandSequence": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "currentRules": {
+              "$ref": "#/$defs/rulesReference"
+            },
+            "canonicalOpenEvents": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "globalEnable": {
+              "type": "boolean"
+            },
+            "pendingCommands": {
+              "type": "array",
+              "items": {
+                "$ref": "device-command-v1.schema.json"
+              }
+            },
+            "authenticationBootstrap": {
+              "$ref": "#/$defs/authenticationBootstrap"
+            }
           }
         }
       ]
+    },
+    "authenticationBootstrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "firebaseCustomToken",
+        "firebaseApiKey",
+        "firebaseProjectId",
+        "rtdbUrl",
+        "identityToolkitUrl",
+        "secureTokenUrl",
+        "expiresAt"
+      ],
+      "properties": {
+        "firebaseCustomToken": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "firebaseApiKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "firebaseProjectId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{4,62}$"
+        },
+        "rtdbUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "identityToolkitUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "secureTokenUrl": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
     }
   }
 }
