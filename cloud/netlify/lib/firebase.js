@@ -2,6 +2,7 @@
 
 const { createPrivateKey } = require("node:crypto");
 const { cert, getApps, initializeApp } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
 
 class ConfigurationError extends Error {
@@ -41,7 +42,7 @@ function parseServiceAccount(raw) {
   return serviceAccount;
 }
 
-function getPilotFirestore() {
+function getPilotApp() {
   const configuredProjectId = process.env.FIREBASE_PROJECT_ID || "well-pump-control";
   const databaseId = process.env.FIRESTORE_DATABASE_ID || "(default)";
 
@@ -60,14 +61,26 @@ function getPilotFirestore() {
     projectId: configuredProjectId
   });
 
+  return { app, projectId: configuredProjectId, databaseId };
+}
+
+function getPilotFirestore() {
+  const { app, projectId, databaseId } = getPilotApp();
+
   return {
     db: getFirestore(app),
-    projectId: configuredProjectId,
+    projectId,
     databaseId
   };
 }
 
+function getPilotAuth() {
+  const { app, projectId } = getPilotApp();
+  return { auth: getAuth(app), projectId };
+}
+
 module.exports = {
   ConfigurationError,
+  getPilotAuth,
   getPilotFirestore
 };
