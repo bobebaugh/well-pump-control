@@ -63,6 +63,15 @@ calculated from post-operation ticks so a slow success or failure cannot cause
 an immediate series of overdue calls. The completed bootstrap `exchangeId` is
 retained in every device `syncState` write.
 
+Within an authenticated, successful scheduling cycle, a pending `syncState`
+write completes first. An overdue coordination snapshot then consumes at most
+three reads plus its one `syncState` write; overdue presence follows, so a
+coalesced disposable current observation resumes after no more than six
+intervening RTDB operation slots. Authentication and bounded failure retry can delay that bound,
+but continuously fresh 1 Hz observations cannot starve coordination or
+presence. CPU B validates command envelopes only for safe transport; CPU A
+remains the later final command validator and decision authority.
+
 The M3 device candidate uses a conspicuously named pre-M6 transport-only rules
 reference solely because the accepted `device-sync-v1` request requires
 `appliedRules` before M6 supplies a real validated package. CPU B does not open,

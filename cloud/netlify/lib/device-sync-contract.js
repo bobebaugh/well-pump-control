@@ -73,11 +73,14 @@ function pendingCommands(raw, request) {
     COMMAND_TYPES.has(command.commandType) &&
     typeof command.requestedAt === "string" && Number.isFinite(Date.parse(command.requestedAt)) &&
     isPlainObject(command.requestedBy) &&
+    Object.keys(command.requestedBy).length === 2 &&
+    Object.keys(command.requestedBy).every(key => key === "type" || key === "id") &&
     ["user", "device", "system"].includes(command.requestedBy.type) &&
     typeof command.requestedBy.id === "string" && command.requestedBy.id.length >= 1 && command.requestedBy.id.length <= 128 &&
     command.status === "pending" &&
     isPlainObject(command.payload) &&
     Number.isInteger(command.commandSequence) &&
+    command.commandSequence >= 1 &&
     command.commandSequence > request.lastAppliedCommandSequence
   )).sort((left, right) => left.commandSequence - right.commandSequence);
 }

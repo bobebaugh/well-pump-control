@@ -178,6 +178,28 @@ test("malformed command envelopes with extra fields are not delivered", async ()
   assert.deepEqual(body.pendingCommands, []);
 });
 
+test("malformed nested command actors and schema fields are not delivered", async () => {
+  const variants = [
+    { ...command, requestedBy: { ...command.requestedBy, role: "admin" } },
+    { ...command, requestedBy: { type: "user", id: "x".repeat(129) } },
+    { ...command, requestedAt: "not-a-date" },
+    { ...command, commandId: "command-12" },
+    { ...command, commandSequence: 0 }
+  ];
+  for (const malformed of variants) {
+    const fetch = async (url) => {
+      if (url.includes("accounts:signInWithCustomToken")) return jsonResult({ idToken: "EXAMPLE_ONLY_ID_TOKEN" });
+      if (url.includes("/commands.json")) return jsonResult({ malformed });
+      if (url.includes("/control/globalEnable.json")) return jsonResult(false);
+      if (url.includes("/rules/current.json")) return jsonResult(null);
+      throw new Error(`unexpected URL ${url}`);
+    };
+    const { handler } = makeHandler({ fetch });
+    const body = JSON.parse((await handler(event())).body);
+    assert.deepEqual(body.pendingCommands, []);
+  }
+});
+
 test("configuration accepts only the approved project RTDB host", () => {
   assert.equal(
     _approvedRtdbUrl("https://well-pump-control-default-rtdb.firebaseio.com/", "well-pump-control"),
