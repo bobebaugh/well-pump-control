@@ -70,9 +70,10 @@ PRE_M6_TRANSPORT_ONLY_RULES_REFERENCE = {
 
 
 class TransportError(Exception):
-    def __init__(self, message, status_code=None):
-        Exception.__init__(self, message)
-        self.status_code = status_code
+    # UIFlow's MicroPython Exception type does not expose Exception.__init__.
+    # Keep the class constructor-free and attach an HTTP status only where one
+    # exists, so ordinary Exception(message) construction remains portable.
+    status_code = None
 
 
 def _retry_delay_ms(failure_count):
@@ -132,7 +133,9 @@ def _http_json(method, url, body=None, headers=None, timeout=RTDB_TIMEOUT_S,
         else:
             raise TransportError('unsupported HTTP method')
         if response.status_code < 200 or response.status_code >= 300:
-            raise TransportError('HTTP {}'.format(response.status_code), response.status_code)
+            error = TransportError('HTTP {}'.format(response.status_code))
+            error.status_code = response.status_code
+            raise error
         return response.json()
     except TransportError:
         raise

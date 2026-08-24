@@ -121,6 +121,14 @@ class CloudTransportTests(unittest.TestCase):
         self.assertEqual(self.cloud._retry_delay_ms(5), 60000)
         self.assertEqual(self.cloud._retry_delay_ms(50), 60000)
 
+    def test_transport_error_avoids_builtin_exception_init_and_keeps_http_status(self):
+        self.assertNotIn("__init__", self.cloud.TransportError.__dict__)
+        self.requests.queue({}, status_code=403)
+        with self.assertRaises(self.cloud.TransportError) as raised:
+            self.cloud._http_json("GET", "https://example.invalid/test")
+        self.assertEqual(str(raised.exception), "HTTP 403")
+        self.assertEqual(raised.exception.status_code, 403)
+
     def test_rtdb_path_is_scoped_to_explicit_json_location(self):
         self.assertEqual(
             self.cloud._rtdb_url("https://example.invalid/", "/v1/sites/well-main", "temporary-token"),
