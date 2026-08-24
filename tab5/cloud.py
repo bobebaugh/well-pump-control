@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — transport the complete CPU A observation unchanged.
+# Release: 2026-08-24 — add bounded Firebase RTDB transport beside legacy Netlify telemetry.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -12,8 +12,10 @@ older unsent observation instead of blocking the one-second device loop.
 """
 
 import _thread
+import os
 import sys
 import time
+import ubinascii
 import network
 import ntptime
 import requests
@@ -35,6 +37,158 @@ VOLTAGE_CHANGE_V = 2.0
 DEVICE_ID = 'shelly-em-well'
 INGEST_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/ingest-power'
 PUBLISH_TIMEOUT_S = 3
+
+SITE_ID = 'well-main'
+RTDB_DEVICE_ID = 'tab5-well-main'
+DEVICE_SYNC_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/device-sync'
+DEVICE_SYNC_TIMEOUT_S = 5
+RTDB_TIMEOUT_S = 3
+RTDB_COORDINATION_PERIOD_MS = 10000
+RTDB_PRESENCE_PERIOD_MS = 30000
+RTDB_RETRY_BASE_MS = 5000
+RTDB_RETRY_MAX_MS = 60000
+TOKEN_REFRESH_MARGIN_MS = 300000
+COMMAND_QUEUE_DEPTH = 8
+
+# M3 must send the required device-sync v1 appliedRules field before M6 creates
+# or adopts a real rules package. This unmistakable bridge is transport metadata
+# only: CPU B never loads, validates, adopts, or evaluates it. M6 replaces it
+# with CPU A's actual validated rules reference without changing the M2 schema.
+PRE_M6_TRANSPORT_ONLY_RULES_REFERENCE = {
+    'version': 1,
+    'contentHash': '0' * 64,
+}
+
+
+class TransportError(Exception):
+    def __init__(self, message, status_code=None):
+        Exception.__init__(self, message)
+        self.status_code = status_code
+
+
+def _retry_delay_ms(failure_count):
+    """Bound exponential retry delay for RTDB/bootstrap failures."""
+    shift = failure_count - 1
+    if shift < 0:
+        shift = 0
+    if shift > 4:
+        shift = 4
+    delay = RTDB_RETRY_BASE_MS * (1 << shift)
+    return min(delay, RTDB_RETRY_MAX_MS)
+
+
+def _rtdb_url(base_url, path, id_token):
+    return '{}/{}.json?auth={}'.format(base_url.rstrip('/'), path.strip('/'), id_token)
+
+
+def _copy_current_observation(observation, session_id):
+    """Add RTDB transport identity while preserving the complete CPU A message."""
+    if not isinstance(observation, dict) or observation.get('schemaVersion') != 1:
+        raise TransportError('unsupported observation schemaVersion')
+    current = dict(observation)
+    current['siteId'] = SITE_ID
+    current['deviceId'] = RTDB_DEVICE_ID
+    current['sessionId'] = session_id
+    current['receivedAtMs'] = {'.sv': 'timestamp'}
+    return current
+
+
+def _new_session_id():
+    try:
+        random_bytes = os.urandom(6)
+    except Exception:
+        ticks = time.ticks_ms()
+        random_bytes = bytes([(ticks >> shift) & 0xff for shift in (0, 8, 16, 24)])
+    return 'boot_' + ubinascii.hexlify(random_bytes).decode()
+
+
+def _compact_timestamp_utc():
+    t = time.localtime()
+    return '{:04d}{:02d}{:02d}{:02d}{:02d}{:02d}'.format(
+        t[0], t[1], t[2], t[3], t[4], t[5])
+
+
+def _http_json(method, url, body=None, headers=None, timeout=RTDB_TIMEOUT_S,
+               form_body=None):
+    response = None
+    try:
+        if method == 'GET':
+            response = requests.get(url, headers=headers, timeout=timeout)
+        elif form_body is not None:
+            response = requests.post(url, data=form_body, headers=headers, timeout=timeout)
+        elif method == 'POST':
+            response = requests.post(url, json=body, headers=headers, timeout=timeout)
+        elif method == 'PUT':
+            response = requests.put(url, json=body, headers=headers, timeout=timeout)
+        else:
+            raise TransportError('unsupported HTTP method')
+        if response.status_code < 200 or response.status_code >= 300:
+            raise TransportError('HTTP {}'.format(response.status_code), response.status_code)
+        return response.json()
+    except TransportError:
+        raise
+    except Exception as e:
+        raise TransportError(str(e))
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+
+def _form_value(value):
+    # Firebase refresh tokens use URL-safe characters. Escape the remaining
+    # form delimiters without importing CPython-only urllib.
+    return str(value).replace('%', '%25').replace('+', '%2B').replace('&', '%26').replace('=', '%3D')
+
+
+def _filter_new_commands(raw_commands, last_sequence):
+    if isinstance(raw_commands, dict):
+        candidates = raw_commands.values()
+    elif isinstance(raw_commands, list):
+        candidates = raw_commands
+    else:
+        return []
+    accepted = []
+    allowed_fields = (
+        'schemaVersion', 'commandId', 'commandSequence', 'siteId',
+        'targetDeviceId', 'commandType', 'requestedAt', 'requestedBy',
+        'status', 'payload', 'completedAt', 'resultRecordId',
+        'rejectionReason')
+    command_types = (
+        'close-event', 'set-event-override', 'set-global-enable',
+        'reset-shelly-lockout')
+    for command in candidates:
+        if not isinstance(command, dict):
+            continue
+        if any(field not in allowed_fields for field in command):
+            continue
+        if command.get('schemaVersion') != 1:
+            continue
+        if command.get('siteId') != SITE_ID or command.get('targetDeviceId') != RTDB_DEVICE_ID:
+            continue
+        if command.get('status') != 'pending':
+            continue
+        if command.get('commandType') not in command_types:
+            continue
+        if not isinstance(command.get('requestedAt'), str):
+            continue
+        actor = command.get('requestedBy')
+        if not isinstance(actor, dict) or actor.get('type') not in ('user', 'device', 'system'):
+            continue
+        if not isinstance(actor.get('id'), str) or not actor.get('id'):
+            continue
+        if not isinstance(command.get('payload'), dict):
+            continue
+        sequence = command.get('commandSequence')
+        if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence <= last_sequence:
+            continue
+        if not isinstance(command.get('commandId'), str):
+            continue
+        accepted.append(command)
+    accepted.sort(key=lambda item: item.get('commandSequence'))
+    return accepted
 
 
 def log(msg):
@@ -104,6 +258,17 @@ _state = (False, False, False, None, 'unavailable', 0)
 _observation_lock = _thread.allocate_lock()
 _pending_observation = None
 
+_command_lock = _thread.allocate_lock()
+_pending_commands = []
+_last_delivered_command_sequence = 0
+_last_applied_command_sequence = 0
+
+_sync_lock = _thread.allocate_lock()
+_sync_state = None
+
+_session_id = _new_session_id()
+_sync_sequence = 0
+
 _start_lock = _thread.allocate_lock()
 _started = False
 
@@ -147,6 +312,70 @@ def _take_pending_observation():
         return observation
     finally:
         _observation_lock.release()
+
+
+def take_command():
+    """Transfer the next complete command to CPU A, at most once per session."""
+    _command_lock.acquire()
+    try:
+        if not _pending_commands:
+            return None
+        return _pending_commands.pop(0)
+    finally:
+        _command_lock.release()
+
+
+def mark_command_applied(command_id, command_sequence):
+    """Record CPU A's applied high-water mark without applying any command."""
+    global _last_applied_command_sequence
+    if not isinstance(command_id, str) or not isinstance(command_sequence, int):
+        return False
+    _command_lock.acquire()
+    try:
+        if command_sequence > _last_applied_command_sequence:
+            _last_applied_command_sequence = command_sequence
+        return True
+    finally:
+        _command_lock.release()
+
+
+def take_sync_message():
+    """Transfer the latest noncredential coordination message to CPU A."""
+    global _sync_state
+    _sync_lock.acquire()
+    try:
+        value = _sync_state
+        _sync_state = None
+        return value
+    finally:
+        _sync_lock.release()
+
+
+def _queue_commands(commands):
+    global _last_delivered_command_sequence
+    _command_lock.acquire()
+    try:
+        for command in commands:
+            sequence = command.get('commandSequence')
+            if sequence <= _last_delivered_command_sequence:
+                continue
+            if len(_pending_commands) >= COMMAND_QUEUE_DEPTH:
+                # Commands are ordered. Stop rather than discard an older
+                # unseen command or advance the sequence beyond queue capacity.
+                break
+            _pending_commands.append(command)
+            _last_delivered_command_sequence = sequence
+    finally:
+        _command_lock.release()
+
+
+def _set_sync_state(value):
+    global _sync_state
+    _sync_lock.acquire()
+    try:
+        _sync_state = value
+    finally:
+        _sync_lock.release()
 
 
 def _material_change(observation, previous):
@@ -242,6 +471,168 @@ def _try_ntp_sync():
     return False
 
 
+def _sync_request():
+    global _sync_sequence
+    _sync_sequence += 1
+    _command_lock.acquire()
+    try:
+        last_applied = _last_applied_command_sequence
+    finally:
+        _command_lock.release()
+    return {
+        'schemaVersion': 1,
+        'kind': 'device-sync-request',
+        'exchangeId': '{}-sync-{}-{:010d}'.format(
+            _compact_timestamp_utc(), _session_id, _sync_sequence),
+        'siteId': SITE_ID,
+        'deviceId': RTDB_DEVICE_ID,
+        'sessionId': _session_id,
+        'requestedAt': _format_timestamp_utc(),
+        'lastAppliedCommandSequence': last_applied,
+        'appliedRules': dict(PRE_M6_TRANSPORT_ONLY_RULES_REFERENCE),
+        'openEventIds': [],
+        'globalEnable': False,
+    }
+
+
+def _validate_sync_response(reply, request):
+    if not isinstance(reply, dict) or reply.get('schemaVersion') != 1:
+        raise TransportError('unsupported device-sync response schemaVersion')
+    if reply.get('kind') != 'device-sync-response':
+        raise TransportError('unexpected device-sync response kind')
+    for field in ('exchangeId', 'siteId', 'deviceId', 'sessionId'):
+        if reply.get(field) != request.get(field):
+            raise TransportError('device-sync identity mismatch: {}'.format(field))
+    bootstrap = reply.get('authenticationBootstrap')
+    if not isinstance(bootstrap, dict):
+        raise TransportError('device-sync authentication bootstrap missing')
+    for field in ('firebaseCustomToken', 'firebaseApiKey', 'rtdbUrl',
+                  'identityToolkitUrl', 'secureTokenUrl'):
+        if not isinstance(bootstrap.get(field), str) or not bootstrap.get(field):
+            raise TransportError('device-sync bootstrap field missing: {}'.format(field))
+    return bootstrap
+
+
+def _exchange_custom_token(bootstrap):
+    url = '{}?key={}'.format(bootstrap['identityToolkitUrl'], bootstrap['firebaseApiKey'])
+    reply = _http_json('POST', url, body={
+        'token': bootstrap['firebaseCustomToken'],
+        'returnSecureToken': True,
+    }, headers={'Content-Type': 'application/json'}, timeout=DEVICE_SYNC_TIMEOUT_S)
+    if not isinstance(reply, dict) or not isinstance(reply.get('idToken'), str):
+        raise TransportError('Firebase token exchange did not return idToken')
+    if not isinstance(reply.get('refreshToken'), str):
+        raise TransportError('Firebase token exchange did not return refreshToken')
+    try:
+        lifetime_ms = int(reply.get('expiresIn', 3600)) * 1000
+    except Exception:
+        lifetime_ms = 3600000
+    return {
+        'idToken': reply['idToken'],
+        'refreshToken': reply['refreshToken'],
+        'expiresAtTicks': time.ticks_add(time.ticks_ms(), lifetime_ms),
+        'firebaseApiKey': bootstrap['firebaseApiKey'],
+        'rtdbUrl': bootstrap['rtdbUrl'],
+        'secureTokenUrl': bootstrap['secureTokenUrl'],
+    }
+
+
+def _bootstrap_rtdb():
+    request = _sync_request()
+    reply = _http_json('POST', DEVICE_SYNC_URL, body=request, headers={
+        'Content-Type': 'application/json',
+        'X-Pilot-Key': INGEST_TOKEN,
+    }, timeout=DEVICE_SYNC_TIMEOUT_S)
+    bootstrap = _validate_sync_response(reply, request)
+    auth = _exchange_custom_token(bootstrap)
+    noncredential = dict(reply)
+    noncredential.pop('authenticationBootstrap', None)
+    _set_sync_state(noncredential)
+    _queue_commands(_filter_new_commands(
+        reply.get('pendingCommands'), _last_delivered_command_sequence))
+    return auth
+
+
+def _refresh_firebase_token(auth):
+    url = '{}?key={}'.format(auth['secureTokenUrl'], auth['firebaseApiKey'])
+    form = 'grant_type=refresh_token&refresh_token={}'.format(
+        _form_value(auth['refreshToken']))
+    reply = _http_json('POST', url, headers={
+        'Content-Type': 'application/x-www-form-urlencoded',
+    }, form_body=form, timeout=DEVICE_SYNC_TIMEOUT_S)
+    id_token = reply.get('id_token') if isinstance(reply, dict) else None
+    refresh_token = reply.get('refresh_token') if isinstance(reply, dict) else None
+    if not isinstance(id_token, str) or not isinstance(refresh_token, str):
+        raise TransportError('Firebase refresh did not return temporary credentials')
+    try:
+        lifetime_ms = int(reply.get('expires_in', 3600)) * 1000
+    except Exception:
+        lifetime_ms = 3600000
+    auth['idToken'] = id_token
+    auth['refreshToken'] = refresh_token
+    auth['expiresAtTicks'] = time.ticks_add(time.ticks_ms(), lifetime_ms)
+    return auth
+
+
+def _rtdb_get(auth, path):
+    return _http_json('GET', _rtdb_url(auth['rtdbUrl'], path, auth['idToken']))
+
+
+def _rtdb_put(auth, path, value):
+    return _http_json('PUT', _rtdb_url(auth['rtdbUrl'], path, auth['idToken']),
+                      body=value, headers={'Content-Type': 'application/json'})
+
+
+def _poll_rtdb_coordination(auth):
+    global_enable = _rtdb_get(auth, 'v1/sites/{}/control/globalEnable'.format(SITE_ID))
+    rules = _rtdb_get(auth, 'v1/sites/{}/rules/current'.format(SITE_ID))
+    commands = _rtdb_get(auth, 'v1/sites/{}/devices/{}/commands'.format(
+        SITE_ID, RTDB_DEVICE_ID))
+    fresh = _filter_new_commands(commands, _last_delivered_command_sequence)
+    _queue_commands(fresh)
+    _set_sync_state({
+        'schemaVersion': 1,
+        'kind': 'rtdb-coordination-snapshot',
+        'siteId': SITE_ID,
+        'deviceId': RTDB_DEVICE_ID,
+        'sessionId': _session_id,
+        'globalEnable': global_enable,
+        'currentRules': rules,
+        'pendingCommandCount': len(fresh),
+    })
+
+
+def _write_sync_state(auth, result):
+    _command_lock.acquire()
+    try:
+        last_seen = _last_delivered_command_sequence
+        last_applied = _last_applied_command_sequence
+    finally:
+        _command_lock.release()
+    _rtdb_put(auth, 'v1/sites/{}/devices/{}/syncState'.format(
+        SITE_ID, RTDB_DEVICE_ID), {
+            'schemaVersion': 1,
+            'siteId': SITE_ID,
+            'deviceId': RTDB_DEVICE_ID,
+            'sessionId': _session_id,
+            'lastSeenCommandSequence': last_seen,
+            'lastAppliedCommandSequence': last_applied,
+            'result': result,
+            'lastSyncAtMs': {'.sv': 'timestamp'},
+        })
+
+
+def _write_presence(auth):
+    _rtdb_put(auth, 'v1/sites/{}/devices/{}/presence'.format(
+        SITE_ID, RTDB_DEVICE_ID), {
+            'schemaVersion': 1,
+            'siteId': SITE_ID,
+            'deviceId': RTDB_DEVICE_ID,
+            'sessionId': _session_id,
+            'lastSeenAtMs': {'.sv': 'timestamp'},
+        })
+
+
 def _run():
     wlan = network.WLAN(network.STA_IF)
     _configure_and_connect(wlan, False)
@@ -258,6 +649,12 @@ def _run():
     last_published_observation = None
     latest_observation = None
     monitoring_active = False
+    rtdb_auth = None
+    rtdb_failure_count = 0
+    next_rtdb_attempt = time.ticks_ms()
+    next_coordination = time.ticks_ms()
+    next_presence = time.ticks_ms()
+    last_rtdb_sequence = None
 
     while True:
         now = time.ticks_ms()
@@ -340,6 +737,59 @@ def _run():
                         next_publish_attempt = time.ticks_add(now, PUBLISH_RETRY_MS)
                         log('Netlify publish failed ({}); retry in {} ms'.format(
                             reason, PUBLISH_RETRY_MS))
+
+            if rtdb_auth is None and time.ticks_diff(now, next_rtdb_attempt) >= 0:
+                try:
+                    rtdb_auth = _bootstrap_rtdb()
+                    rtdb_failure_count = 0
+                    next_rtdb_attempt = now
+                    next_coordination = now
+                    next_presence = now
+                    _write_sync_state(rtdb_auth, 'connected')
+                    log('Firebase temporary credentials established for {}'.format(
+                        RTDB_DEVICE_ID))
+                except Exception as e:
+                    rtdb_failure_count += 1
+                    delay = _retry_delay_ms(rtdb_failure_count)
+                    next_rtdb_attempt = time.ticks_add(now, delay)
+                    log('RTDB bootstrap failed: {}; retry in {} ms'.format(e, delay))
+
+            if (rtdb_auth is not None and
+                    time.ticks_diff(now, next_rtdb_attempt) >= 0):
+                try:
+                    remaining = time.ticks_diff(rtdb_auth['expiresAtTicks'], now)
+                    if remaining <= TOKEN_REFRESH_MARGIN_MS:
+                        rtdb_auth = _refresh_firebase_token(rtdb_auth)
+                        log('Firebase temporary credentials refreshed')
+
+                    if latest_observation is not None:
+                        sequence = latest_observation.get('sequence')
+                        if sequence != last_rtdb_sequence and time.ticks_diff(now, next_rtdb_attempt) >= 0:
+                            current = _copy_current_observation(
+                                latest_observation, _session_id)
+                            _rtdb_put(rtdb_auth,
+                                      'v1/sites/{}/devices/{}/currentObservation'.format(
+                                          SITE_ID, RTDB_DEVICE_ID), current)
+                            last_rtdb_sequence = sequence
+                            rtdb_failure_count = 0
+                            next_rtdb_attempt = now
+
+                    if time.ticks_diff(now, next_presence) >= 0:
+                        next_presence = time.ticks_add(now, RTDB_PRESENCE_PERIOD_MS)
+                        _write_presence(rtdb_auth)
+
+                    if time.ticks_diff(now, next_coordination) >= 0:
+                        next_coordination = time.ticks_add(
+                            now, RTDB_COORDINATION_PERIOD_MS)
+                        _poll_rtdb_coordination(rtdb_auth)
+                        _write_sync_state(rtdb_auth, 'ok')
+                except Exception as e:
+                    rtdb_failure_count += 1
+                    delay = _retry_delay_ms(rtdb_failure_count)
+                    next_rtdb_attempt = time.ticks_add(now, delay)
+                    if isinstance(e, TransportError) and e.status_code in (401, 403):
+                        rtdb_auth = None
+                    log('RTDB transport error: {}; retry in {} ms'.format(e, delay))
 
         time.sleep_ms(100)
 
