@@ -51,7 +51,7 @@ Emulator behavioral matrix cover this candidate. From a fresh checkout, run
 `npm ci` followed by `npm run test:rtdb-rules`; the dedicated command starts an
 isolated `demo-well-pump-control` database emulator, loads
 `firebase/rtdb.rules.json`, runs the matrix, and stops the emulator. It requires
-Node 22 or later and Java 17 or later. Ordinary `npm test` does not start an
+Node 22 or later and Java 21 or later. Ordinary `npm test` does not start an
 emulator. Deployed-rule verification remains pending because this nondeploying
 host session has no authorization to publish rules.
 
