@@ -7,9 +7,15 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "test:rtdb-rules": "firebase emulators:exec --only database --project demo-well-pump-control \"node --test tests/emulator/rtdb-rules.test.js\""
   },
   "dependencies": {
     "firebase-admin": "^13.0.0"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.2",
+    "firebase": "12.18.0",
+    "firebase-tools": "15.28.1"
   }
 }

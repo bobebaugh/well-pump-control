@@ -1,0 +1,35 @@
+name: M3 RTDB Rules Emulator
+
+on:
+  push:
+    branches:
+      - agent/m3-cloud-rtdb-transport
+    paths:
+      - firebase/rtdb.rules.json
+      - firebase.json
+      - tests/emulator/rtdb-rules.test.js
+      - package.json
+      - package-lock.json
+      - .github/workflows/m3-rtdb-rules-emulator.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rules-emulator:
+    name: RTDB allow/deny matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+      - run: npm run test:rtdb-rules

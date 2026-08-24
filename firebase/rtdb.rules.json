@@ -8,13 +8,13 @@
           "devices": {
             "tab5-well-main": {
               "currentObservation": {
-                ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.child('schemaVersion').val() == 1 && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main'"
+                ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.hasChildren(['schemaVersion', 'siteId', 'deviceId', 'sessionId', 'sequence', 'observedAt', 'receivedAtMs', 'source', 'values', 'status']) && newData.child('schemaVersion').val() == 1 && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('sessionId').isString() && newData.child('sequence').isNumber() && newData.child('sequence').val() >= 0 && newData.child('observedAt').isString() && newData.child('receivedAtMs').isNumber() && newData.child('source').val() == 'tab5' && newData.child('values').hasChildren() && newData.child('status').hasChildren()"
               },
               "presence": {
-                ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.child('schemaVersion').val() == 1 && newData.child('sessionId').isString()"
+                ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.hasChildren(['schemaVersion', 'siteId', 'deviceId', 'sessionId', 'lastSeenAtMs']) && newData.child('schemaVersion').val() == 1 && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('sessionId').isString() && newData.child('lastSeenAtMs').isNumber()"
               },
               "syncState": {
-                ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.child('schemaVersion').val() == 1 && newData.child('sessionId').isString()"
+                ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.hasChildren(['schemaVersion', 'exchangeId', 'siteId', 'deviceId', 'sessionId', 'lastSeenCommandSequence', 'lastAppliedCommandSequence', 'result', 'lastSyncAtMs']) && newData.child('schemaVersion').val() == 1 && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('exchangeId').isString() && newData.child('sessionId').isString() && newData.child('lastSeenCommandSequence').isNumber() && newData.child('lastSeenCommandSequence').val() >= 0 && newData.child('lastAppliedCommandSequence').isNumber() && newData.child('lastAppliedCommandSequence').val() >= 0 && newData.child('result').isString() && newData.child('lastSyncAtMs').isNumber()"
               },
               "commands": {
                 ".read": "auth != null && auth.uid == 'tab5-well-main'",

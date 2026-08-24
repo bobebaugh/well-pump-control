@@ -46,10 +46,14 @@ The required Netlify configuration is:
 denies all access by default, grants `tab5-well-main` writes only to its current
 observation, presence, and sync state, and grants reads only to its addressed
 commands, Global Enable coordination, and the current rules pointer.
-Parsed rule-structure tests cover this candidate. Firebase Rules Emulator and
-deployed-rule verification remain pending because this nondeploying host session
-does not have an emulator-backed project configuration or authorization to
-publish rules.
+Parsed rule-structure tests and the official Firebase Realtime Database
+Emulator behavioral matrix cover this candidate. From a fresh checkout, run
+`npm ci` followed by `npm run test:rtdb-rules`; the dedicated command starts an
+isolated `demo-well-pump-control` database emulator, loads
+`firebase/rtdb.rules.json`, runs the matrix, and stops the emulator. It requires
+Node 22 or later and Java 17 or later. Ordinary `npm test` does not start an
+emulator. Deployed-rule verification remains pending because this nondeploying
+host session has no authorization to publish rules.
 
 ## Compatibility
 
