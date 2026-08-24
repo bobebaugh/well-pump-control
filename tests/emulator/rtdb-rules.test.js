@@ -1,6 +1,7 @@
 "use strict";
 
 const { after, before, test } = require("node:test");
+const { readFileSync } = require("node:fs");
 const {
   assertFails,
   assertSucceeds,
@@ -65,7 +66,10 @@ function syncState(changes = {}) {
 }
 
 before(async () => {
-  const database = emulatorAddress();
+  const database = {
+    ...emulatorAddress(),
+    rules: readFileSync("firebase/rtdb.rules.json", "utf8")
+  };
   environment = await initializeTestEnvironment({ projectId: PROJECT_ID, database });
   deviceDatabase = environment.authenticatedContext("tab5-well-main").database();
   anonymousDatabase = environment.unauthenticatedContext().database();
