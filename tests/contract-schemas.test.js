@@ -158,10 +158,12 @@ test("coordination contracts reject unsupported schema versions", () => {
   }
 });
 
-test("legacy pilot functions and telemetry contract are byte-for-byte unchanged", () => {
+test("protected pilot functions and telemetry contract match the reviewed baselines", () => {
   const expected = {
     "cloud/netlify/functions/ingest-power.js": "70986d473b9ede3d3589193a5d38b20c80af54a0655bbf46f80da074141a362e",
-    "cloud/netlify/functions/current-power.js": "50c533276bf1b8030a8d246ec5d85eb47f52e70404a2ff29660f691e74954dbc",
+    // M6.10 extends only this read response with status already stored inside
+    // the complete observation. Ingest behavior and the legacy values remain.
+    "cloud/netlify/functions/current-power.js": "f2c1f1a5e42a672cdce7de5c0493fe9078b09f76fbcf493c862c6157427e64be",
     "cloud/netlify/functions/monitor-session.js": "14b7b478a92872e2276d7b359212aa56c5324b0b3ebccd08762a16843553e177",
     "cloud/netlify/functions/firebase-status.js": "056590d9bd3b034cb8edba81822685bfee71ad24f0dc37d71d94f1cae36c0fe0",
     "cloud/netlify/functions/health.js": "59b3b43001d439108faee31fe566f2ae4f79346887692c2a75b44d2d23d73421",
@@ -171,7 +173,7 @@ test("legacy pilot functions and telemetry contract are byte-for-byte unchanged"
 
   for (const [relative, digest] of Object.entries(expected)) {
     const actual = createHash("sha256").update(readFileSync(path.join(root, relative))).digest("hex");
-    assert.equal(actual, digest, `${relative} changed from verified pilot commit 929d46c`);
+    assert.equal(actual, digest, `${relative} changed from its reviewed pilot baseline`);
   }
 });
 
