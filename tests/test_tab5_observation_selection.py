@@ -163,16 +163,16 @@ class ObservationSelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.logic["trimmed_mean_microvolts"]([1, 2, 3, 4])
 
-    def test_shelly1_status_normalizes_only_gen1_boolean_state(self):
+    def test_shelly1_status_normalizes_only_gen4_rpc_boolean_state(self):
         normalize = self.logic["normalize_shelly1_status"]
         self.assertEqual(normalize({
-            "relays": [{"ison": False}],
-            "inputs": [{"input": 1}],
+            "switch:0": {"id": 0, "output": False},
+            "input:0": {"id": 0, "state": True},
         }), {"sw0": True, "rly0": False})
-        self.assertIsNone(normalize({"relays": [], "inputs": []}))
+        self.assertIsNone(normalize({"switch:0": {}, "input:0": {}}))
         self.assertIsNone(normalize({
-            "relays": [{"ison": "off"}],
-            "inputs": [{"input": 0}],
+            "switch:0": {"output": "off"},
+            "input:0": {"state": False},
         }))
 
     def test_transient_shelly_poll_failures_do_not_select_durable_records(self):
