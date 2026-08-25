@@ -15,6 +15,7 @@ const DEVICE = `${SITE}/devices/tab5-well-main`;
 let environment;
 let deviceDatabase;
 let anonymousDatabase;
+let publisherDatabase;
 
 function emulatorAddress() {
   const value = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
@@ -73,6 +74,9 @@ before(async () => {
   environment = await initializeTestEnvironment({ projectId: PROJECT_ID, database });
   deviceDatabase = environment.authenticatedContext("tab5-well-main").database();
   anonymousDatabase = environment.unauthenticatedContext().database();
+  publisherDatabase = environment.authenticatedContext("netlify-rules-publisher", {
+    siteId: "well-main", purpose: "rules-publication"
+  }).database();
   await environment.withSecurityRulesDisabled(async context => {
     const admin = context.database();
     await set(ref(admin, `${DEVICE}/commands/cmd-12`), { commandSequence: 12, status: "pending" });
@@ -124,6 +128,19 @@ test("device cannot write commands, control, rules, parents, or unrelated paths"
     [DEVICE, { presence: presence() }],
     [`${SITE}/unrelated`, true]
   ]) await assertFails(set(ref(deviceDatabase, path), value));
+});
+
+test("fixed publisher can replace only a complete rules pointer", async () => {
+  const current = {
+    schemaVersion: 1, siteId: "well-main", releaseId: "20260825143045-rules-v2",
+    rulesVersion: 2, rulesSchemaVersion: 1, contentHash: "a".repeat(64),
+    hashAlgorithm: "sha256", publishedAtMs: 1787668245000,
+    downloadPath: "/.netlify/functions/rules-release/20260825143045-rules-v2.json"
+  };
+  await assertSucceeds(set(ref(publisherDatabase, `${SITE}/rules/current`), current));
+  await assertSucceeds(get(ref(publisherDatabase, `${SITE}/rules/current`)));
+  await assertFails(set(ref(publisherDatabase, `${SITE}/rules/current`), { rulesVersion: 3 }));
+  await assertFails(set(ref(publisherDatabase, `${SITE}/control/globalEnable`), true));
 });
 
 test("malformed and misaddressed current observations are denied", async () => {

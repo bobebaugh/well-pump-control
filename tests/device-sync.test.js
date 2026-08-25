@@ -128,7 +128,11 @@ test("RTDB rules are closed by default and scope the fixed device", () => {
   assert.match(device.commands[".read"], /auth\.uid == 'tab5-well-main'/);
   assert.equal(device.commands[".write"], false);
   assert.equal(site.control.globalEnable[".write"], false);
-  assert.equal(site.rules.current[".write"], false);
+  assert.match(site.rules.current[".read"], /auth\.uid == 'tab5-well-main'/);
+  assert.match(site.rules.current[".read"], /auth\.uid == 'netlify-rules-publisher'/);
+  assert.match(site.rules.current[".write"], /auth\.uid == 'netlify-rules-publisher'/);
+  assert.match(site.rules.current[".write"], /auth\.token\.siteId == 'well-main'/);
+  assert.match(site.rules.current[".write"], /auth\.token\.purpose == 'rules-publication'/);
 });
 
 test("published request example is accepted by runtime validation", () => {

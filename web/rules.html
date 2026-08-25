@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#09111f">
+  <title>Rules Editor — Well Pump Pilot</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/rules.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">PRIVATE WELL · TEST CONFIGURATION</p>
+      <h1>Rules editor</h1>
+    </div>
+    <div class="topbar-actions">
+      <a class="nav-link" href="/">Monitoring</a>
+      <div class="pilot-badge"><span></span>Protected pilot</div>
+    </div>
+  </header>
+
+  <main class="rules-main">
+    <section class="editor-notice">
+      <strong>Current M6 firmware stores and reports these rules; it does not evaluate them.</strong>
+      <span>Publishing creates an immutable release, then moves the controller pointer. The previous release remains recoverable.</span>
+    </section>
+
+    <section class="panel rules-toolbar">
+      <div>
+        <p class="kicker">PUBLISHED RELEASE</p>
+        <h2 id="release-name">Not loaded</h2>
+        <small id="release-hash">Enter the pilot key to load the live pointer and package.</small>
+      </div>
+      <div class="toolbar-actions">
+        <button class="secondary-button" id="load-rules" type="button">Load current rules</button>
+        <button class="secondary-button" id="download-draft" type="button" disabled>Download draft</button>
+        <button class="primary-button" id="publish-rules" type="button" disabled>Publish test release</button>
+      </div>
+    </section>
+
+    <section id="editor-status" class="editor-status" aria-live="polite">No rules loaded.</section>
+
+    <section class="rules-workspace" hidden id="rules-workspace">
+      <aside class="panel rule-browser">
+        <div class="rule-filter-row">
+          <label>Show
+            <select id="rule-filter">
+              <option value="all">All 59 rules</option>
+              <option value="P">Pump</option>
+              <option value="E">Electrical</option>
+              <option value="T">Tank / pressure</option>
+              <option value="H">Health</option>
+              <option value="enabled">Enabled</option>
+              <option value="changed">Changed</option>
+            </select>
+          </label>
+        </div>
+        <div id="rule-list" class="rule-list" role="listbox" aria-label="Rules"></div>
+      </aside>
+
+      <form class="panel rule-form" id="rule-form">
+        <div class="rule-title-row">
+          <div><p class="kicker">SELECTED RULE</p><h2 id="rule-id">—</h2></div>
+          <label class="switch-label"><input id="rule-enabled" type="checkbox"> Enabled</label>
+        </div>
+        <div class="form-grid">
+          <label class="wide">Event<input id="rule-event" required></label>
+          <label>Level<select id="rule-level"><option value="">None</option><option>Yellow</option><option>Red</option></select></label>
+          <label>Response<select id="rule-response"><option>Observe</option><option>Alert</option><option>Trip—while active</option><option>Trip—recovery policy</option><option>Trip—latched/manual reset</option></select></label>
+          <label>Confirm seconds<input id="rule-confirm" type="number" min="1" step="1" required></label>
+          <label>Clear seconds<input id="rule-clear" type="number" min="1" step="1" required></label>
+          <label class="wide">Conditions (JSON object)<textarea id="rule-conditions" rows="6" spellcheck="false" required></textarea></label>
+          <label class="wide">Schedule context<input id="rule-schedule"></label>
+          <label class="wide">Operating context<input id="rule-operating"></label>
+          <label class="wide">Recovery / reset policy<input id="rule-recovery"></label>
+          <label class="wide">Commissioning status<input id="rule-commissioning" required></label>
+          <label class="switch-label"><input id="rule-notify" type="checkbox"> Notify</label>
+        </div>
+        <div class="form-actions">
+          <button class="secondary-button" id="reset-rule" type="button">Reset selected rule</button>
+          <button class="primary-button" type="submit">Apply to draft</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

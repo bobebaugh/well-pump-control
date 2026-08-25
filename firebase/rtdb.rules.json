@@ -31,8 +31,9 @@
           },
           "rules": {
             "current": {
-              ".read": "auth != null && auth.uid == 'tab5-well-main'",
-              ".write": false
+              ".read": "auth != null && (auth.uid == 'tab5-well-main' || (auth.uid == 'netlify-rules-publisher' && auth.token.siteId == 'well-main' && auth.token.purpose == 'rules-publication'))",
+              ".write": "auth != null && auth.uid == 'netlify-rules-publisher' && auth.token.siteId == 'well-main' && auth.token.purpose == 'rules-publication'",
+              ".validate": "newData.hasChildren(['schemaVersion', 'siteId', 'releaseId', 'rulesVersion', 'rulesSchemaVersion', 'contentHash', 'hashAlgorithm', 'publishedAtMs', 'downloadPath']) && newData.child('schemaVersion').val() == 1 && newData.child('siteId').val() == 'well-main' && newData.child('releaseId').isString() && newData.child('rulesVersion').isNumber() && newData.child('rulesVersion').val() >= 1 && newData.child('rulesSchemaVersion').val() == 1 && newData.child('contentHash').isString() && newData.child('hashAlgorithm').val() == 'sha256' && newData.child('publishedAtMs').isNumber() && newData.child('publishedAtMs').val() >= 0 && newData.child('downloadPath').isString()"
             }
           }
         }

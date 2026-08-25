@@ -37,3 +37,20 @@ test("rejects unauthorized, malformed, absent, and non-GET release requests", as
   assert.equal((await handler(request("20260825000000-rules-v99.json"))).statusCode, 404);
   assert.equal((await handler({ httpMethod: "POST", headers: {}, queryStringParameters: {} })).statusCode, 405);
 });
+
+test("serves immutable editor releases from the durable rules store", async () => {
+  const dynamicBody = '{"schemaVersion":1,"kind":"well-pump-rules-release"}\n';
+  const handler = _createHandler({
+    env: { PILOT_INGEST_TOKEN: "test-ingest-token" },
+    readFile() { throw new Error("not bundled"); },
+    createRulesStore: () => ({
+      async getReleaseBody(id) {
+        assert.equal(id, "20260825143045-rules-v2");
+        return dynamicBody;
+      }
+    })
+  });
+  const result = await handler(request("20260825143045-rules-v2.json"));
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.body, dynamicBody);
+});

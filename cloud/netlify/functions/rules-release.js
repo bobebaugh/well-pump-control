@@ -43,6 +43,7 @@ function releaseBody(releaseId, readFile = readFileSync) {
 function createHandler(dependencies = {}) {
   const env = dependencies.env || process.env;
   const readFile = dependencies.readFile || readFileSync;
+  const storeFactory = dependencies.createRulesStore || (() => require("../lib/rules-store").createRulesStore(env));
 
   return async function rulesRelease(event) {
     if (event.httpMethod !== "GET") {
@@ -57,7 +58,15 @@ function createHandler(dependencies = {}) {
     try {
       return { statusCode: 200, headers: jsonHeaders, body: releaseBody(releaseId, readFile) };
     } catch {
-      return response(404, { status: "error", code: "release_not_found" });
+      try {
+        const body = await storeFactory().getReleaseBody(releaseId.replace(/\.json$/, ""));
+        if (typeof body !== "string" || Buffer.byteLength(body, "utf8") > MAX_RELEASE_BYTES) {
+          return response(404, { status: "error", code: "release_not_found" });
+        }
+        return { statusCode: 200, headers: jsonHeaders, body };
+      } catch {
+        return response(404, { status: "error", code: "release_not_found" });
+      }
     }
   };
 }
