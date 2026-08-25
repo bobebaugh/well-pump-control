@@ -1,4 +1,4 @@
-# Release: 2026-08-25 — validate and adopt versioned CPU A rules releases.
+# Release: 2026-08-25 M6.2 — validate rules releases and report CPU A startup.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -612,7 +612,7 @@ def _valid_rules_hash(value):
 
 def _valid_rules_release_id(value, version):
     if (not isinstance(value, str) or not isinstance(version, int) or
-            isinstance(version, bool) or version < 1 or len(value) < 23):
+            isinstance(version, bool) or version < 1):
         return False
     prefix = value[:14]
     suffix = '-rules-v{}'.format(version)
@@ -916,6 +916,7 @@ def check_touch_button(was_pressed):
 # --- boot sequence ---
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
+log('CPU A release M6.2')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:
@@ -980,11 +981,15 @@ while True:
     sync_message = cloud.take_sync_message()
     if isinstance(sync_message, dict):
         metadata = validate_rules_metadata(sync_message.get('currentRules'))
+        if sync_message.get('currentRules') is not None and metadata is None:
+            log('Rules pointer ignored: metadata invalid')
         if (metadata is not None and
                 metadata.get('contentHash') != active_rules_reference.get('contentHash') and
                 time.ticks_diff(now, next_rules_request_ms) >= 0):
+            log('Rules pointer accepted: release={}'.format(metadata['releaseId']))
             if cloud.request_rules_release(metadata):
                 next_rules_request_ms = time.ticks_add(now, RULES_FETCH_RETRY_MS)
+                log('Rules release request queued for CPU B')
     release_candidate = cloud.take_rules_release()
     if release_candidate is not None:
         candidate_metadata = validate_rules_metadata(

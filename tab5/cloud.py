@@ -1,4 +1,4 @@
-# Release: 2026-08-25 M6.1 — transport CPU A rules bytes; avoid 1 Hz download starvation.
+# Release: 2026-08-25 M6.2 — transport rules bytes and report CPU B startup.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -1171,6 +1171,7 @@ def start():
         if _started:
             return False
         _started = True
+        log('CPU B release M6.2')
         _thread.start_new_thread(_worker, ())
         return True
     finally:

@@ -335,6 +335,23 @@ class ObservationSelectionTests(unittest.TestCase):
             self.assertEqual(outcome, "release-hash-mismatch")
             self.assertEqual(active_path.read_text(encoding="utf-8"), raw)
 
+    def test_rules_metadata_accepts_the_exact_v1_release_identifier_shape(self):
+        metadata = {
+            "schemaVersion": 1,
+            "siteId": "well-main",
+            "releaseId": "20260825010000-rules-v1",
+            "rulesVersion": 1,
+            "rulesSchemaVersion": 1,
+            "contentHash": "93eca75b9fbf774c10350580a8e0c116a733af6f6cd5274bdd7b29a698e05a08",
+            "hashAlgorithm": "sha256",
+            "publishedAtMs": 1787619600000,
+            "downloadPath": "/.netlify/functions/rules-release/20260825010000-rules-v1.json",
+        }
+        self.assertEqual(
+            self.logic["validate_rules_metadata"](metadata)["releaseId"],
+            metadata["releaseId"],
+        )
+
     def test_rules_adoption_and_rejection_audits_have_deterministic_records(self):
         reference = self.logic["PACKAGED_RULES_REFERENCE"]
         adopted = self.logic["build_rules_audit_record"](

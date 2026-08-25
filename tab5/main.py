@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — disable UIFlow relaunch when maintenance releases the REPL.
+# Release: 2026-08-25 M6.2 — identify active Tab5 modules at startup.
 # Crash-capturing launcher. The CPU A application itself lives in pilot.py.
 # Any exception that escapes CPU A is written to /flash/crash.log
 # (with a timestamp if the RTC was set) as well as printed to serial, so a
@@ -7,6 +7,8 @@ import sys
 import time
 import _thread
 import cloud
+
+print('[well-main] Release M6.2 launcher')
 
 
 try:
