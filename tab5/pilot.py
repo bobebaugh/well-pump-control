@@ -1,4 +1,4 @@
-# Release: 2026-08-25 M6.4 — identify rejected rules-pointer fields safely.
+# Release: 2026-08-25 M6.5 — trace received rules-pointer field names safely.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -682,6 +682,18 @@ def rules_metadata_rejection_reason(metadata):
     _normalized, reason = _check_rules_metadata(metadata)
     return reason
 
+
+def rules_metadata_key_summary(metadata):
+    """Return a short field-name-only description for a rejected pointer."""
+    if not isinstance(metadata, dict):
+        return 'not-an-object'
+    keys = list(metadata.keys())
+    keys.sort()
+    if not keys:
+        return 'empty-object'
+    # RTDB field names identify the record shape but reveal no pointer values.
+    return ','.join(keys[:12])
+
 def validate_rules_release(raw_release, metadata=None):
     """Check release bytes, supported schema, and all workbook rule rows.
 
@@ -934,7 +946,7 @@ def check_touch_button(was_pressed):
 # --- boot sequence ---
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.4')
+log('CPU A release M6.5: pointer-key diagnostics')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:
@@ -1000,8 +1012,9 @@ while True:
     if isinstance(sync_message, dict):
         metadata = validate_rules_metadata(sync_message.get('currentRules'))
         if sync_message.get('currentRules') is not None and metadata is None:
-            log('Rules pointer ignored: {}'.format(
-                rules_metadata_rejection_reason(sync_message.get('currentRules'))))
+            log('Rules pointer ignored: {} [M6.5 keys={}]'.format(
+                rules_metadata_rejection_reason(sync_message.get('currentRules')),
+                rules_metadata_key_summary(sync_message.get('currentRules'))))
         if (metadata is not None and
                 metadata.get('contentHash') != active_rules_reference.get('contentHash') and
                 time.ticks_diff(now, next_rules_request_ms) >= 0):

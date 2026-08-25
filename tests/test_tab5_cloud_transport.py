@@ -171,6 +171,17 @@ class CloudTransportTests(unittest.TestCase):
         self.assertFalse(self.cloud._rules_download_may_follow_rtdb("rules-metadata"))
         self.assertFalse(self.cloud._rules_download_may_follow_rtdb("commands"))
 
+    def test_rules_pointer_summary_reports_field_names_not_values(self):
+        pointer = {"siteId": "well-main", "schemaVersion": 1}
+        self.assertEqual(
+            self.cloud._rules_pointer_key_summary(pointer),
+            "schemaVersion,siteId",
+        )
+        self.assertEqual(
+            self.cloud._rules_pointer_key_summary(None),
+            "not-an-object",
+        )
+
     def test_durable_transport_posts_exact_record_and_accepts_duplicate(self):
         record = {
             "schemaVersion": 1,

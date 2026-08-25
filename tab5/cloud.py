@@ -1,4 +1,4 @@
-# Release: 2026-08-25 M6.2 — transport rules bytes and report CPU B startup.
+# Release: 2026-08-25 M6.5 — transport rules bytes and trace RTDB pointer keys.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -854,8 +854,20 @@ def _new_rtdb_schedule(now):
         'nextCoordinationAt': now,
         'coordinationStage': None,
         'coordination': {},
+        'lastRulesPointerKeySummary': None,
         'syncWritePending': False,
     }
+
+
+def _rules_pointer_key_summary(value):
+    """Describe an RTDB pointer shape without logging any values."""
+    if not isinstance(value, dict):
+        return 'not-an-object'
+    keys = list(value.keys())
+    keys.sort()
+    if not keys:
+        return 'empty-object'
+    return ','.join(keys[:12])
 
 
 def _next_rtdb_action(schedule, now, current_sequence=None):
@@ -955,6 +967,11 @@ def _run_rtdb_step(schedule, latest_observation):
         elif action == 'rules-metadata':
             schedule['coordination']['currentRules'] = _rtdb_get(
                 auth, 'v1/sites/{}/rules/current'.format(SITE_ID))
+            key_summary = _rules_pointer_key_summary(
+                schedule['coordination']['currentRules'])
+            if key_summary != schedule['lastRulesPointerKeySummary']:
+                schedule['lastRulesPointerKeySummary'] = key_summary
+                log('RTDB rules pointer read [M6.5 keys={}]'.format(key_summary))
             schedule['coordinationStage'] = 'commands'
         elif action == 'commands':
             commands = _rtdb_get(
@@ -1171,7 +1188,7 @@ def start():
         if _started:
             return False
         _started = True
-        log('CPU B release M6.2')
+        log('CPU B release M6.5: pointer-key diagnostics')
         _thread.start_new_thread(_worker, ())
         return True
     finally:
