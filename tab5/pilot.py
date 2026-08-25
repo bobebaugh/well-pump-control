@@ -1,4 +1,4 @@
-# Release: 2026-08-25 M6.5 — trace received rules-pointer field names safely.
+# Release: 2026-08-25 M6.6 — use the dedicated RTDB rules-pointer handoff.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -946,7 +946,7 @@ def check_touch_button(was_pressed):
 # --- boot sequence ---
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.5: pointer-key diagnostics')
+log('CPU A release M6.6: dedicated rules-pointer handoff')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:
@@ -1008,13 +1008,13 @@ while True:
     # CPU B exposes the RTDB pointer and later an exact downloaded body. CPU A
     # decides whether it is safe to request, validate, and adopt the release;
     # it never waits for either network operation.
-    sync_message = cloud.take_sync_message()
-    if isinstance(sync_message, dict):
-        metadata = validate_rules_metadata(sync_message.get('currentRules'))
-        if sync_message.get('currentRules') is not None and metadata is None:
-            log('Rules pointer ignored: {} [M6.5 keys={}]'.format(
-                rules_metadata_rejection_reason(sync_message.get('currentRules')),
-                rules_metadata_key_summary(sync_message.get('currentRules'))))
+    rules_pointer = cloud.take_rules_pointer()
+    if rules_pointer is not None:
+        metadata = validate_rules_metadata(rules_pointer)
+        if metadata is None:
+            log('Rules pointer ignored: {} [M6.6 keys={}]'.format(
+                rules_metadata_rejection_reason(rules_pointer),
+                rules_metadata_key_summary(rules_pointer)))
         if (metadata is not None and
                 metadata.get('contentHash') != active_rules_reference.get('contentHash') and
                 time.ticks_diff(now, next_rules_request_ms) >= 0):

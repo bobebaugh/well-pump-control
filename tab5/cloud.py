@@ -1,4 +1,4 @@
-# Release: 2026-08-25 M6.5 — transport rules bytes and trace RTDB pointer keys.
+# Release: 2026-08-25 M6.6 — use a dedicated RTDB rules-pointer handoff.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -359,6 +359,9 @@ _rules_lock = _thread.allocate_lock()
 _pending_rules_request = None
 _pending_rules_release = None
 
+_rules_pointer_lock = _thread.allocate_lock()
+_pending_rules_pointer = None
+
 _session_id = _new_session_id()
 _sync_sequence = 0
 
@@ -519,6 +522,28 @@ def take_rules_release():
         return candidate
     finally:
         _rules_lock.release()
+
+
+def take_rules_pointer():
+    """Transfer the latest RTDB rules pointer to CPU A independently of bootstrap."""
+    global _pending_rules_pointer
+    _rules_pointer_lock.acquire()
+    try:
+        pointer = _pending_rules_pointer
+        _pending_rules_pointer = None
+        return pointer
+    finally:
+        _rules_pointer_lock.release()
+
+
+def _queue_rules_pointer(pointer):
+    """Keep only the newest unmodified RTDB pointer for CPU A validation."""
+    global _pending_rules_pointer
+    _rules_pointer_lock.acquire()
+    try:
+        _pending_rules_pointer = pointer
+    finally:
+        _rules_pointer_lock.release()
 
 
 def _take_rules_request():
@@ -967,11 +992,12 @@ def _run_rtdb_step(schedule, latest_observation):
         elif action == 'rules-metadata':
             schedule['coordination']['currentRules'] = _rtdb_get(
                 auth, 'v1/sites/{}/rules/current'.format(SITE_ID))
+            _queue_rules_pointer(schedule['coordination']['currentRules'])
             key_summary = _rules_pointer_key_summary(
                 schedule['coordination']['currentRules'])
             if key_summary != schedule['lastRulesPointerKeySummary']:
                 schedule['lastRulesPointerKeySummary'] = key_summary
-                log('RTDB rules pointer read [M6.5 keys={}]'.format(key_summary))
+                log('RTDB rules pointer read [M6.6 keys={}]'.format(key_summary))
             schedule['coordinationStage'] = 'commands'
         elif action == 'commands':
             commands = _rtdb_get(
@@ -1188,7 +1214,7 @@ def start():
         if _started:
             return False
         _started = True
-        log('CPU B release M6.5: pointer-key diagnostics')
+        log('CPU B release M6.6: dedicated rules-pointer handoff')
         _thread.start_new_thread(_worker, ())
         return True
     finally:

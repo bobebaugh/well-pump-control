@@ -118,6 +118,7 @@ class CloudTransportTests(unittest.TestCase):
         self.requests.calls.clear()
         self.cloud._pending_rules_request = None
         self.cloud._pending_rules_release = None
+        self.cloud._pending_rules_pointer = None
 
     def test_retry_delay_is_exponential_and_bounded(self):
         self.assertEqual(self.cloud._retry_delay_ms(1), 5000)
@@ -181,6 +182,14 @@ class CloudTransportTests(unittest.TestCase):
             self.cloud._rules_pointer_key_summary(None),
             "not-an-object",
         )
+
+    def test_rules_pointer_uses_its_own_latest_value_handoff(self):
+        first = {"releaseId": "first"}
+        latest = {"releaseId": "latest"}
+        self.cloud._queue_rules_pointer(first)
+        self.cloud._queue_rules_pointer(latest)
+        self.assertIs(self.cloud.take_rules_pointer(), latest)
+        self.assertIsNone(self.cloud.take_rules_pointer())
 
     def test_durable_transport_posts_exact_record_and_accepts_duplicate(self):
         record = {
