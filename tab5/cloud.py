@@ -1,4 +1,4 @@
-# Release: 2026-08-25 — transport rules-release bytes to CPU A unchanged.
+# Release: 2026-08-25 M6.1 — transport CPU A rules bytes; avoid 1 Hz download starvation.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -530,6 +530,16 @@ def _take_rules_request():
         return metadata
     finally:
         _rules_lock.release()
+
+
+def _rules_download_may_follow_rtdb(rtdb_action):
+    """A rare requested package may follow only disposable current transport.
+
+    A new current observation exists every second, so waiting for a completely
+    idle RTDB pass would starve a requested M6 release indefinitely. Never
+    run after a coordination/presence/bootstrap action; those retain priority.
+    """
+    return rtdb_action in (None, 'current-observation')
 
 
 def _queue_rules_release(metadata, raw_release):
@@ -1126,9 +1136,11 @@ def _run():
                 rtdb_action = _run_rtdb_step(rtdb_schedule, latest_observation)
                 durable_yield_to_rtdb = False
                 # Rules bytes are lower priority than legacy telemetry,
-                # durable records, and the bounded RTDB coordination step.
+                # durable records, and RTDB coordination. A continuous 1 Hz
+                # disposable-current stream is the one safe exception: serve
+                # one pending package after that update so it cannot starve.
                 # CPU B neither parses nor validates the rules package.
-                if rtdb_action is None:
+                if _rules_download_may_follow_rtdb(rtdb_action):
                     metadata = _take_rules_request()
                     if metadata is not None:
                         try:

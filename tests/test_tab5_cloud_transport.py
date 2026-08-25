@@ -165,6 +165,12 @@ class CloudTransportTests(unittest.TestCase):
         finally:
             self.cloud._pending_durable_records = original
 
+    def test_pending_rules_download_can_follow_disposable_current_only(self):
+        self.assertTrue(self.cloud._rules_download_may_follow_rtdb(None))
+        self.assertTrue(self.cloud._rules_download_may_follow_rtdb("current-observation"))
+        self.assertFalse(self.cloud._rules_download_may_follow_rtdb("rules-metadata"))
+        self.assertFalse(self.cloud._rules_download_may_follow_rtdb("commands"))
+
     def test_durable_transport_posts_exact_record_and_accepts_duplicate(self):
         record = {
             "schemaVersion": 1,
