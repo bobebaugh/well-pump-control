@@ -306,6 +306,7 @@ def set_charge_enable(enable):
 wifi_connected = False
 network_traffic_allowed = False
 shelly_resume_confirmation_pending = True
+shelly1_resume_confirmation_pending = True
 
 
 # --- Shelly reads ---
@@ -1063,6 +1064,7 @@ while True:
      wifi_driver_status, wifi_ip, wifi_disconnect_events) = cloud.status_snapshot()
     if wifi_connected and not was_connected:
         shelly_resume_confirmation_pending = True
+        shelly1_resume_confirmation_pending = True
 
     # CPU B exposes the RTDB pointer and later an exact downloaded body. CPU A
     # decides whether it is safe to request, validate, and adopt the release;
@@ -1173,6 +1175,11 @@ while True:
         else:
             last_valid_shelly1 = shelly1_sample
             last_valid_shelly1_ms = now
+            if shelly1_resume_confirmation_pending:
+                log('Shelly 1 polling confirmed: SW0={}, RLY0={}'.format(
+                    'ON' if shelly1_sample['sw0'] else 'OFF',
+                    'ON' if shelly1_sample['rly0'] else 'OFF'))
+                shelly1_resume_confirmation_pending = False
 
     observation = build_observation(
         observation_sequence, now, clock_synced,
