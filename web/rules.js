@@ -80,6 +80,13 @@ function validateDraft() {
 
 function draftChanged(index) { return !sameValue(draft[index], baseline[index]); }
 
+function recalculateChanged() {
+  changed = new Set();
+  draft.forEach((rule, index) => {
+    if (draftChanged(index)) changed.add(index);
+  });
+}
+
 function renderList() {
   const filter = document.querySelector("#rule-filter").value;
   ruleList.replaceChildren();
@@ -132,7 +139,7 @@ function formRule() {
 
 function applyForm() {
   draft[selected] = formRule();
-  if (draftChanged(selected)) changed.add(selected); else changed.delete(selected);
+  recalculateChanged();
   renderList();
   publishButton.disabled = changed.size === 0;
   downloadButton.disabled = false;
@@ -194,4 +201,4 @@ document.querySelector("#download-draft").addEventListener("click", downloadDraf
 document.querySelector("#publish-rules").addEventListener("click", publishRules);
 document.querySelector("#rule-filter").addEventListener("change", renderList);
 document.querySelector("#rule-form").addEventListener("submit", event => { event.preventDefault(); try { applyForm(); } catch (error) { setStatus(error.message, "error"); } });
-document.querySelector("#reset-rule").addEventListener("click", () => { draft[selected] = clone(baseline[selected]); changed.delete(selected); loadForm(); renderList(); publishButton.disabled = changed.size === 0; setStatus("Selected rule reset to the published value.", "ok"); });
+document.querySelector("#reset-rule").addEventListener("click", () => { draft[selected] = clone(baseline[selected]); recalculateChanged(); loadForm(); renderList(); publishButton.disabled = changed.size === 0; setStatus("Selected rule reset to the published value.", "ok"); });
