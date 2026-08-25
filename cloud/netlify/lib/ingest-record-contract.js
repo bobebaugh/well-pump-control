@@ -14,6 +14,7 @@ const SESSION_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const EVENT_ID_PATTERN = /^[0-9]{14}-[a-z0-9][a-z0-9-]{0,63}-[A-Za-z0-9_-]{8,64}-[0-9]{10}$/;
 const COMMAND_ID_PATTERN = /^[0-9]{14}-command-[A-Za-z0-9_-]{8,64}-[0-9]{10}$/;
+const RULE_RELEASE_ID_PATTERN = /^[0-9]{14}-rules-v[0-9]+$/;
 const RFC3339_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})$/;
 const PUBLISH_REASONS = new Set(["material-change", "maximum-interval", "event-boundary", "manual"]);
 const CLOSE_REASONS = new Set([
@@ -101,7 +102,7 @@ function validateCommon(value) {
   requireCondition(isPlainObject(value), "body");
   validateSafeTree(value);
   requireCondition(value.schemaVersion === 1, "schemaVersion", "unsupported_schema_version");
-  requireCondition(["observation", "event-open", "event-close"].includes(value.recordType), "recordType");
+  requireCondition(["observation", "event-open", "event-close", "rule-adoption", "rule-rejection"].includes(value.recordType), "recordType");
   requireCondition(typeof value.recordId === "string", "recordId");
   requireCondition(typeof value.siteId === "string" && ID_PATTERN.test(value.siteId), "siteId");
   requireCondition(typeof value.deviceId === "string" && ID_PATTERN.test(value.deviceId), "deviceId");
@@ -159,10 +160,28 @@ function validateEvent(value) {
   }
 }
 
+function validateRuleAudit(value) {
+  ["releaseId", "actor"].forEach(field => requireCondition(Object.hasOwn(value, field), field));
+  requireCondition(typeof value.releaseId === "string" && RULE_RELEASE_ID_PATTERN.test(value.releaseId), "releaseId");
+  validateActor(value.actor);
+  requireCondition(value.actor.type === "device", "actor.type");
+  const expected = `${utcPrefix(value.observedAt)}-${value.recordType}-${value.sessionId}-${sequenceText(value.sequence)}`;
+  requireCondition(value.recordId === expected, "recordId");
+  if (value.recordType === "rule-adoption") {
+    requireCondition(isPlainObject(value.activeRules), "activeRules");
+    validateRulesReference(value.activeRules, "activeRules");
+    requireCondition(value.activeRules.version === value.rulesRelease.version, "activeRules.version");
+    requireCondition(value.activeRules.contentHash === value.rulesRelease.contentHash, "activeRules.contentHash");
+  } else {
+    requireCondition(typeof value.rejectionReason === "string" && value.rejectionReason.length >= 1 && value.rejectionReason.length <= 128, "rejectionReason");
+  }
+}
+
 function validateIngestRecord(value) {
   validateCommon(value);
   if (value.recordType === "observation") validateObservation(value);
-  else validateEvent(value);
+  else if (value.recordType === "event-open" || value.recordType === "event-close") validateEvent(value);
+  else validateRuleAudit(value);
   return value;
 }
 

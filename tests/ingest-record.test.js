@@ -12,6 +12,26 @@ const readJson = relative => JSON.parse(readFileSync(path.join(root, relative), 
 const observation = readJson("contracts/examples/v1/durable-observation.json");
 const eventOpen = readJson("contracts/examples/v1/event-open.json");
 const eventClose = readJson("contracts/examples/v1/event-close.json");
+const ruleAdoption = {
+  schemaVersion: 1,
+  recordType: "rule-adoption",
+  recordId: "20260825000042-rule-adoption-boot_A7f93k2Q-0000000042",
+  siteId: "well-main",
+  deviceId: "tab5-well-main",
+  sessionId: "boot_A7f93k2Q",
+  sequence: 42,
+  observedAt: "2026-08-25T00:00:42Z",
+  rulesRelease: {
+    version: 1,
+    contentHash: "ee0220eebdd0fa9b3b9751435180c17a16d3c93cb5f7325f1ab74d8d132e410a"
+  },
+  releaseId: "20260825000000-rules-v1",
+  activeRules: {
+    version: 1,
+    contentHash: "ee0220eebdd0fa9b3b9751435180c17a16d3c93cb5f7325f1ab74d8d132e410a"
+  },
+  actor: { type: "device", id: "tab5-well-main" }
+};
 
 class FakeTimestamp {
   constructor(date) { this.date = date; }
@@ -91,6 +111,24 @@ test("stores event openings and closings as separate records sharing eventId", a
   assert.equal(records.get(opened.document).eventId, eventOpen.eventId);
   assert.equal(records.get(closed.document).eventId, eventOpen.eventId);
   assert.notEqual(opened.recordId, closed.recordId);
+});
+
+test("stores rules adoption and rejection audit records without creating event lifecycle state", async () => {
+  const { handler, records } = makeHandler();
+  const adopted = await handler(request(ruleAdoption));
+  assert.equal(adopted.statusCode, 201);
+  const rejectedRecord = {
+    ...ruleAdoption,
+    recordType: "rule-rejection",
+    recordId: "20260825000043-rule-rejection-boot_A7f93k2Q-0000000043",
+    sequence: 43,
+    observedAt: "2026-08-25T00:00:43Z",
+    rejectionReason: "release-hash-mismatch"
+  };
+  delete rejectedRecord.activeRules;
+  const rejected = await handler(request(rejectedRecord));
+  assert.equal(rejected.statusCode, 201);
+  assert.equal(records.size, 2);
 });
 
 test("accepts a close before its independently retried opening without creating lifecycle state", async () => {

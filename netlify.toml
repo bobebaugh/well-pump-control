@@ -4,6 +4,13 @@
 
 [functions]
   node_bundler = "esbuild"
+  included_files = ["cloud/netlify/rules-releases/**"]
+
+[[redirects]]
+  from = "/.netlify/functions/rules-release/:releaseId"
+  to = "/.netlify/functions/rules-release?releaseId=:releaseId"
+  status = 200
+  force = true
 
 [[headers]]
   for = "/*"

@@ -15,7 +15,8 @@ const schemas = [
   "contracts/event-record-v1.schema.json",
   "contracts/device-command-v1.schema.json",
   "contracts/device-sync-v1.schema.json",
-  "contracts/rules-release-metadata-v1.schema.json"
+  "contracts/rules-release-metadata-v1.schema.json",
+  "contracts/rules-package-v1.schema.json"
 ];
 
 const examples = [
@@ -26,7 +27,8 @@ const examples = [
   ["contracts/device-command-v1.schema.json", "contracts/examples/v1/device-command.json"],
   ["contracts/device-sync-v1.schema.json", "contracts/examples/v1/device-sync-request.json"],
   ["contracts/device-sync-v1.schema.json", "contracts/examples/v1/device-sync-response.json"],
-  ["contracts/rules-release-metadata-v1.schema.json", "contracts/examples/v1/rules-release-metadata.json"]
+  ["contracts/rules-release-metadata-v1.schema.json", "contracts/examples/v1/rules-release-metadata.json"],
+  ["contracts/rules-package-v1.schema.json", "contracts/examples/v1/rules-package.json"]
 ];
 
 const schemaRegistry = new Map(schemas.flatMap(relative => {
@@ -74,11 +76,15 @@ function validate(schema, value, rootSchema = schema, location = "$") {
     object: isObject,
     array: Array.isArray(value),
     string: typeof value === "string",
+    null: value === null,
     boolean: typeof value === "boolean",
     number: typeof value === "number" && Number.isFinite(value),
     integer: Number.isInteger(value)
   };
-  if (schema.type && !types[schema.type]) return [...errors, `${location} is not ${schema.type}`];
+  if (schema.type) {
+    const expectedTypes = Array.isArray(schema.type) ? schema.type : [schema.type];
+    if (!expectedTypes.some(type => types[type])) return [...errors, `${location} is not ${expectedTypes.join(" or ")}`];
+  }
   if (schema.const !== undefined && !same(value, schema.const)) errors.push(`${location} is not the required constant`);
   if (schema.enum && !schema.enum.some(candidate => same(value, candidate))) errors.push(`${location} is not in enum`);
   if (typeof value === "number" && schema.minimum !== undefined && value < schema.minimum) errors.push(`${location} is below minimum`);
@@ -89,6 +95,8 @@ function validate(schema, value, rootSchema = schema, location = "$") {
     if (schema.format === "date-time" && !Number.isFinite(Date.parse(value))) errors.push(`${location} is not date-time`);
   }
   if (Array.isArray(value)) {
+    if (schema.minItems !== undefined && value.length < schema.minItems) errors.push(`${location} has too few items`);
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) errors.push(`${location} has too many items`);
     if (schema.uniqueItems && new Set(value.map(item => JSON.stringify(item))).size !== value.length) errors.push(`${location} has duplicate items`);
     if (schema.items) value.forEach((item, index) => errors.push(...validate(schema.items, item, rootSchema, `${location}[${index}]`)));
   }
