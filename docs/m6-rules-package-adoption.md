@@ -17,6 +17,10 @@ The package is derived from the current authoritative workbook `well_pump_operat
 
 CPU A verifies the pointer, the exact response-byte SHA-256, supported schema, release identity, 59-rule ordered completeness, and every required rule field in RAM. Only then does it write `.rules.json.download` and atomically rename it over `rules.json`. A malformed, incomplete, unsupported, mismatched, or failed replacement leaves the prior valid file in service and is retried no faster than once per minute when a changed RTDB pointer remains available.
 
+## Physical persistence evidence — 2026-08-25
+
+After the device reported adoption of `20260825010000-rules-v1`, the installed `rules.json` was downloaded back from Tab5 flash. The downloaded file was 17,942 bytes and was byte-for-byte identical to the published Netlify release. Its SHA-256 was `93eca75b9fbf774c10350580a8e0c116a733af6f6cd5274bdd7b29a698e05a08`, distinct from the flash-shipped baseline hash `ee0220eebdd0fa9b3b9751435180c17a16d3c93cb5f7325f1ab74d8d132e410a`. This confirms that the cloud release was persisted to the installed flash file rather than adopted only in RAM.
+
 The active release reference is placed on later durable observations. The installed baseline is checked before CPU A enters its device loop. There is therefore no ordinary offline state without a valid ruleset.
 
 ## Current delivery boundary
