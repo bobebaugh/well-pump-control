@@ -16,6 +16,7 @@ FUNCTIONS = {
     "_observation_path_value",
     "_numeric_material_change",
     "trimmed_mean_microvolts",
+    "normalize_shelly1_status",
     "build_observation",
     "new_event_history",
     "append_event_history",
@@ -91,12 +92,15 @@ def observation(sequence=1, power=1000.0, voltage=240.0, **changes):
             "is_valid": True,
             "battery_charging": True,
             "battery_charge_enabled": True,
+            "shelly1_sw0": None,
+            "shelly1_rly0": None,
             "futureSensor": {"value": 12},
         },
         "status": {
             "shelly_available": True,
             "adc_available": True,
             "battery_available": True,
+            "shelly1_available": False,
             "clock_synced": True,
         },
         "futureEnvelope": ["preserved"],
@@ -158,6 +162,18 @@ class ObservationSelectionTests(unittest.TestCase):
         self.assertEqual(filtered, 4832208)
         with self.assertRaises(ValueError):
             self.logic["trimmed_mean_microvolts"]([1, 2, 3, 4])
+
+    def test_shelly1_status_normalizes_only_gen1_boolean_state(self):
+        normalize = self.logic["normalize_shelly1_status"]
+        self.assertEqual(normalize({
+            "relays": [{"ison": False}],
+            "inputs": [{"input": 1}],
+        }), {"sw0": True, "rly0": False})
+        self.assertIsNone(normalize({"relays": [], "inputs": []}))
+        self.assertIsNone(normalize({
+            "relays": [{"ison": "off"}],
+            "inputs": [{"input": 0}],
+        }))
 
     def test_transient_shelly_poll_failures_do_not_select_durable_records(self):
         confirmation = self.logic["new_shelly_availability_confirmation"](3)
@@ -245,6 +261,22 @@ class ObservationSelectionTests(unittest.TestCase):
         current = observation(2)
         current["status"]["adc_available"] = False
         self.assertEqual(self.reason(current, previous, 1000), "material-change")
+
+    def test_shelly1_sw0_and_rly0_changes_are_material(self):
+        previous = observation()
+        previous["values"].update({"shelly1_sw0": False, "shelly1_rly0": False})
+        current = observation(2)
+        current["values"].update({"shelly1_sw0": True, "shelly1_rly0": False})
+        self.assertEqual(self.reason(current, previous, 1000), "material-change")
+
+    def test_one_missed_shelly1_poll_is_not_a_state_change(self):
+        previous = observation()
+        previous["values"].update({"shelly1_sw0": False, "shelly1_rly0": False})
+        previous["status"]["shelly1_available"] = True
+        current = observation(2)
+        current["values"].update({"shelly1_sw0": None, "shelly1_rly0": None})
+        current["status"]["shelly1_available"] = False
+        self.assertIsNone(self.reason(current, previous, 1000))
 
     def test_maximum_interval_defaults_to_ten_minutes(self):
         previous = observation()
