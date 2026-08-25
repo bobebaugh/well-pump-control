@@ -1,4 +1,4 @@
-# Release: 2026-08-25 M6.2 — validate rules releases and report CPU A startup.
+# Release: 2026-08-25 M6.3 — accept integral MicroPython rules timestamps.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -634,12 +634,16 @@ def validate_rules_metadata(metadata):
         return None
     if metadata.get('rulesSchemaVersion') != 1 or metadata.get('hashAlgorithm') != 'sha256':
         return None
+    published_at_ms = metadata.get('publishedAtMs')
+    published_at_is_integral = (
+        isinstance(published_at_ms, int) and not isinstance(published_at_ms, bool) or
+        isinstance(published_at_ms, float) and published_at_ms >= 0 and
+        published_at_ms == int(published_at_ms)
+    )
     if (not isinstance(metadata.get('rulesVersion'), int) or
             isinstance(metadata.get('rulesVersion'), bool) or
             metadata.get('rulesVersion') < 1 or
-            not isinstance(metadata.get('publishedAtMs'), int) or
-            isinstance(metadata.get('publishedAtMs'), bool) or
-            metadata.get('publishedAtMs') < 0 or
+            not published_at_is_integral or published_at_ms < 0 or
             not _valid_rules_hash(metadata.get('contentHash'))):
         return None
     if not _valid_rules_release_id(metadata.get('releaseId'), metadata.get('rulesVersion')):
@@ -916,7 +920,7 @@ def check_touch_button(was_pressed):
 # --- boot sequence ---
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.2')
+log('CPU A release M6.3')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:

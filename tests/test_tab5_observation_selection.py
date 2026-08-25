@@ -351,6 +351,11 @@ class ObservationSelectionTests(unittest.TestCase):
             self.logic["validate_rules_metadata"](metadata)["releaseId"],
             metadata["releaseId"],
         )
+        metadata["publishedAtMs"] = float(metadata["publishedAtMs"])
+        self.assertEqual(
+            self.logic["validate_rules_metadata"](metadata)["releaseId"],
+            metadata["releaseId"],
+        )
 
     def test_rules_adoption_and_rejection_audits_have_deterministic_records(self):
         reference = self.logic["PACKAGED_RULES_REFERENCE"]
