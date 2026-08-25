@@ -71,7 +71,7 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
 
 .status-strip {
   display: grid;
-  grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(120px, 1fr));
+  grid-template-columns: minmax(220px, 1.6fr) repeat(5, minmax(110px, 1fr));
   border: 1px solid var(--line);
   border-radius: var(--radius);
   overflow: hidden;
@@ -86,6 +86,9 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
 .metric p { margin-bottom: 9px; color: var(--muted); font-size: .72rem; }
 .metric strong { font-size: 1.55rem; font-variant-numeric: tabular-nums; }
 .metric span { color: var(--muted); font-size: .78rem; }
+.binary-value.on { color: var(--green); }
+.binary-value.off { color: #9fb1c5; }
+.binary-value.unknown { color: var(--muted); }
 
 .workspace {
   margin-top: 18px;
