@@ -8,7 +8,7 @@ CPU A remains the sole materiality authority. CPU B accepts a complete selected 
 
 ## Selection contract
 
-- CPU A constructs one matched observation per one-second loop. When Shelly polling is unavailable, its current Shelly values are `null`, availability is false, and last-valid timing remains explicit; the last valid sample continues to drive the HMI and legacy Netlify path.
+- CPU A constructs one matched observation per one-second loop. ADS1110 input uses five properly spaced 15-SPS conversions, discards one high and one low outlier, and averages the middle three before placing `adc_microvolts` in the matched observation. When Shelly polling is unavailable, its current Shelly values are `null`, availability is false, and last-valid timing remains explicit; the last valid sample continues to drive the HMI and legacy Netlify path.
 - A bounded 600-sample RAM ring retains the current event-working window independently of the last durable selection. It is not persisted and performs no M6/M7 rule or event evaluation.
 - The first observation with a valid synchronized UTC timestamp is selected as `material-change`.
 - Numeric thresholds are parameterized by observation field path. The pre-M6 defaults are 50 W active power, 2 V line voltage, 25,000 microvolts ADC input, 0.1 V battery voltage, 0.1 A battery current, and 1 percent battery level.

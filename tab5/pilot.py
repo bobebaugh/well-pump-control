@@ -1,4 +1,4 @@
-# Release: 2026-08-24 — debounce transient Shelly availability selection on CPU A.
+# Release: 2026-08-24 — debounce Shelly and trim ADC samples on CPU A.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -32,6 +32,8 @@ DEVICE_ID = 'tab5-well-main'
 MAX_DURABLE_OBSERVATION_INTERVAL_MS = 600000
 EVENT_HISTORY_DEPTH = 600
 SHELLY_AVAILABILITY_CONFIRMATION_SAMPLES = 3
+ADC_FILTER_SAMPLE_COUNT = 5
+ADC_FILTER_SAMPLE_SPACING_MS = 70
 MATERIAL_NUMERIC_THRESHOLDS = {
     'values.power': 50.0,
     'values.voltage': 2.0,
@@ -200,7 +202,8 @@ def init_adc():
 init_adc()
 
 
-def read_ads1110_microvolts():
+def _read_ads1110_microvolts_once():
+    """Read one current ADS1110 conversion, with the established reinit retry."""
     global adc
     if adc is None:
         return None
@@ -224,6 +227,35 @@ def read_ads1110_microvolts():
         except Exception as e2:
             log('ADS1110 read failed after reinit: {}'.format(e2))
         return None
+
+
+def trimmed_mean_microvolts(samples):
+    """Discard one high and one low value, then average the middle samples."""
+    if (not isinstance(samples, list) or
+            len(samples) != ADC_FILTER_SAMPLE_COUNT):
+        raise ValueError('expected exactly {} ADC samples'.format(
+            ADC_FILTER_SAMPLE_COUNT))
+    for value in samples:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError('ADC samples must be integer microvolts')
+    ordered = list(samples)
+    ordered.sort()
+    return sum(ordered[1:-1]) // (ADC_FILTER_SAMPLE_COUNT - 2)
+
+
+def read_ads1110_microvolts():
+    """Use five fresh 15-SPS conversions to reject one high and one low outlier."""
+    samples = []
+    for index in range(ADC_FILTER_SAMPLE_COUNT):
+        value = _read_ads1110_microvolts_once()
+        if value is None:
+            return None
+        samples.append(value)
+        if index + 1 < ADC_FILTER_SAMPLE_COUNT:
+            # ADS1110 15 SPS conversions are 66.7 ms apart. This makes each
+            # retained input a new conversion without overrunning the 1 Hz loop.
+            time.sleep_ms(ADC_FILTER_SAMPLE_SPACING_MS)
+    return trimmed_mean_microvolts(samples)
 
 
 def read_battery():

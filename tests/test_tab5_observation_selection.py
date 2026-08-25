@@ -12,6 +12,7 @@ FUNCTIONS = {
     "format_observed_at",
     "_observation_path_value",
     "_numeric_material_change",
+    "trimmed_mean_microvolts",
     "build_observation",
     "new_event_history",
     "append_event_history",
@@ -29,6 +30,7 @@ CONSTANTS = {
     "MAX_DURABLE_OBSERVATION_INTERVAL_MS",
     "EVENT_HISTORY_DEPTH",
     "SHELLY_AVAILABILITY_CONFIRMATION_SAMPLES",
+    "ADC_FILTER_SAMPLE_COUNT",
     "MATERIAL_NUMERIC_THRESHOLDS",
     "MATERIAL_EXACT_CHANGE_PATHS",
     "PRE_M6_RULES_REFERENCE",
@@ -129,6 +131,14 @@ class ObservationSelectionTests(unittest.TestCase):
         self.assertIsNone(unavailable["values"]["power"])
         previous = observation()
         self.assertIsNone(self.reason(unavailable, previous, 1000))
+
+    def test_adc_trimmed_mean_discards_one_high_and_one_low_sample(self):
+        filtered = self.logic["trimmed_mean_microvolts"](
+            [4800000, 4826625, 4830000, 4840000, 4900000]
+        )
+        self.assertEqual(filtered, 4832208)
+        with self.assertRaises(ValueError):
+            self.logic["trimmed_mean_microvolts"]([1, 2, 3, 4])
 
     def test_transient_shelly_poll_failures_do_not_select_durable_records(self):
         confirmation = self.logic["new_shelly_availability_confirmation"](3)
