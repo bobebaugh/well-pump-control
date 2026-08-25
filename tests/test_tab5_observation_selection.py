@@ -16,6 +16,9 @@ FUNCTIONS = {
     "new_event_history",
     "append_event_history",
     "event_history_values",
+    "new_shelly_availability_confirmation",
+    "shelly_availability_change_pending",
+    "acknowledge_shelly_availability_change",
     "durable_observation_reason",
     "_record_timestamp_prefix",
     "build_durable_observation",
@@ -25,6 +28,7 @@ CONSTANTS = {
     "DEVICE_ID",
     "MAX_DURABLE_OBSERVATION_INTERVAL_MS",
     "EVENT_HISTORY_DEPTH",
+    "SHELLY_AVAILABILITY_CONFIRMATION_SAMPLES",
     "MATERIAL_NUMERIC_THRESHOLDS",
     "MATERIAL_EXACT_CHANGE_PATHS",
     "PRE_M6_RULES_REFERENCE",
@@ -124,7 +128,66 @@ class ObservationSelectionTests(unittest.TestCase):
         self.assertEqual(unavailable["status"]["shelly_age_ms"], 2000)
         self.assertIsNone(unavailable["values"]["power"])
         previous = observation()
-        self.assertEqual(self.reason(unavailable, previous, 1000), "material-change")
+        self.assertIsNone(self.reason(unavailable, previous, 1000))
+
+    def test_transient_shelly_poll_failures_do_not_select_durable_records(self):
+        confirmation = self.logic["new_shelly_availability_confirmation"](3)
+        confirm = self.logic["shelly_availability_change_pending"]
+        for available in (True, True, True, False, True, False, True):
+            self.assertFalse(confirm(confirmation, available))
+        previous = observation()
+        unavailable = observation(8)
+        unavailable["status"]["shelly_available"] = False
+        unavailable["values"]["is_valid"] = None
+        self.assertIsNone(self.reason(unavailable, previous, 1000))
+
+    def test_confirmed_shelly_availability_transitions_select_once(self):
+        confirmation = self.logic["new_shelly_availability_confirmation"](3)
+        confirm = self.logic["shelly_availability_change_pending"]
+        acknowledge = self.logic["acknowledge_shelly_availability_change"]
+        for _ in range(3):
+            self.assertFalse(confirm(confirmation, True))
+        self.assertFalse(confirm(confirmation, False))
+        self.assertFalse(confirm(confirmation, False))
+        self.assertTrue(confirm(confirmation, False))
+        previous = observation()
+        unavailable = observation(8)
+        unavailable["status"]["shelly_available"] = False
+        unavailable["values"]["is_valid"] = None
+        self.assertEqual(self.reason(
+            unavailable, previous, 3000,
+            confirmed_shelly_availability_change=True),
+            "material-change",
+        )
+        acknowledge(confirmation)
+        self.assertFalse(confirm(confirmation, False))
+        self.assertFalse(confirm(confirmation, True))
+        self.assertFalse(confirm(confirmation, True))
+        self.assertTrue(confirm(confirmation, True))
+
+    def test_confirmed_availability_change_retries_until_cpu_b_accepts(self):
+        confirmation = self.logic["new_shelly_availability_confirmation"](3)
+        confirm = self.logic["shelly_availability_change_pending"]
+        acknowledge = self.logic["acknowledge_shelly_availability_change"]
+        for _ in range(3):
+            self.assertFalse(confirm(confirmation, True))
+        for _ in range(3):
+            pending = confirm(confirmation, False)
+        self.assertTrue(pending)
+        previous = observation()
+        unavailable = observation(8)
+        unavailable["status"]["shelly_available"] = False
+        unavailable["values"]["is_valid"] = None
+        # A full CPU B FIFO rejects this attempt, so the transition is retained.
+        self.assertEqual(self.reason(
+            unavailable, previous, 3000,
+            confirmed_shelly_availability_change=pending),
+            "material-change",
+        )
+        self.assertTrue(confirm(confirmation, False))
+        # Once CPU B accepts a later exact CPU A record, no duplicate remains.
+        acknowledge(confirmation)
+        self.assertFalse(confirm(confirmation, False))
 
     def test_event_working_history_is_bounded_and_independent(self):
         history = self.logic["new_event_history"](3)

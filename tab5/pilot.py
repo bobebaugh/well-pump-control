@@ -31,6 +31,7 @@ SITE_ID = 'well-main'
 DEVICE_ID = 'tab5-well-main'
 MAX_DURABLE_OBSERVATION_INTERVAL_MS = 600000
 EVENT_HISTORY_DEPTH = 600
+SHELLY_AVAILABILITY_CONFIRMATION_SAMPLES = 3
 MATERIAL_NUMERIC_THRESHOLDS = {
     'values.power': 50.0,
     'values.voltage': 2.0,
@@ -40,10 +41,8 @@ MATERIAL_NUMERIC_THRESHOLDS = {
     'values.battery_percent': 1.0,
 }
 MATERIAL_EXACT_CHANGE_PATHS = (
-    'values.is_valid',
     'values.battery_charging',
     'values.battery_charge_enabled',
-    'status.shelly_available',
     'status.adc_available',
     'status.battery_available',
     'status.clock_synced',
@@ -363,6 +362,50 @@ def event_history_values(history):
     return [samples[(start + offset) % len(samples)] for offset in range(count)]
 
 
+def new_shelly_availability_confirmation(
+        required_samples=SHELLY_AVAILABILITY_CONFIRMATION_SAMPLES):
+    """Keep transient Shelly poll failures out of the durable log."""
+    if (not isinstance(required_samples, int) or
+            isinstance(required_samples, bool) or required_samples < 1):
+        raise ValueError('required_samples must be a positive integer')
+    return {
+        'stable': None,
+        'pending': None,
+        'pendingCount': 0,
+        'materialChangePending': False,
+        'requiredSamples': required_samples,
+    }
+
+
+def shelly_availability_change_pending(confirmation, available):
+    """Confirm a raw availability change and retain it until CPU B accepts it."""
+    if not isinstance(available, bool):
+        raise ValueError('available must be boolean')
+    if confirmation['stable'] == available:
+        confirmation['pending'] = None
+        confirmation['pendingCount'] = 0
+        return confirmation['materialChangePending']
+    elif confirmation['pending'] != available:
+        confirmation['pending'] = available
+        confirmation['pendingCount'] = 1
+    else:
+        confirmation['pendingCount'] += 1
+    if confirmation['pendingCount'] < confirmation['requiredSamples']:
+        return confirmation['materialChangePending']
+    changed = confirmation['stable'] is not None
+    confirmation['stable'] = available
+    confirmation['pending'] = None
+    confirmation['pendingCount'] = 0
+    if changed:
+        confirmation['materialChangePending'] = True
+    return confirmation['materialChangePending']
+
+
+def acknowledge_shelly_availability_change(confirmation):
+    """Clear a confirmed transition only after its durable record is queued."""
+    confirmation['materialChangePending'] = False
+
+
 def _observation_path_value(observation, path):
     value = observation
     for part in path.split('.'):
@@ -383,7 +426,8 @@ def _numeric_material_change(current, previous, threshold):
 def durable_observation_reason(observation, previous, elapsed_ms,
                                numeric_thresholds=None,
                                exact_change_paths=None,
-                               maximum_interval_ms=MAX_DURABLE_OBSERVATION_INTERVAL_MS):
+                               maximum_interval_ms=MAX_DURABLE_OBSERVATION_INTERVAL_MS,
+                               confirmed_shelly_availability_change=False):
     """Return CPU A's sparse durable-selection reason, or None.
 
     The complete one-second observation stays in RAM unless a configured
@@ -398,6 +442,8 @@ def durable_observation_reason(observation, previous, elapsed_ms,
         numeric_thresholds = MATERIAL_NUMERIC_THRESHOLDS
     if exact_change_paths is None:
         exact_change_paths = MATERIAL_EXACT_CHANGE_PATHS
+    if confirmed_shelly_availability_change:
+        return 'material-change'
     for path in exact_change_paths:
         if (_observation_path_value(observation, path) !=
                 _observation_path_value(previous, path)):
@@ -612,6 +658,7 @@ last_battery_poll_ms = -BATTERY_POLL_PERIOD_MS
 observation_sequence = 0
 device_session_id = cloud.device_session_id()
 event_history = new_event_history()
+shelly_availability_confirmation = new_shelly_availability_confirmation()
 last_durable_observation = None
 last_durable_observation_ms = None
 
@@ -684,6 +731,9 @@ while True:
         wifi_connected, network_traffic_allowed, wifi_driver_status,
         wifi_ip, wifi_disconnect_events, sample_failure_count)
     append_event_history(event_history, observation)
+    shelly_availability_pending = shelly_availability_change_pending(
+        shelly_availability_confirmation,
+        observation['status']['shelly_available'])
     cloud.submit_observation(observation)
     elapsed_since_durable_ms = None
     if last_durable_observation_ms is not None:
@@ -691,7 +741,8 @@ while True:
             now, last_durable_observation_ms)
     durable_reason = durable_observation_reason(
         observation, last_durable_observation,
-        elapsed_since_durable_ms)
+        elapsed_since_durable_ms,
+        confirmed_shelly_availability_change=shelly_availability_pending)
     if durable_reason is not None:
         durable_record = build_durable_observation(
             observation, device_session_id, durable_reason)
@@ -699,6 +750,9 @@ while True:
                 cloud.submit_durable_record(durable_record)):
             last_durable_observation = observation
             last_durable_observation_ms = now
+            if shelly_availability_pending:
+                acknowledge_shelly_availability_change(
+                    shelly_availability_confirmation)
             log('Durable observation selected: sequence={}, reason={}'.format(
                 observation_sequence, durable_reason))
 
