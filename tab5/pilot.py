@@ -1,4 +1,4 @@
-# Release: 2026-08-24 — select sparse durable observations on CPU A.
+# Release: 2026-08-24 — debounce transient Shelly availability selection on CPU A.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
