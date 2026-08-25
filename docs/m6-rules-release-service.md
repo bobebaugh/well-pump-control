@@ -8,3 +8,7 @@ This nondeploying pilot-branch candidate completes the cloud half of M6 without 
 - `contracts/rules-package-v1.schema.json` and its full release example are the shared web/Tab5 validation contract. Both implementations also enforce the ordered 59-rule workbook completeness list noted in the schema extension.
 
 No cloud deployment is authorized by this branch. Before a physical M6 test, review and deploy this cloud candidate to `pilot`, then set the RTDB current pointer exactly to `cloud/netlify/rules-releases/current.json` through the approved publication path. The Tab5 candidate remains safe offline with its packaged baseline if that pointer is absent or invalid.
+
+## Physical-acceptance release
+
+`20260825010000-rules-v1` is a byte-distinct, semantically unchanged, all-disabled copy of the packaged v1 rules. It exists solely to exercise M6's authenticated download, exact-hash validation, atomic replacement, and durable adoption-audit path. It does not enable, evaluate, alert on, or control any rule.

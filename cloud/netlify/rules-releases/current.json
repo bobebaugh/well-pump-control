@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "siteId": "well-main",
-  "releaseId": "20260825000000-rules-v1",
+  "releaseId": "20260825010000-rules-v1",
   "rulesVersion": 1,
   "rulesSchemaVersion": 1,
-  "contentHash": "ee0220eebdd0fa9b3b9751435180c17a16d3c93cb5f7325f1ab74d8d132e410a",
+  "contentHash": "93eca75b9fbf774c10350580a8e0c116a733af6f6cd5274bdd7b29a698e05a08",
   "hashAlgorithm": "sha256",
-  "publishedAtMs": 1787616000000,
-  "downloadPath": "/.netlify/functions/rules-release/20260825000000-rules-v1.json"
+  "publishedAtMs": 1787619600000,
+  "downloadPath": "/.netlify/functions/rules-release/20260825010000-rules-v1.json"
 }
