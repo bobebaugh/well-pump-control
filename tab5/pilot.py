@@ -1,4 +1,4 @@
-# Release: 2026-08-25 M6.6 — use the dedicated RTDB rules-pointer handoff.
+# Release: 2026-08-25 M6.7 — report adopted rules and preserve rules audits.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -946,7 +946,7 @@ def check_touch_button(was_pressed):
 # --- boot sequence ---
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.6: dedicated rules-pointer handoff')
+log('CPU A release M6.7: adopted-rules reporting and audit priority')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:
@@ -955,6 +955,8 @@ if _installed_rules is None:
     raise RuntimeError('validated rules baseline unavailable: {}'.format(_rules_error))
 active_rules = _installed_rules['package']
 active_rules_reference = _installed_rules['reference']
+if not cloud.set_applied_rules(active_rules_reference):
+    raise RuntimeError('validated rules baseline handoff failed')
 log('Rules baseline loaded: version={}, hash={}'.format(
     active_rules_reference['version'], active_rules_reference['contentHash'][:12]))
 
@@ -1012,7 +1014,7 @@ while True:
     if rules_pointer is not None:
         metadata = validate_rules_metadata(rules_pointer)
         if metadata is None:
-            log('Rules pointer ignored: {} [M6.6 keys={}]'.format(
+            log('Rules pointer ignored: {} [M6.7 keys={}]'.format(
                 rules_metadata_rejection_reason(rules_pointer),
                 rules_metadata_key_summary(rules_pointer)))
         if (metadata is not None and
@@ -1031,6 +1033,8 @@ while True:
         if adopted is not None and outcome == 'adopted':
             active_rules = adopted['package']
             active_rules_reference = adopted['reference']
+            if not cloud.set_applied_rules(active_rules_reference):
+                raise RuntimeError('adopted rules reference handoff failed')
             log('Rules release adopted: version={}, hash={}'.format(
                 active_rules_reference['version'],
                 active_rules_reference['contentHash'][:12]))
@@ -1038,9 +1042,13 @@ while True:
                 'rule-adoption', format_observed_at(clock_synced),
                 device_session_id, observation_sequence, active_rules_reference,
                 candidate_metadata['releaseId'] if candidate_metadata is not None else None)
-            if rules_audit is not None and cloud.submit_durable_record(rules_audit):
-                log('Rules adoption audit queued: sequence={}'.format(
-                    observation_sequence))
+            if rules_audit is not None:
+                if cloud.submit_durable_record(rules_audit):
+                    log('Rules adoption audit queued: sequence={}'.format(
+                        observation_sequence))
+                else:
+                    log('Rules adoption audit queue unavailable: sequence={}'.format(
+                        observation_sequence))
         elif outcome != 'already-active':
             # The previous validated flash file remains active. The next
             # coordination snapshot retries after the bounded fetch interval.
@@ -1054,9 +1062,13 @@ while True:
                     'rule-rejection', format_observed_at(clock_synced),
                     device_session_id, observation_sequence, rejected_reference,
                     candidate_metadata['releaseId'], outcome)
-                if rules_audit is not None and cloud.submit_durable_record(rules_audit):
-                    log('Rules rejection audit queued: sequence={}'.format(
-                        observation_sequence))
+                if rules_audit is not None:
+                    if cloud.submit_durable_record(rules_audit):
+                        log('Rules rejection audit queued: sequence={}'.format(
+                            observation_sequence))
+                    else:
+                        log('Rules rejection audit queue unavailable: sequence={}'.format(
+                            observation_sequence))
 
     ads_uv = read_ads1110_microvolts()
 

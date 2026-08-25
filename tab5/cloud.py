@@ -1,4 +1,4 @@
-# Release: 2026-08-25 M6.6 — use a dedicated RTDB rules-pointer handoff.
+# Release: 2026-08-25 M6.7 — report adopted rules and prioritize rules audits.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -362,6 +362,9 @@ _pending_rules_release = None
 _rules_pointer_lock = _thread.allocate_lock()
 _pending_rules_pointer = None
 
+_applied_rules_lock = _thread.allocate_lock()
+_applied_rules_reference = dict(PRE_M6_TRANSPORT_ONLY_RULES_REFERENCE)
+
 _session_id = _new_session_id()
 _sync_sequence = 0
 
@@ -424,7 +427,19 @@ def submit_durable_record(record):
     _durable_lock.acquire()
     try:
         if len(_pending_durable_records) >= DURABLE_QUEUE_DEPTH:
-            return False
+            # Rules results outrank disposable/sparse observation history. If
+            # the bounded queue filled during an ingest outage, discard the
+            # oldest observation rather than permanently lose the one adoption
+            # or rejection record that confirms the rules outcome to cloud.
+            if record.get('recordType') in ('rule-adoption', 'rule-rejection'):
+                for index, pending in enumerate(_pending_durable_records):
+                    if pending.get('recordType') == 'observation':
+                        _pending_durable_records.pop(index)
+                        break
+                else:
+                    return False
+            else:
+                return False
         _pending_durable_records.append(record)
         return True
     finally:
@@ -544,6 +559,36 @@ def _queue_rules_pointer(pointer):
         _pending_rules_pointer = pointer
     finally:
         _rules_pointer_lock.release()
+
+
+def set_applied_rules(reference):
+    """Accept CPU A's validated active rules reference for later synchronization."""
+    global _applied_rules_reference
+    if not isinstance(reference, dict):
+        return False
+    version = reference.get('version')
+    content_hash = reference.get('contentHash')
+    if (not isinstance(version, int) or isinstance(version, bool) or version < 1 or
+            not isinstance(content_hash, str) or len(content_hash) != 64 or
+            any(char not in '0123456789abcdef' for char in content_hash)):
+        return False
+    _applied_rules_lock.acquire()
+    try:
+        _applied_rules_reference = {
+            'version': version,
+            'contentHash': content_hash,
+        }
+        return True
+    finally:
+        _applied_rules_lock.release()
+
+
+def _applied_rules_snapshot():
+    _applied_rules_lock.acquire()
+    try:
+        return dict(_applied_rules_reference)
+    finally:
+        _applied_rules_lock.release()
 
 
 def _take_rules_request():
@@ -725,7 +770,7 @@ def _sync_request():
         'sessionId': _session_id,
         'requestedAt': _format_timestamp_utc(),
         'lastAppliedCommandSequence': last_applied,
-        'appliedRules': dict(PRE_M6_TRANSPORT_ONLY_RULES_REFERENCE),
+        'appliedRules': _applied_rules_snapshot(),
         'openEventIds': [],
         'globalEnable': False,
     }
@@ -997,7 +1042,7 @@ def _run_rtdb_step(schedule, latest_observation):
                 schedule['coordination']['currentRules'])
             if key_summary != schedule['lastRulesPointerKeySummary']:
                 schedule['lastRulesPointerKeySummary'] = key_summary
-                log('RTDB rules pointer read [M6.6 keys={}]'.format(key_summary))
+                log('RTDB rules pointer read [M6.7 keys={}]'.format(key_summary))
             schedule['coordinationStage'] = 'commands'
         elif action == 'commands':
             commands = _rtdb_get(
@@ -1214,7 +1259,7 @@ def start():
         if _started:
             return False
         _started = True
-        log('CPU B release M6.6: dedicated rules-pointer handoff')
+        log('CPU B release M6.7: adopted-rules reporting and audit priority')
         _thread.start_new_thread(_worker, ())
         return True
     finally:

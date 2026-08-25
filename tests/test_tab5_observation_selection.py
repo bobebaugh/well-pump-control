@@ -338,6 +338,42 @@ class ObservationSelectionTests(unittest.TestCase):
             self.assertEqual(outcome, "release-hash-mismatch")
             self.assertEqual(active_path.read_text(encoding="utf-8"), raw)
 
+    def test_changed_valid_release_atomically_replaces_active_rules_file(self):
+        baseline = (PILOT_PATH.parent / "rules.json").read_text(encoding="utf-8")
+        changed = baseline.replace(
+            '"releaseId": "20260825000000-rules-v1"',
+            '"releaseId": "20260825010000-rules-v1"',
+            1,
+        )
+        content_hash = self.logic["_sha256_hex"](changed)
+        metadata = {
+            "schemaVersion": 1,
+            "siteId": "well-main",
+            "releaseId": "20260825010000-rules-v1",
+            "rulesVersion": 1,
+            "rulesSchemaVersion": 1,
+            "contentHash": content_hash,
+            "hashAlgorithm": "sha256",
+            "publishedAtMs": 1787619600000,
+            "downloadPath": "/.netlify/functions/rules-release/20260825010000-rules-v1.json",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            active_path = pathlib.Path(directory) / "rules.json"
+            temporary_path = pathlib.Path(directory) / ".rules.json.download"
+            active_path.write_text(baseline, encoding="utf-8")
+            adopted, outcome = self.logic["adopt_rules_release"](
+                {"metadata": metadata, "release": changed},
+                self.logic["PACKAGED_RULES_REFERENCE"],
+                str(active_path), str(temporary_path),
+            )
+            self.assertEqual(outcome, "adopted")
+            self.assertEqual(adopted["reference"], {
+                "version": 1,
+                "contentHash": content_hash,
+            })
+            self.assertEqual(active_path.read_text(encoding="utf-8"), changed)
+            self.assertFalse(temporary_path.exists())
+
     def test_rules_metadata_accepts_the_exact_v1_release_identifier_shape(self):
         metadata = {
             "schemaVersion": 1,

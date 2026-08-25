@@ -119,6 +119,8 @@ class CloudTransportTests(unittest.TestCase):
         self.cloud._pending_rules_request = None
         self.cloud._pending_rules_release = None
         self.cloud._pending_rules_pointer = None
+        self.cloud._applied_rules_reference = dict(
+            self.cloud.PRE_M6_TRANSPORT_ONLY_RULES_REFERENCE)
 
     def test_retry_delay_is_exponential_and_bounded(self):
         self.assertEqual(self.cloud._retry_delay_ms(1), 5000)
@@ -163,6 +165,29 @@ class CloudTransportTests(unittest.TestCase):
             self.cloud._pending_durable_records = []
             self.assertTrue(self.cloud.submit_durable_record(record))
             self.assertIs(self.cloud._peek_durable_record(), record)
+        finally:
+            self.cloud._pending_durable_records = original
+
+    def test_rules_audit_evicts_oldest_observation_from_full_queue(self):
+        original = self.cloud._pending_durable_records
+        observations = [
+            {"schemaVersion": 1, "recordType": "observation", "sequence": sequence}
+            for sequence in range(self.cloud.DURABLE_QUEUE_DEPTH)
+        ]
+        audit = {
+            "schemaVersion": 1,
+            "recordType": "rule-adoption",
+            "sequence": 99,
+        }
+        try:
+            self.cloud._pending_durable_records = list(observations)
+            self.assertTrue(self.cloud.submit_durable_record(audit))
+            self.assertNotIn(observations[0], self.cloud._pending_durable_records)
+            self.assertIn(audit, self.cloud._pending_durable_records)
+            self.assertEqual(
+                len(self.cloud._pending_durable_records),
+                self.cloud.DURABLE_QUEUE_DEPTH,
+            )
         finally:
             self.cloud._pending_durable_records = original
 
@@ -380,17 +405,34 @@ class CloudTransportTests(unittest.TestCase):
         self.assertEqual(method, "POST")
         self.assertIn("grant_type=refresh_token", kwargs["data"])
 
-    def test_pre_m6_rules_bridge_is_transport_metadata_only(self):
+    def test_sync_request_reports_cpu_a_validated_active_rules(self):
         original_sequence = self.cloud._sync_sequence
         try:
+            self.assertTrue(self.cloud.set_applied_rules({
+                "version": 2,
+                "contentHash": "a" * 64,
+            }))
             request = self.cloud._sync_request()
         finally:
             self.cloud._sync_sequence = original_sequence
         self.assertEqual(request["appliedRules"], {
-            "version": 1,
-            "contentHash": "0" * 64,
+            "version": 2,
+            "contentHash": "a" * 64,
         })
         self.assertEqual(request["openEventIds"], [])
+
+    def test_applied_rules_handoff_rejects_invalid_and_copies_valid_reference(self):
+        self.assertFalse(self.cloud.set_applied_rules({
+            "version": 1,
+            "contentHash": "not-a-hash",
+        }))
+        reference = {"version": 3, "contentHash": "b" * 64}
+        self.assertTrue(self.cloud.set_applied_rules(reference))
+        reference["version"] = 99
+        self.assertEqual(self.cloud._applied_rules_snapshot(), {
+            "version": 3,
+            "contentHash": "b" * 64,
+        })
 
     def test_rules_release_transport_preserves_exact_body_for_cpu_a(self):
         metadata = {
