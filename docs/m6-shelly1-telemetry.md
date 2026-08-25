@@ -1,8 +1,8 @@
 # M6.10 installed Shelly 1 telemetry candidate
 
-The installed Gen-1 Shelly 1 is temporarily at `192.168.50.201`. Its relay output RLY0 is not connected to the pump circuit during commissioning. SW0 is expected to be ON while the well pump is running and OFF while it is stopped.
+The installed Shelly 1 Gen4 is temporarily at `192.168.50.201`. Its relay output RLY0 is not connected to the pump circuit during commissioning. SW0 is expected to be ON while the well pump is running and OFF while it is stopped.
 
-CPU A reads the local `/status` resource once per sample cycle and strictly extracts only `inputs[0].input` and `relays[0].ison`. It adds `shelly1_sw0`, `shelly1_rly0`, availability, age, and failure count to the existing complete observation. SW0, RLY0, and confirmed availability changes are material durable-observation changes. CPU B remains a byte-preserving transport and requires no new credential or endpoint.
+CPU A reads the local `/rpc/Shelly.GetStatus` resource once per sample cycle and strictly extracts only `input:0.state` and `switch:0.output`. It adds `shelly1_sw0`, `shelly1_rly0`, availability, age, and failure count to the existing complete observation. SW0, RLY0, and confirmed availability changes are material durable-observation changes. CPU B remains a byte-preserving transport and requires no new credential or endpoint.
 
 The existing pilot ingest already stores the complete observation in the current Firestore document. The `current-power` read function now exposes a small `shelly1` view containing `available`, `sw0`, and `rly0`; older firmware returns nulls and remains compatible.
 
