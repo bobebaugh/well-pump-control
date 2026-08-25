@@ -461,7 +461,9 @@ class CloudTransportTests(unittest.TestCase):
         self.assertEqual(method, "GET")
         self.assertEqual(
             url,
-            self.cloud.RULES_RELEASE_ORIGIN + metadata["downloadPath"],
+            self.cloud.RULES_RELEASE_ORIGIN +
+            "/.netlify/functions/rules-release?releaseId=" +
+            "20260825000000-rules-v1.json",
         )
         self.assertEqual(kwargs["headers"]["X-Pilot-Key"], "EXAMPLE_ONLY_INGEST_TOKEN")
 

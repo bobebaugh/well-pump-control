@@ -1,4 +1,4 @@
-# Release: 2026-08-25 M6.7 — report adopted rules and prioritize rules audits.
+# Release: 2026-08-25 M6.8 — call the rules service with its releaseId query.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -172,9 +172,20 @@ def _download_rules_release(metadata):
     if (not isinstance(path, str) or not path.startswith(prefix) or
             not path.endswith('.json')):
         raise TransportError('rules release path is not approved')
+    release_name = path[len(prefix):]
+    if (not release_name or
+            any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-'
+                for char in release_name)):
+        raise TransportError('rules release name is not approved')
+    # The published pointer remains a stable relative path, but the deployed
+    # Netlify function receives the immutable filename through releaseId.
+    # Direct function paths are handled before the redirect rule, so a suffix
+    # request reaches the handler without queryStringParameters and returns 404.
+    request_url = '{}{}?releaseId={}'.format(
+        RULES_RELEASE_ORIGIN, prefix[:-1], release_name)
     response = None
     try:
-        response = requests.get(RULES_RELEASE_ORIGIN + path, headers={
+        response = requests.get(request_url, headers={
             'X-Pilot-Key': INGEST_TOKEN,
         }, timeout=DEVICE_SYNC_TIMEOUT_S)
         if response.status_code < 200 or response.status_code >= 300:
@@ -1259,7 +1270,7 @@ def start():
         if _started:
             return False
         _started = True
-        log('CPU B release M6.7: adopted-rules reporting and audit priority')
+        log('CPU B release M6.8: rules releaseId query transport')
         _thread.start_new_thread(_worker, ())
         return True
     finally:
