@@ -1,4 +1,4 @@
-# Release: 2026-08-25 M6.7 — report adopted rules and preserve rules audits.
+# Release: 2026-08-25 M6.10 — observe installed Shelly 1 SW0 and RLY0.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -23,7 +23,8 @@ from machine import I2C, Pin, SoftI2C
 import cloud
 
 # --- config (values from firmware/tab5/main/pilot_config.h) ---
-SHELLY_URL = 'http://192.168.50.141/emeter/0'
+SHELLY_EM_URL = 'http://192.168.50.141/emeter/0'
+SHELLY_1_STATUS_URL = 'http://192.168.50.201/status'
 SAMPLE_PERIOD_MS = 1000
 SHELLY_TIMEOUT_S = 1  # requests has whole-second granularity; C++ used 750ms
 STALE_AFTER_MS = 3000
@@ -48,6 +49,8 @@ MATERIAL_NUMERIC_THRESHOLDS = {
 MATERIAL_EXACT_CHANGE_PATHS = (
     'values.battery_charging',
     'values.battery_charge_enabled',
+    'values.shelly1_sw0',
+    'values.shelly1_rly0',
     'status.adc_available',
     'status.battery_available',
     'status.clock_synced',
@@ -305,15 +308,45 @@ network_traffic_allowed = False
 shelly_resume_confirmation_pending = True
 
 
-# --- Shelly read ---
-def read_shelly():
+# --- Shelly reads ---
+def _read_json(url):
     try:
-        r = requests.get(SHELLY_URL, timeout=SHELLY_TIMEOUT_S)
+        r = requests.get(url, timeout=SHELLY_TIMEOUT_S)
         data = r.json()
         r.close()
         return data
     except Exception:
         return None
+
+
+def read_shelly():
+    """Read the house-side Gen-1 Shelly EM channel."""
+    return _read_json(SHELLY_EM_URL)
+
+
+def normalize_shelly1_status(data):
+    """Return strict booleans for the installed Gen-1 Shelly 1 status."""
+    if not isinstance(data, dict):
+        return None
+    relays = data.get('relays')
+    inputs = data.get('inputs')
+    if (not isinstance(relays, list) or not relays or
+            not isinstance(inputs, list) or not inputs or
+            not isinstance(relays[0], dict) or
+            not isinstance(inputs[0], dict)):
+        return None
+    rly0 = relays[0].get('ison')
+    sw0 = inputs[0].get('input')
+    if not isinstance(rly0, bool):
+        return None
+    if sw0 not in (0, 1, False, True):
+        return None
+    return {'sw0': bool(sw0), 'rly0': rly0}
+
+
+def read_shelly1():
+    """Read SW0 and RLY0 without changing either one."""
+    return normalize_shelly1_status(_read_json(SHELLY_1_STATUS_URL))
 
 
 def format_observed_at(clock_is_synced):
@@ -335,7 +368,11 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
                       battery_percent, battery_is_charging, battery_is_valid,
                       battery_charge_is_enabled, battery_sample_ticks_ms,
                       wifi_is_connected, traffic_is_allowed, wifi_status,
-                      wifi_address, wifi_disconnect_count, shelly_failures):
+                      wifi_address, wifi_disconnect_count, shelly_failures,
+                      shelly1=None, shelly1_is_available=False,
+                      shelly1_poll_was_attempted=False,
+                      shelly1_last_valid_ticks_ms=None,
+                      shelly1_failures=0):
     """Build the variable-sized record whose ownership transfers to CPU B."""
     return {
         'schemaVersion': 1,
@@ -360,6 +397,8 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
             'battery_percent': battery_percent,
             'battery_charging': battery_is_charging,
             'battery_charge_enabled': battery_charge_is_enabled,
+            'shelly1_sw0': shelly1.get('sw0') if isinstance(shelly1, dict) else None,
+            'shelly1_rly0': shelly1.get('rly0') if isinstance(shelly1, dict) else None,
         },
         'status': {
             'shelly_available': shelly_is_available,
@@ -372,6 +411,13 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
             'battery_available': battery_is_valid,
             'battery_sample_ticks_ms': battery_sample_ticks_ms,
             'shelly_failure_count': shelly_failures,
+            'shelly1_available': shelly1_is_available,
+            'shelly1_poll_attempted': shelly1_poll_was_attempted,
+            'shelly1_last_valid_ticks_ms': shelly1_last_valid_ticks_ms,
+            'shelly1_age_ms': (time.ticks_diff(
+                observed_ticks_ms, shelly1_last_valid_ticks_ms)
+                if shelly1_last_valid_ticks_ms is not None else None),
+            'shelly1_failure_count': shelly1_failures,
             'wifi_connected': wifi_is_connected,
             'network_traffic_allowed': traffic_is_allowed,
             'clock_synced': clock_is_synced,
@@ -494,8 +540,15 @@ def durable_observation_reason(observation, previous, elapsed_ms,
     if confirmed_shelly_availability_change:
         return 'material-change'
     for path in exact_change_paths:
-        if (_observation_path_value(observation, path) !=
-                _observation_path_value(previous, path)):
+        current_value = _observation_path_value(observation, path)
+        previous_value = _observation_path_value(previous, path)
+        # A missed Shelly 1 poll produces null state. Availability is confirmed
+        # independently, so one failed read must not look like an SW0/RLY0 edge.
+        if (path in ('values.shelly1_sw0', 'values.shelly1_rly0') and
+                (not isinstance(current_value, bool) or
+                 not isinstance(previous_value, bool))):
+            continue
+        if current_value != previous_value:
             return 'material-change'
     for path, threshold in numeric_thresholds.items():
         if _numeric_material_change(
@@ -946,7 +999,7 @@ def check_touch_button(was_pressed):
 # --- boot sequence ---
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.7: adopted-rules reporting and audit priority')
+log('CPU A release M6.10: Shelly 1 SW0/RLY0 telemetry')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:
@@ -969,6 +1022,9 @@ charge_enable = True
 last_valid_sample = None
 last_valid_sample_ms = None
 sample_failure_count = 0
+last_valid_shelly1 = None
+last_valid_shelly1_ms = None
+shelly1_failure_count = 0
 touch_count = 0
 touch_pressed = False
 battery_v = None
@@ -981,6 +1037,7 @@ observation_sequence = 0
 device_session_id = cloud.device_session_id()
 event_history = new_event_history()
 shelly_availability_confirmation = new_shelly_availability_confirmation()
+shelly1_availability_confirmation = new_shelly_availability_confirmation()
 last_durable_observation = None
 last_durable_observation_ms = None
 next_rules_request_ms = 0
@@ -1094,7 +1151,9 @@ while True:
                 charge_enable))
 
     sample = None
+    shelly1_sample = None
     shelly_poll_attempted = False
+    shelly1_poll_attempted = False
     if wifi_connected and network_traffic_allowed:
         shelly_poll_attempted = True
         sample = read_shelly()
@@ -1107,6 +1166,13 @@ while True:
                 log('Shelly polling confirmed after connection: ticks_ms={}, connected={}, status={}, IP={}'.format(
                     now, wifi_connected, wifi_driver_status, wifi_ip))
                 shelly_resume_confirmation_pending = False
+        shelly1_poll_attempted = True
+        shelly1_sample = read_shelly1()
+        if shelly1_sample is None:
+            shelly1_failure_count += 1
+        else:
+            last_valid_shelly1 = shelly1_sample
+            last_valid_shelly1_ms = now
 
     observation = build_observation(
         observation_sequence, now, clock_synced,
@@ -1115,11 +1181,17 @@ while True:
         battery_v, battery_a, battery_level, battery_charging,
         battery_valid, charge_enable, last_battery_poll_ms,
         wifi_connected, network_traffic_allowed, wifi_driver_status,
-        wifi_ip, wifi_disconnect_events, sample_failure_count)
+        wifi_ip, wifi_disconnect_events, sample_failure_count,
+        shelly1_sample, shelly1_sample is not None,
+        shelly1_poll_attempted, last_valid_shelly1_ms,
+        shelly1_failure_count)
     append_event_history(event_history, observation)
     shelly_availability_pending = shelly_availability_change_pending(
         shelly_availability_confirmation,
         observation['status']['shelly_available'])
+    shelly1_availability_pending = shelly_availability_change_pending(
+        shelly1_availability_confirmation,
+        observation['status']['shelly1_available'])
     cloud.submit_observation(observation)
     elapsed_since_durable_ms = None
     if last_durable_observation_ms is not None:
@@ -1128,7 +1200,8 @@ while True:
     durable_reason = durable_observation_reason(
         observation, last_durable_observation,
         elapsed_since_durable_ms,
-        confirmed_shelly_availability_change=shelly_availability_pending)
+        confirmed_shelly_availability_change=(
+            shelly_availability_pending or shelly1_availability_pending))
     if durable_reason is not None:
         durable_record = build_durable_observation(
             observation, device_session_id, durable_reason,
@@ -1140,6 +1213,9 @@ while True:
             if shelly_availability_pending:
                 acknowledge_shelly_availability_change(
                     shelly_availability_confirmation)
+            if shelly1_availability_pending:
+                acknowledge_shelly_availability_change(
+                    shelly1_availability_confirmation)
             log('Durable observation selected: sequence={}, reason={}'.format(
                 observation_sequence, durable_reason))
 
