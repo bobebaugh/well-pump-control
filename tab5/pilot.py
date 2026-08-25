@@ -1,4 +1,4 @@
-# Release: 2026-08-25 M6.3 — accept integral MicroPython rules timestamps.
+# Release: 2026-08-25 M6.4 — identify rejected rules-pointer fields safely.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -619,21 +619,22 @@ def _valid_rules_release_id(value, version):
     return prefix.isdigit() and value.endswith(suffix) and len(value) == 14 + len(suffix)
 
 
-def validate_rules_metadata(metadata):
-    """Validate the M2 rules pointer without interpreting rule conditions."""
+def _check_rules_metadata(metadata):
+    """Return normalized metadata plus a nonsecret rejection reason when invalid."""
     if not isinstance(metadata, dict):
-        return None
+        return None, 'not-an-object'
     required = (
         'schemaVersion', 'siteId', 'releaseId', 'rulesVersion',
         'rulesSchemaVersion', 'contentHash', 'hashAlgorithm',
         'publishedAtMs', 'downloadPath',
     )
-    if any(field not in metadata for field in required):
-        return None
+    for field in required:
+        if field not in metadata:
+            return None, 'missing-{}'.format(field)
     if metadata.get('schemaVersion') != 1 or metadata.get('siteId') != SITE_ID:
-        return None
+        return None, 'schema-or-site'
     if metadata.get('rulesSchemaVersion') != 1 or metadata.get('hashAlgorithm') != 'sha256':
-        return None
+        return None, 'schema-or-hash-algorithm'
     published_at_ms = metadata.get('publishedAtMs')
     published_at_is_integral = (
         isinstance(published_at_ms, int) and not isinstance(published_at_ms, bool) or
@@ -642,19 +643,21 @@ def validate_rules_metadata(metadata):
     )
     if (not isinstance(metadata.get('rulesVersion'), int) or
             isinstance(metadata.get('rulesVersion'), bool) or
-            metadata.get('rulesVersion') < 1 or
-            not published_at_is_integral or published_at_ms < 0 or
-            not _valid_rules_hash(metadata.get('contentHash'))):
-        return None
+            metadata.get('rulesVersion') < 1):
+        return None, 'rulesVersion'
+    if not published_at_is_integral or published_at_ms < 0:
+        return None, 'publishedAtMs'
+    if not _valid_rules_hash(metadata.get('contentHash')):
+        return None, 'contentHash'
     if not _valid_rules_release_id(metadata.get('releaseId'), metadata.get('rulesVersion')):
-        return None
+        return None, 'releaseId'
     path = metadata.get('downloadPath')
     prefix = '/.netlify/functions/rules-release/'
     if not isinstance(path, str) or not path.startswith(prefix) or not path.endswith('.json'):
-        return None
+        return None, 'downloadPath-shape'
     suffix = path[len(prefix):-5]
     if not suffix or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-' for char in suffix):
-        return None
+        return None, 'downloadPath-characters'
     return {
         'schemaVersion': 1,
         'siteId': SITE_ID,
@@ -665,8 +668,19 @@ def validate_rules_metadata(metadata):
         'hashAlgorithm': 'sha256',
         'publishedAtMs': metadata['publishedAtMs'],
         'downloadPath': path,
-    }
+    }, None
 
+
+def validate_rules_metadata(metadata):
+    """Validate the M2 rules pointer without interpreting rule conditions."""
+    normalized, _reason = _check_rules_metadata(metadata)
+    return normalized
+
+
+def rules_metadata_rejection_reason(metadata):
+    """Return only a field-level validation reason; never return pointer data."""
+    _normalized, reason = _check_rules_metadata(metadata)
+    return reason
 
 def validate_rules_release(raw_release, metadata=None):
     """Check release bytes, supported schema, and all workbook rule rows.
@@ -920,7 +934,7 @@ def check_touch_button(was_pressed):
 # --- boot sequence ---
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.3')
+log('CPU A release M6.4')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:
@@ -986,7 +1000,8 @@ while True:
     if isinstance(sync_message, dict):
         metadata = validate_rules_metadata(sync_message.get('currentRules'))
         if sync_message.get('currentRules') is not None and metadata is None:
-            log('Rules pointer ignored: metadata invalid')
+            log('Rules pointer ignored: {}'.format(
+                rules_metadata_rejection_reason(sync_message.get('currentRules'))))
         if (metadata is not None and
                 metadata.get('contentHash') != active_rules_reference.get('contentHash') and
                 time.ticks_diff(now, next_rules_request_ms) >= 0):

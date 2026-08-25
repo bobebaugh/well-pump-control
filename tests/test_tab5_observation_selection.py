@@ -29,7 +29,7 @@ FUNCTIONS = {
     "build_rules_audit_record",
     "_sha256_hex",
     "_valid_rules_hash",
-    "_valid_rules_release_id",
+    "_valid_rules_release_id",\n    "_check_rules_metadata",\n    "rules_metadata_rejection_reason",
     "validate_rules_metadata",
     "validate_rules_release",
     "load_packaged_rules",
@@ -355,6 +355,11 @@ class ObservationSelectionTests(unittest.TestCase):
         self.assertEqual(
             self.logic["validate_rules_metadata"](metadata)["releaseId"],
             metadata["releaseId"],
+        )
+        del metadata["downloadPath"]
+        self.assertEqual(
+            self.logic["rules_metadata_rejection_reason"](metadata),
+            "missing-downloadPath",
         )
 
     def test_rules_adoption_and_rejection_audits_have_deterministic_records(self):
