@@ -1,7 +1,5 @@
 "use strict";
 
-const { ConfigurationError, getPilotFirestore } = require("../lib/firebase");
-
 const jsonHeaders = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store"
@@ -15,7 +13,23 @@ function timestampToIso(value) {
   return value && typeof value.toDate === "function" ? value.toDate().toISOString() : null;
 }
 
-exports.handler = async function currentPower(event) {
+function shelly1State(observation) {
+  const values = observation && observation.values;
+  const status = observation && observation.status;
+  const available = status && typeof status.shelly1_available === "boolean"
+    ? status.shelly1_available : null;
+  return {
+    available,
+    sw0: values && typeof values.shelly1_sw0 === "boolean" ? values.shelly1_sw0 : null,
+    rly0: values && typeof values.shelly1_rly0 === "boolean" ? values.shelly1_rly0 : null
+  };
+}
+
+function createHandler(dependencies = {}) {
+  const firestoreProvider = dependencies.getPilotFirestore || (() => require("../lib/firebase").getPilotFirestore());
+  const now = dependencies.now || Date.now;
+
+  return async function currentPower(event) {
   if (event.httpMethod !== "GET") {
     return {
       ...response(405, { status: "error", code: "method_not_allowed" }),
@@ -24,7 +38,7 @@ exports.handler = async function currentPower(event) {
   }
 
   try {
-    const { db } = getPilotFirestore();
+    const { db } = firestoreProvider();
     const snapshot = await db.collection("sites").doc("well-main")
       .collection("current").doc("well-power").get();
 
@@ -45,12 +59,13 @@ exports.handler = async function currentPower(event) {
       pumpRunning: data.pumpRunning === true,
       observedAt,
       receivedAt,
-      ageSeconds: receivedAtMs ? Math.max(0, Math.round((Date.now() - receivedAtMs) / 1000)) : null,
+      ageSeconds: receivedAtMs ? Math.max(0, Math.round((now() - receivedAtMs) / 1000)) : null,
       publishReason: data.publishReason || null,
-      values: data.values || {}
+      values: data.values || {},
+      shelly1: shelly1State(data.observation)
     });
   } catch (error) {
-    const configurationError = error instanceof ConfigurationError;
+    const configurationError = error && error.name === "ConfigurationError";
     console.error("Current power read failed", {
       category: configurationError ? "configuration" : "firestore"
     });
@@ -60,4 +75,9 @@ exports.handler = async function currentPower(event) {
       code: configurationError ? "configuration_missing" : "firestore_unavailable"
     });
   }
-};
+  };
+}
+
+exports.handler = createHandler();
+exports._createHandler = createHandler;
+exports._shelly1State = shelly1State;
