@@ -374,6 +374,22 @@ class ObservationSelectionTests(unittest.TestCase):
             self.assertEqual(active_path.read_text(encoding="utf-8"), changed)
             self.assertFalse(temporary_path.exists())
 
+            # Exercise the same load-and-validate path used by a fresh CPU A
+            # process after restart, rather than proving only the rename.
+            reloaded, reason = self.logic["load_packaged_rules"](str(active_path))
+            self.assertIsNone(reason)
+            self.assertEqual(reloaded["reference"], adopted["reference"])
+            self.assertEqual(reloaded["package"]["releaseId"], metadata["releaseId"])
+
+    def test_rules_adoption_is_the_only_runtime_flash_write(self):
+        pilot_source = PILOT_PATH.read_text(encoding="utf-8")
+        launcher_source = (PILOT_PATH.parent / "main.py").read_text(encoding="utf-8")
+        cloud_source = (PILOT_PATH.parent / "cloud.py").read_text(encoding="utf-8")
+
+        self.assertIn("with open(temporary_path, 'w')", pilot_source)
+        self.assertNotIn("open('/flash/", launcher_source)
+        self.assertNotRegex(cloud_source, r"\bopen\s*\([^\n]*['\"](?:w|a|x)[+b]?['\"]")
+
     def test_rules_metadata_accepts_the_exact_v1_release_identifier_shape(self):
         metadata = {
             "schemaVersion": 1,
