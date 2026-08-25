@@ -1,14 +1,14 @@
-# Release: 2026-08-25 M6.2 — identify active Tab5 modules at startup.
-# Crash-capturing launcher. The CPU A application itself lives in pilot.py.
-# Any exception that escapes CPU A is written to /flash/crash.log
-# (with a timestamp if the RTC was set) as well as printed to serial, so a
-# failure that happens while nobody is watching is still recoverable.
+# Release: 2026-08-25 M6.9 — rules adoption is the sole runtime flash write.
+# CPU A application launcher. The application itself lives in pilot.py.
+# Escaped exceptions are printed to serial only. Durable operational records
+# belong in cloud storage; the only application write to flash is the validated
+# atomic rules-package replacement in pilot.py.
 import sys
 import time
 import _thread
 import cloud
 
-print('[well-main] Release M6.2 launcher')
+print('[well-main] Release M6.9 launcher')
 
 
 try:
@@ -32,27 +32,10 @@ except Exception as webrepl_err:
     print('[well-main] WebREPL startup failed:', webrepl_err)
 
 
-def _stamp():
-    try:
-        t = time.localtime()
-        return '{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}Z'.format(
-            t[0], t[1], t[2], t[3], t[4], t[5])
-    except Exception:
-        return 'unknown-time'
-
-
 def _pilot_worker():
     try:
         import pilot
     except Exception as pilot_err:
-        try:
-            f = open('/flash/crash.log', 'a')
-            f.write('\n--- CPU A crash at {} (ticks_ms={}) ---\n'.format(
-                _stamp(), time.ticks_ms()))
-            sys.print_exception(pilot_err, f)
-            f.close()
-        except Exception as log_err:
-            print('[well-pilot] could not write crash.log:', log_err)
         print('[well-pilot] CPU A CRASHED:')
         sys.print_exception(pilot_err)
 
