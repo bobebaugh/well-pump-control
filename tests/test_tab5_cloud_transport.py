@@ -150,6 +150,21 @@ class CloudTransportTests(unittest.TestCase):
         finally:
             self.cloud._pending_durable_records = original
 
+    def test_rules_audits_use_the_same_bounded_exact_record_transport(self):
+        original = self.cloud._pending_durable_records
+        record = {
+            "schemaVersion": 1,
+            "recordType": "rule-adoption",
+            "recordId": "20260825000042-rule-adoption-boot_A7f93k2Q-0000000042",
+            "futureAuditField": {"preserved": True},
+        }
+        try:
+            self.cloud._pending_durable_records = []
+            self.assertTrue(self.cloud.submit_durable_record(record))
+            self.assertIs(self.cloud._peek_durable_record(), record)
+        finally:
+            self.cloud._pending_durable_records = original
+
     def test_durable_transport_posts_exact_record_and_accepts_duplicate(self):
         record = {
             "schemaVersion": 1,

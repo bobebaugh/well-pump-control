@@ -549,6 +549,47 @@ def build_durable_observation(observation, session_id, publish_reason,
     return record
 
 
+def build_rules_audit_record(record_type, observed_at, session_id, sequence,
+                             rules_reference, release_id, rejection_reason=None):
+    """Build the M6 adoption/rejection audit record; no M7 event state exists."""
+    timestamp_prefix = _record_timestamp_prefix(observed_at)
+    if (record_type not in ('rule-adoption', 'rule-rejection') or
+            timestamp_prefix is None or not isinstance(session_id, str) or
+            len(session_id) < 8 or not isinstance(sequence, int) or
+            isinstance(sequence, bool) or sequence < 0 or
+            not isinstance(release_id, str) or
+            not isinstance(rules_reference, dict)):
+        return None
+    reference = {
+        'version': rules_reference.get('version'),
+        'contentHash': rules_reference.get('contentHash'),
+    }
+    if (not isinstance(reference['version'], int) or reference['version'] < 1 or
+            not _valid_rules_hash(reference['contentHash'])):
+        return None
+    record = {
+        'schemaVersion': 1,
+        'recordType': record_type,
+        'recordId': '{}-{}-{}-{:010d}'.format(
+            timestamp_prefix, record_type, session_id, sequence),
+        'siteId': SITE_ID,
+        'deviceId': DEVICE_ID,
+        'sessionId': session_id,
+        'sequence': sequence,
+        'observedAt': observed_at,
+        'rulesRelease': reference,
+        'releaseId': release_id,
+        'actor': {'type': 'device', 'id': DEVICE_ID},
+    }
+    if record_type == 'rule-adoption':
+        record['activeRules'] = dict(reference)
+    else:
+        if not isinstance(rejection_reason, str) or not rejection_reason:
+            return None
+        record['rejectionReason'] = rejection_reason
+    return record
+
+
 def _sha256_hex(value):
     """Return the lower-case SHA-256 for the exact UTF-8 release bytes."""
     if not isinstance(value, str):
@@ -946,6 +987,8 @@ while True:
                 next_rules_request_ms = time.ticks_add(now, RULES_FETCH_RETRY_MS)
     release_candidate = cloud.take_rules_release()
     if release_candidate is not None:
+        candidate_metadata = validate_rules_metadata(
+            release_candidate.get('metadata') if isinstance(release_candidate, dict) else None)
         adopted, outcome = adopt_rules_release(
             release_candidate, active_rules_reference)
         if adopted is not None and outcome == 'adopted':
@@ -954,10 +997,29 @@ while True:
             log('Rules release adopted: version={}, hash={}'.format(
                 active_rules_reference['version'],
                 active_rules_reference['contentHash'][:12]))
+            rules_audit = build_rules_audit_record(
+                'rule-adoption', format_observed_at(clock_synced),
+                device_session_id, observation_sequence, active_rules_reference,
+                candidate_metadata['releaseId'] if candidate_metadata is not None else None)
+            if rules_audit is not None and cloud.submit_durable_record(rules_audit):
+                log('Rules adoption audit queued: sequence={}'.format(
+                    observation_sequence))
         elif outcome != 'already-active':
             # The previous validated flash file remains active. The next
             # coordination snapshot retries after the bounded fetch interval.
             log('Rules release rejected: {}'.format(outcome))
+            if candidate_metadata is not None:
+                rejected_reference = {
+                    'version': candidate_metadata['rulesVersion'],
+                    'contentHash': candidate_metadata['contentHash'],
+                }
+                rules_audit = build_rules_audit_record(
+                    'rule-rejection', format_observed_at(clock_synced),
+                    device_session_id, observation_sequence, rejected_reference,
+                    candidate_metadata['releaseId'], outcome)
+                if rules_audit is not None and cloud.submit_durable_record(rules_audit):
+                    log('Rules rejection audit queued: sequence={}'.format(
+                        observation_sequence))
 
     ads_uv = read_ads1110_microvolts()
 

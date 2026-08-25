@@ -415,7 +415,8 @@ def _take_pending_observation():
 def submit_durable_record(record):
     """Queue one complete CPU A-authored record without blocking CPU A."""
     if (not isinstance(record, dict) or record.get('schemaVersion') != 1 or
-            record.get('recordType') != 'observation'):
+            record.get('recordType') not in (
+                'observation', 'rule-adoption', 'rule-rejection')):
         return False
     _durable_lock.acquire()
     try:
@@ -1108,8 +1109,13 @@ def _run():
                     durable_failure_count = 0
                     next_durable_attempt = time.ticks_ms()
                     durable_yield_to_rtdb = True
-                    log('Durable observation accepted: sequence={}, duplicate={}'.format(
-                        durable_record.get('sequence'), duplicate))
+                    if durable_record.get('recordType') == 'observation':
+                        log('Durable observation accepted: sequence={}, duplicate={}'.format(
+                            durable_record.get('sequence'), duplicate))
+                    else:
+                        log('Rules audit accepted: type={}, sequence={}, duplicate={}'.format(
+                            durable_record.get('recordType'),
+                            durable_record.get('sequence'), duplicate))
                 except Exception as e:
                     durable_failure_count += 1
                     delay = _durable_retry_delay_ms(durable_failure_count)

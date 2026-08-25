@@ -26,6 +26,7 @@ FUNCTIONS = {
     "durable_observation_reason",
     "_record_timestamp_prefix",
     "build_durable_observation",
+    "build_rules_audit_record",
     "_sha256_hex",
     "_valid_rules_hash",
     "_valid_rules_release_id",
@@ -333,6 +334,24 @@ class ObservationSelectionTests(unittest.TestCase):
             self.assertIsNone(rejected)
             self.assertEqual(outcome, "release-hash-mismatch")
             self.assertEqual(active_path.read_text(encoding="utf-8"), raw)
+
+    def test_rules_adoption_and_rejection_audits_have_deterministic_records(self):
+        reference = self.logic["PACKAGED_RULES_REFERENCE"]
+        adopted = self.logic["build_rules_audit_record"](
+            "rule-adoption", "2026-08-25T00:00:42Z", "boot_A7f93k2Q", 42,
+            reference, "20260825000000-rules-v1",
+        )
+        self.assertEqual(
+            adopted["recordId"],
+            "20260825000042-rule-adoption-boot_A7f93k2Q-0000000042",
+        )
+        self.assertEqual(adopted["activeRules"], reference)
+        rejected = self.logic["build_rules_audit_record"](
+            "rule-rejection", "2026-08-25T00:00:43Z", "boot_A7f93k2Q", 43,
+            reference, "20260825000000-rules-v1", "release-hash-mismatch",
+        )
+        self.assertEqual(rejected["rejectionReason"], "release-hash-mismatch")
+        self.assertNotIn("activeRules", rejected)
 
     def assert_m4_durable_observation_contract(self, record):
         """Check the deployed M4 validator invariants used by Tab5."""

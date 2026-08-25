@@ -21,7 +21,7 @@ The active release reference is placed on later durable observations. The instal
 
 ## Current delivery boundary
 
-This is a Tab5 feature-branch candidate only. The deployed pilot does not yet expose a rules-release endpoint or a live RTDB current pointer, so the installed candidate will safely keep its packaged baseline until the separately reviewed cloud-side M6 release service is deployed. Rule-adoption/rejection durable records require that same cloud work: the deployed M4 ingest endpoint currently accepts observations and event-open/event-close only. No upload or deployment is authorized by this candidate.
+This is a Tab5 feature-branch candidate only. The deployed pilot does not yet expose a rules-release endpoint or a live RTDB current pointer, so the installed candidate will safely keep its packaged baseline until the separately reviewed cloud-side M6 release service is deployed. Adoption and rejection are queued as deterministic `rule-adoption` / `rule-rejection` audit records; the deployed M4 ingest endpoint does not yet accept those record types, so they are deliberately emitted only after a changed release is downloaded. The matching cloud candidate adds that acceptance. No upload or deployment is authorized by this candidate.
 
 ## Host evidence
 
