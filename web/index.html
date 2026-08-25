@@ -45,8 +45,12 @@
         <strong id="pf-value">—</strong>
       </div>
       <div class="metric">
-        <p>Current cycle</p>
-        <strong id="runtime-value">—</strong>
+        <p>Shelly 1 · SW0</p>
+        <strong id="sw0-value" class="binary-value">—</strong>
+      </div>
+      <div class="metric">
+        <p>Shelly 1 · RLY0</p>
+        <strong id="rly0-value" class="binary-value">—</strong>
       </div>
     </section>
 
@@ -130,15 +134,15 @@
             <span class="health-dot unavailable"></span>
             <div><strong>Pressure ADC</strong><small>Future phase</small></div>
           </div>
-          <div class="health-row">
+          <div class="health-row" id="health-shelly1">
             <span class="health-dot unavailable"></span>
-            <div><strong>Shelly 1 veto</strong><small>Future phase</small></div>
+            <div><strong>Shelly 1</strong><small>Awaiting Tab5 telemetry · RLY0 not wired</small></div>
           </div>
         </div>
 
         <div class="safety-note">
           <strong>Control authority</strong>
-          <p>This pilot cannot start, stop, or inhibit the pump.</p>
+          <p>SW0 and RLY0 are status-only on this page. RLY0 is installed but not wired to the pump circuit.</p>
         </div>
       </article>
     </section>
