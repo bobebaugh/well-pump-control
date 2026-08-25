@@ -27,6 +27,17 @@ let selected = 0;
 let changed = new Set();
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") {
+    return Object.keys(value).sort().reduce((result, name) => {
+      result[name] = canonical(value[name]);
+      return result;
+    }, {});
+  }
+  return value;
+}
+function sameValue(left, right) { return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right)); }
 function setStatus(text, kind = "") { statusBox.className = `editor-status ${kind}`; statusBox.textContent = text; }
 function key() { return sessionStorage.getItem("pilotMonitorKey"); }
 
@@ -67,7 +78,7 @@ function validateDraft() {
   return draft.flatMap(validateRule);
 }
 
-function draftChanged(index) { return JSON.stringify(draft[index]) !== JSON.stringify(baseline[index]); }
+function draftChanged(index) { return !sameValue(draft[index], baseline[index]); }
 
 function renderList() {
   const filter = document.querySelector("#rule-filter").value;
