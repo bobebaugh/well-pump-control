@@ -24,7 +24,7 @@ import cloud
 
 # --- config (values from firmware/tab5/main/pilot_config.h) ---
 SHELLY_EM_URL = 'http://192.168.50.141/emeter/0'
-SHELLY_1_STATUS_URL = 'http://192.168.50.201/status'
+SHELLY_1_STATUS_URL = 'http://192.168.50.201/rpc/Shelly.GetStatus'
 SAMPLE_PERIOD_MS = 1000
 SHELLY_TIMEOUT_S = 1  # requests has whole-second granularity; C++ used 750ms
 STALE_AFTER_MS = 3000
@@ -326,23 +326,18 @@ def read_shelly():
 
 
 def normalize_shelly1_status(data):
-    """Return strict booleans for the installed Gen-1 Shelly 1 status."""
+    """Return strict booleans from the installed Gen4 RPC status."""
     if not isinstance(data, dict):
         return None
-    relays = data.get('relays')
-    inputs = data.get('inputs')
-    if (not isinstance(relays, list) or not relays or
-            not isinstance(inputs, list) or not inputs or
-            not isinstance(relays[0], dict) or
-            not isinstance(inputs[0], dict)):
+    switch0 = data.get('switch:0')
+    input0 = data.get('input:0')
+    if not isinstance(switch0, dict) or not isinstance(input0, dict):
         return None
-    rly0 = relays[0].get('ison')
-    sw0 = inputs[0].get('input')
-    if not isinstance(rly0, bool):
+    rly0 = switch0.get('output')
+    sw0 = input0.get('state')
+    if not isinstance(rly0, bool) or not isinstance(sw0, bool):
         return None
-    if sw0 not in (0, 1, False, True):
-        return None
-    return {'sw0': bool(sw0), 'rly0': rly0}
+    return {'sw0': sw0, 'rly0': rly0}
 
 
 def read_shelly1():
