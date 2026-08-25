@@ -1,4 +1,4 @@
-# Release: 2026-08-24 — transport CPU A-selected durable observations unchanged.
+# Release: 2026-08-25 — transport rules-release bytes to CPU A unchanged.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -42,6 +42,8 @@ DURABLE_INGEST_TIMEOUT_S = 3
 DURABLE_QUEUE_DEPTH = 8
 DURABLE_RETRY_BASE_MS = 5000
 DURABLE_RETRY_MAX_MS = 60000
+RULES_RELEASE_ORIGIN = 'https://pilot--well-pump-control.netlify.app'
+MAX_RULES_RELEASE_BYTES = 65536
 
 SITE_ID = 'well-main'
 RTDB_DEVICE_ID = 'tab5-well-main'
@@ -151,6 +153,39 @@ def _http_json(method, url, body=None, headers=None, timeout=RTDB_TIMEOUT_S,
             error.status_code = response.status_code
             raise error
         return response.json()
+    except TransportError:
+        raise
+    except Exception as e:
+        raise TransportError(str(e))
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+
+def _download_rules_release(metadata):
+    """Fetch an opaque release body from the approved Netlify origin only."""
+    path = metadata.get('downloadPath') if isinstance(metadata, dict) else None
+    prefix = '/.netlify/functions/rules-release/'
+    if (not isinstance(path, str) or not path.startswith(prefix) or
+            not path.endswith('.json')):
+        raise TransportError('rules release path is not approved')
+    response = None
+    try:
+        response = requests.get(RULES_RELEASE_ORIGIN + path, headers={
+            'X-Pilot-Key': INGEST_TOKEN,
+        }, timeout=DEVICE_SYNC_TIMEOUT_S)
+        if response.status_code < 200 or response.status_code >= 300:
+            error = TransportError('HTTP {}'.format(response.status_code))
+            error.status_code = response.status_code
+            raise error
+        raw_release = response.text
+        if (not isinstance(raw_release, str) or
+                len(raw_release.encode('utf-8')) > MAX_RULES_RELEASE_BYTES):
+            raise TransportError('rules release size is not supported')
+        return raw_release
     except TransportError:
         raise
     except Exception as e:
@@ -320,6 +355,10 @@ _last_applied_command_sequence = 0
 _sync_lock = _thread.allocate_lock()
 _sync_state = None
 
+_rules_lock = _thread.allocate_lock()
+_pending_rules_request = None
+_pending_rules_release = None
+
 _session_id = _new_session_id()
 _sync_sequence = 0
 
@@ -454,6 +493,54 @@ def take_sync_message():
         return value
     finally:
         _sync_lock.release()
+
+
+def request_rules_release(metadata):
+    """Accept CPU A's already-validated release pointer without waiting."""
+    global _pending_rules_request
+    if not isinstance(metadata, dict):
+        return False
+    _rules_lock.acquire()
+    try:
+        _pending_rules_request = dict(metadata)
+        return True
+    finally:
+        _rules_lock.release()
+
+
+def take_rules_release():
+    """Transfer one exact downloaded release body to CPU A."""
+    global _pending_rules_release
+    _rules_lock.acquire()
+    try:
+        candidate = _pending_rules_release
+        _pending_rules_release = None
+        return candidate
+    finally:
+        _rules_lock.release()
+
+
+def _take_rules_request():
+    global _pending_rules_request
+    _rules_lock.acquire()
+    try:
+        metadata = _pending_rules_request
+        _pending_rules_request = None
+        return metadata
+    finally:
+        _rules_lock.release()
+
+
+def _queue_rules_release(metadata, raw_release):
+    global _pending_rules_release
+    _rules_lock.acquire()
+    try:
+        _pending_rules_release = {
+            'metadata': dict(metadata),
+            'release': raw_release,
+        }
+    finally:
+        _rules_lock.release()
 
 
 def _queue_commands(commands):
@@ -1030,8 +1117,21 @@ def _run():
                     log('Durable observation transport error: {}; retry in {} ms'.format(
                         e, delay))
             if not durable_attempted:
-                _run_rtdb_step(rtdb_schedule, latest_observation)
+                rtdb_action = _run_rtdb_step(rtdb_schedule, latest_observation)
                 durable_yield_to_rtdb = False
+                # Rules bytes are lower priority than legacy telemetry,
+                # durable records, and the bounded RTDB coordination step.
+                # CPU B neither parses nor validates the rules package.
+                if rtdb_action is None:
+                    metadata = _take_rules_request()
+                    if metadata is not None:
+                        try:
+                            _queue_rules_release(metadata,
+                                                 _download_rules_release(metadata))
+                            log('Rules release downloaded for CPU A: version={}'.format(
+                                metadata.get('rulesVersion')))
+                        except Exception as e:
+                            log('Rules release transport error: {}'.format(e))
 
         time.sleep_ms(100)
 

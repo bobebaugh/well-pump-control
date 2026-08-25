@@ -1,4 +1,4 @@
-# Release: 2026-08-24 — debounce Shelly and trim ADC samples on CPU A.
+# Release: 2026-08-25 — validate and adopt versioned CPU A rules releases.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -13,7 +13,10 @@
 # BATTERY_LOW_PCT and BATTERY_HIGH_PCT - see the battery section below.
 
 import M5
+import os
 import time
+import uhashlib
+import ujson
 import requests
 import driver.ads1110 as ads1110
 from machine import I2C, Pin, SoftI2C
@@ -25,8 +28,8 @@ SAMPLE_PERIOD_MS = 1000
 SHELLY_TIMEOUT_S = 1  # requests has whole-second granularity; C++ used 750ms
 STALE_AFTER_MS = 3000
 
-# M5 selection parameters live on CPU A. M6 may replace the bridge rules
-# reference and supply reviewed parameters, but CPU B never interprets these.
+# M5 selection parameters live on CPU A. M6 supplies a validated rules
+# reference while CPU B remains a byte-preserving transport only.
 SITE_ID = 'well-main'
 DEVICE_ID = 'tab5-well-main'
 MAX_DURABLE_OBSERVATION_INTERVAL_MS = 600000
@@ -49,10 +52,24 @@ MATERIAL_EXACT_CHANGE_PATHS = (
     'status.battery_available',
     'status.clock_synced',
 )
-PRE_M6_RULES_REFERENCE = {
+RULES_FILE = 'rules.json'
+RULES_TEMP_FILE = '.rules.json.download'
+RULES_FETCH_RETRY_MS = 60000
+MAX_RULES_RELEASE_BYTES = 65536
+PACKAGED_RULES_REFERENCE = {
     'version': 1,
-    'contentHash': '0' * 64,
+    'contentHash': 'ee0220eebdd0fa9b3b9751435180c17a16d3c93cb5f7325f1ab74d8d132e410a',
 }
+EXPECTED_RULE_IDS = (
+    'P001', 'P002', 'P003', 'P004', 'P005', 'P006', 'P007', 'P008',
+    'P009', 'P010', 'P011', 'P012', 'P013', 'P014', 'P015', 'P016',
+    'E001', 'E002', 'E003', 'E004', 'E005', 'E006', 'E007', 'E008',
+    'E009', 'T001', 'T002', 'T003', 'T004', 'T005', 'T006', 'T007',
+    'T008', 'T009', 'T010', 'T011', 'T012', 'T013', 'H001', 'H002',
+    'H003', 'H004', 'H005', 'H006', 'H007', 'H008', 'H009', 'H010',
+    'H011', 'H012', 'H013', 'H014', 'H015', 'H016', 'H017', 'H018',
+    'H019', 'H020', 'H021',
+)
 
 I2C_ANTENNA_ADDR = 0x43
 REG_IO_DIR = 0x03
@@ -515,7 +532,7 @@ def build_durable_observation(observation, session_id, publish_reason,
     if publish_reason not in ('material-change', 'maximum-interval'):
         return None
     if rules_reference is None:
-        rules_reference = PRE_M6_RULES_REFERENCE
+        rules_reference = PACKAGED_RULES_REFERENCE
     record = dict(observation)
     record.update({
         'schemaVersion': 1,
@@ -530,6 +547,195 @@ def build_durable_observation(observation, session_id, publish_reason,
         'rulesRelease': dict(rules_reference),
     })
     return record
+
+
+def _sha256_hex(value):
+    """Return the lower-case SHA-256 for the exact UTF-8 release bytes."""
+    if not isinstance(value, str):
+        return None
+    try:
+        digest = uhashlib.sha256(value.encode('utf-8')).digest()
+        return ''.join('{:02x}'.format(octet) for octet in digest)
+    except Exception:
+        return None
+
+
+def _valid_rules_hash(value):
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    for char in value:
+        if char not in '0123456789abcdef':
+            return False
+    return True
+
+
+def _valid_rules_release_id(value, version):
+    if (not isinstance(value, str) or not isinstance(version, int) or
+            isinstance(version, bool) or version < 1 or len(value) < 23):
+        return False
+    prefix = value[:14]
+    suffix = '-rules-v{}'.format(version)
+    return prefix.isdigit() and value.endswith(suffix) and len(value) == 14 + len(suffix)
+
+
+def validate_rules_metadata(metadata):
+    """Validate the M2 rules pointer without interpreting rule conditions."""
+    if not isinstance(metadata, dict):
+        return None
+    required = (
+        'schemaVersion', 'siteId', 'releaseId', 'rulesVersion',
+        'rulesSchemaVersion', 'contentHash', 'hashAlgorithm',
+        'publishedAtMs', 'downloadPath',
+    )
+    if any(field not in metadata for field in required):
+        return None
+    if metadata.get('schemaVersion') != 1 or metadata.get('siteId') != SITE_ID:
+        return None
+    if metadata.get('rulesSchemaVersion') != 1 or metadata.get('hashAlgorithm') != 'sha256':
+        return None
+    if (not isinstance(metadata.get('rulesVersion'), int) or
+            isinstance(metadata.get('rulesVersion'), bool) or
+            metadata.get('rulesVersion') < 1 or
+            not isinstance(metadata.get('publishedAtMs'), int) or
+            isinstance(metadata.get('publishedAtMs'), bool) or
+            metadata.get('publishedAtMs') < 0 or
+            not _valid_rules_hash(metadata.get('contentHash'))):
+        return None
+    if not _valid_rules_release_id(metadata.get('releaseId'), metadata.get('rulesVersion')):
+        return None
+    path = metadata.get('downloadPath')
+    prefix = '/.netlify/functions/rules-release/'
+    if not isinstance(path, str) or not path.startswith(prefix) or not path.endswith('.json'):
+        return None
+    suffix = path[len(prefix):-5]
+    if not suffix or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-' for char in suffix):
+        return None
+    return {
+        'schemaVersion': 1,
+        'siteId': SITE_ID,
+        'releaseId': metadata['releaseId'],
+        'rulesVersion': metadata['rulesVersion'],
+        'rulesSchemaVersion': 1,
+        'contentHash': metadata['contentHash'],
+        'hashAlgorithm': 'sha256',
+        'publishedAtMs': metadata['publishedAtMs'],
+        'downloadPath': path,
+    }
+
+
+def validate_rules_release(raw_release, metadata=None):
+    """Check release bytes, supported schema, and all workbook rule rows.
+
+    This deliberately validates package shape only. M7 will interpret the
+    conditions and create event state; M6 never evaluates a rule.
+    """
+    if (not isinstance(raw_release, str) or not raw_release or
+            len(raw_release.encode('utf-8')) > MAX_RULES_RELEASE_BYTES):
+        return None, 'release-size'
+    content_hash = _sha256_hex(raw_release)
+    if content_hash is None:
+        return None, 'release-hash-unavailable'
+    if metadata is not None:
+        metadata = validate_rules_metadata(metadata)
+        if metadata is None:
+            return None, 'metadata-invalid'
+        if content_hash != metadata.get('contentHash'):
+            return None, 'release-hash-mismatch'
+    try:
+        package = ujson.loads(raw_release)
+    except Exception:
+        return None, 'release-json-invalid'
+    required = (
+        'schemaVersion', 'kind', 'releaseId', 'rulesVersion',
+        'rulesSchemaVersion', 'sourceWorkbook', 'rules',
+    )
+    if not isinstance(package, dict) or any(field not in package for field in required):
+        return None, 'release-incomplete'
+    if (package.get('schemaVersion') != 1 or
+            package.get('kind') != 'well-pump-rules-release' or
+            package.get('rulesSchemaVersion') != 1 or
+            package.get('sourceWorkbook') != 'well_pump_operational_rules_1.xlsx' or
+            not isinstance(package.get('rulesVersion'), int) or
+            isinstance(package.get('rulesVersion'), bool) or
+            package.get('rulesVersion') < 1):
+        return None, 'release-schema-unsupported'
+    if not _valid_rules_release_id(package.get('releaseId'), package.get('rulesVersion')):
+        return None, 'release-schema-unsupported'
+    if metadata is not None and (
+            package.get('releaseId') != metadata.get('releaseId') or
+            package.get('rulesVersion') != metadata.get('rulesVersion')):
+        return None, 'release-metadata-mismatch'
+    rules = package.get('rules')
+    if not isinstance(rules, list) or len(rules) != len(EXPECTED_RULE_IDS):
+        return None, 'release-rule-count'
+    ids = []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            return None, 'release-rule-shape'
+        if (not isinstance(rule.get('id'), str) or
+                not isinstance(rule.get('event'), str) or not rule.get('event') or
+                not isinstance(rule.get('enabled'), bool) or
+                rule.get('level') not in (None, 'Yellow', 'Red') or
+                rule.get('response') not in ('Observe', 'Alert', 'Trip—while active',
+                                             'Trip—recovery policy', 'Trip—latched/manual reset') or
+                not isinstance(rule.get('confirmSeconds'), int) or
+                isinstance(rule.get('confirmSeconds'), bool) or rule.get('confirmSeconds') < 1 or
+                not isinstance(rule.get('clearSeconds'), int) or
+                isinstance(rule.get('clearSeconds'), bool) or rule.get('clearSeconds') < 1 or
+                not isinstance(rule.get('conditions'), dict) or not rule.get('conditions') or
+                not isinstance(rule.get('notify'), bool) or
+                not isinstance(rule.get('commissioningStatus'), str) or not rule.get('commissioningStatus')):
+            return None, 'release-rule-invalid'
+        ids.append(rule['id'])
+    if tuple(ids) != EXPECTED_RULE_IDS:
+        return None, 'release-completeness'
+    return {
+        'package': package,
+        'reference': {
+            'version': package['rulesVersion'],
+            'contentHash': content_hash,
+        },
+        'metadata': metadata,
+    }, None
+
+
+def load_packaged_rules(path=RULES_FILE):
+    """Load the installed baseline. It must be valid before CPU A starts."""
+    try:
+        with open(path, 'r') as handle:
+            raw_release = handle.read()
+    except Exception:
+        return None, 'baseline-unavailable'
+    return validate_rules_release(raw_release)
+
+
+def adopt_rules_release(candidate, active_reference,
+                        path=RULES_FILE, temporary_path=RULES_TEMP_FILE):
+    """Validate in RAM, then use one atomic rename to replace last-known-good."""
+    if not isinstance(candidate, dict):
+        return None, 'candidate-invalid'
+    raw_release = candidate.get('release')
+    checked, reason = validate_rules_release(raw_release, candidate.get('metadata'))
+    if checked is None:
+        return None, reason
+    reference = checked['reference']
+    if active_reference == reference:
+        return checked, 'already-active'
+    try:
+        with open(temporary_path, 'w') as handle:
+            handle.write(raw_release)
+            try:
+                handle.flush()
+            except Exception:
+                pass
+        os.rename(temporary_path, path)
+    except Exception:
+        try:
+            os.remove(temporary_path)
+        except Exception:
+            pass
+        return None, 'atomic-replace-failed'
+    return checked, 'adopted'
 
 
 # --- display --- (M5.begin() already ran at the top, before any I2C() objects existed)
@@ -670,6 +876,16 @@ def check_touch_button(was_pressed):
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
 
+_installed_rules, _rules_error = load_packaged_rules()
+if _installed_rules is None:
+    # A corrupt or missing shipped baseline is a release-build error. Do not
+    # pretend a rule package exists; M7 must never receive an unknown policy.
+    raise RuntimeError('validated rules baseline unavailable: {}'.format(_rules_error))
+active_rules = _installed_rules['package']
+active_rules_reference = _installed_rules['reference']
+log('Rules baseline loaded: version={}, hash={}'.format(
+    active_rules_reference['version'], active_rules_reference['contentHash'][:12]))
+
 # Assume charging is permitted until the first battery poll below says otherwise -
 # M5.Power has no getter for the enable pin itself (only isCharging(), which reflects
 # active current flow, not permission), so this is a starting guess that self-corrects
@@ -693,6 +909,7 @@ event_history = new_event_history()
 shelly_availability_confirmation = new_shelly_availability_confirmation()
 last_durable_observation = None
 last_durable_observation_ms = None
+next_rules_request_ms = 0
 
 log('Platform validation harness initialized')
 
@@ -715,6 +932,32 @@ while True:
      wifi_driver_status, wifi_ip, wifi_disconnect_events) = cloud.status_snapshot()
     if wifi_connected and not was_connected:
         shelly_resume_confirmation_pending = True
+
+    # CPU B exposes the RTDB pointer and later an exact downloaded body. CPU A
+    # decides whether it is safe to request, validate, and adopt the release;
+    # it never waits for either network operation.
+    sync_message = cloud.take_sync_message()
+    if isinstance(sync_message, dict):
+        metadata = validate_rules_metadata(sync_message.get('currentRules'))
+        if (metadata is not None and
+                metadata.get('contentHash') != active_rules_reference.get('contentHash') and
+                time.ticks_diff(now, next_rules_request_ms) >= 0):
+            if cloud.request_rules_release(metadata):
+                next_rules_request_ms = time.ticks_add(now, RULES_FETCH_RETRY_MS)
+    release_candidate = cloud.take_rules_release()
+    if release_candidate is not None:
+        adopted, outcome = adopt_rules_release(
+            release_candidate, active_rules_reference)
+        if adopted is not None and outcome == 'adopted':
+            active_rules = adopted['package']
+            active_rules_reference = adopted['reference']
+            log('Rules release adopted: version={}, hash={}'.format(
+                active_rules_reference['version'],
+                active_rules_reference['contentHash'][:12]))
+        elif outcome != 'already-active':
+            # The previous validated flash file remains active. The next
+            # coordination snapshot retries after the bounded fetch interval.
+            log('Rules release rejected: {}'.format(outcome))
 
     ads_uv = read_ads1110_microvolts()
 
@@ -777,7 +1020,8 @@ while True:
         confirmed_shelly_availability_change=shelly_availability_pending)
     if durable_reason is not None:
         durable_record = build_durable_observation(
-            observation, device_session_id, durable_reason)
+            observation, device_session_id, durable_reason,
+            active_rules_reference)
         if (durable_record is not None and
                 cloud.submit_durable_record(durable_record)):
             last_durable_observation = observation

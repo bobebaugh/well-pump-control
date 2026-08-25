@@ -1,8 +1,11 @@
 """Host-only tests for M5 CPU A durable-observation selection."""
 
 import ast
+import hashlib
+import json
 import pathlib
 import re
+import tempfile
 import types
 import unittest
 
@@ -23,6 +26,13 @@ FUNCTIONS = {
     "durable_observation_reason",
     "_record_timestamp_prefix",
     "build_durable_observation",
+    "_sha256_hex",
+    "_valid_rules_hash",
+    "_valid_rules_release_id",
+    "validate_rules_metadata",
+    "validate_rules_release",
+    "load_packaged_rules",
+    "adopt_rules_release",
 }
 CONSTANTS = {
     "SITE_ID",
@@ -33,7 +43,12 @@ CONSTANTS = {
     "ADC_FILTER_SAMPLE_COUNT",
     "MATERIAL_NUMERIC_THRESHOLDS",
     "MATERIAL_EXACT_CHANGE_PATHS",
-    "PRE_M6_RULES_REFERENCE",
+    "RULES_FILE",
+    "RULES_TEMP_FILE",
+    "RULES_FETCH_RETRY_MS",
+    "MAX_RULES_RELEASE_BYTES",
+    "PACKAGED_RULES_REFERENCE",
+    "EXPECTED_RULE_IDS",
 }
 
 
@@ -50,7 +65,7 @@ def load_selection_logic():
     namespace = {"time": types.SimpleNamespace(
         ticks_diff=lambda left, right: left - right,
         localtime=lambda: (2026, 8, 25, 0, 0, 8, 0, 0),
-    )}
+    ), "ujson": json, "uhashlib": hashlib, "os": __import__("os")}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(PILOT_PATH), "exec"), namespace)
     return namespace
 
@@ -254,9 +269,70 @@ class ObservationSelectionTests(unittest.TestCase):
         self.assertEqual(record["deviceId"], "tab5-well-main")
         self.assertEqual(record["futureEnvelope"], ["preserved"])
         self.assertEqual(record["values"]["futureSensor"], {"value": 12})
-        self.assertEqual(record["rulesRelease"]["contentHash"], "0" * 64)
+        self.assertEqual(
+            record["rulesRelease"], self.logic["PACKAGED_RULES_REFERENCE"])
         self.assertNotIn("recordType", source)
         self.assert_m4_durable_observation_contract(record)
+
+    def test_packaged_rules_are_complete_and_match_the_reviewed_hash(self):
+        raw = (PILOT_PATH.parent / "rules.json").read_text(encoding="utf-8")
+        checked, reason = self.logic["validate_rules_release"](raw)
+        self.assertIsNone(reason)
+        self.assertEqual(checked["reference"], self.logic["PACKAGED_RULES_REFERENCE"])
+        self.assertEqual(
+            tuple(rule["id"] for rule in checked["package"]["rules"]),
+            self.logic["EXPECTED_RULE_IDS"],
+        )
+
+    def test_remote_release_requires_matching_pointer_hash_and_identity(self):
+        raw = (PILOT_PATH.parent / "rules.json").read_text(encoding="utf-8")
+        content_hash = self.logic["_sha256_hex"](raw)
+        metadata = {
+            "schemaVersion": 1,
+            "siteId": "well-main",
+            "releaseId": "20260825000000-rules-v1",
+            "rulesVersion": 1,
+            "rulesSchemaVersion": 1,
+            "contentHash": content_hash,
+            "hashAlgorithm": "sha256",
+            "publishedAtMs": 1787616000000,
+            "downloadPath": "/.netlify/functions/rules-release/20260825000000-rules-v1.json",
+        }
+        checked, reason = self.logic["validate_rules_release"](raw, metadata)
+        self.assertIsNone(reason)
+        self.assertEqual(checked["metadata"], metadata)
+        metadata["contentHash"] = "0" * 64
+        self.assertEqual(
+            self.logic["validate_rules_release"](raw, metadata)[1],
+            "release-hash-mismatch",
+        )
+
+    def test_invalid_release_never_replaces_last_valid_rules_file(self):
+        raw = (PILOT_PATH.parent / "rules.json").read_text(encoding="utf-8")
+        content_hash = self.logic["_sha256_hex"](raw)
+        metadata = {
+            "schemaVersion": 1,
+            "siteId": "well-main",
+            "releaseId": "20260825000000-rules-v1",
+            "rulesVersion": 1,
+            "rulesSchemaVersion": 1,
+            "contentHash": content_hash,
+            "hashAlgorithm": "sha256",
+            "publishedAtMs": 1787616000000,
+            "downloadPath": "/.netlify/functions/rules-release/20260825000000-rules-v1.json",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            active_path = pathlib.Path(directory) / "rules.json"
+            temporary_path = pathlib.Path(directory) / ".rules.json.download"
+            active_path.write_text(raw, encoding="utf-8")
+            rejected, outcome = self.logic["adopt_rules_release"](
+                {"metadata": metadata, "release": raw + " "},
+                self.logic["PACKAGED_RULES_REFERENCE"],
+                str(active_path), str(temporary_path),
+            )
+            self.assertIsNone(rejected)
+            self.assertEqual(outcome, "release-hash-mismatch")
+            self.assertEqual(active_path.read_text(encoding="utf-8"), raw)
 
     def assert_m4_durable_observation_contract(self, record):
         """Check the deployed M4 validator invariants used by Tab5."""

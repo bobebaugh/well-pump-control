@@ -5,6 +5,7 @@ Wi-Fi, timing, or physical Tab5 behavior.
 """
 
 import importlib.util
+import json
 import pathlib
 import sys
 import types
@@ -20,9 +21,10 @@ class Lock:
 
 
 class Response:
-    def __init__(self, body, status_code=200):
+    def __init__(self, body, status_code=200, text=None):
         self._body = body
         self.status_code = status_code
+        self.text = json.dumps(body) if text is None else text
         self.closed = False
 
     def json(self):
@@ -38,8 +40,8 @@ class RequestsStub(types.ModuleType):
         self.responses = []
         self.calls = []
 
-    def queue(self, body, status_code=200):
-        self.responses.append(Response(body, status_code))
+    def queue(self, body, status_code=200, text=None):
+        self.responses.append(Response(body, status_code, text))
 
     def _take(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
@@ -114,6 +116,8 @@ class CloudTransportTests(unittest.TestCase):
     def setUp(self):
         self.requests.responses.clear()
         self.requests.calls.clear()
+        self.cloud._pending_rules_request = None
+        self.cloud._pending_rules_release = None
 
     def test_retry_delay_is_exponential_and_bounded(self):
         self.assertEqual(self.cloud._retry_delay_ms(1), 5000)
@@ -346,6 +350,44 @@ class CloudTransportTests(unittest.TestCase):
             "contentHash": "0" * 64,
         })
         self.assertEqual(request["openEventIds"], [])
+
+    def test_rules_release_transport_preserves_exact_body_for_cpu_a(self):
+        metadata = {
+            "schemaVersion": 1,
+            "siteId": "well-main",
+            "releaseId": "20260825000000-rules-v1",
+            "rulesVersion": 1,
+            "rulesSchemaVersion": 1,
+            "contentHash": "a" * 64,
+            "hashAlgorithm": "sha256",
+            "publishedAtMs": 1787616000000,
+            "downloadPath": "/.netlify/functions/rules-release/20260825000000-rules-v1.json",
+        }
+        raw_release = '{"schemaVersion":1,"kind":"well-pump-rules-release"}'
+        self.requests.queue({}, text=raw_release)
+        self.assertTrue(self.cloud.request_rules_release(metadata))
+        queued_request = self.cloud._take_rules_request()
+        self.assertEqual(queued_request, metadata)
+        self.cloud._queue_rules_release(
+            queued_request, self.cloud._download_rules_release(queued_request))
+        self.assertEqual(self.cloud.take_rules_release(), {
+            "metadata": metadata,
+            "release": raw_release,
+        })
+        method, url, kwargs = self.requests.calls[-1]
+        self.assertEqual(method, "GET")
+        self.assertEqual(
+            url,
+            self.cloud.RULES_RELEASE_ORIGIN + metadata["downloadPath"],
+        )
+        self.assertEqual(kwargs["headers"]["X-Pilot-Key"], "EXAMPLE_ONLY_INGEST_TOKEN")
+
+    def test_rules_release_transport_rejects_unapproved_paths_before_network(self):
+        with self.assertRaises(self.cloud.TransportError):
+            self.cloud._download_rules_release({
+                "downloadPath": "https://example.invalid/rules.json",
+            })
+        self.assertEqual(self.requests.calls, [])
 
     def test_bootstrap_rejects_unapproved_project_host_and_token_origins(self):
         request = {
