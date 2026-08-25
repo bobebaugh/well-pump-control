@@ -1,4 +1,4 @@
-# Release: 2026-08-22 — build one extensible CPU A observation for CPU B.
+# Release: 2026-08-24 — select sparse durable observations on CPU A.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -24,6 +24,34 @@ SHELLY_URL = 'http://192.168.50.141/emeter/0'
 SAMPLE_PERIOD_MS = 1000
 SHELLY_TIMEOUT_S = 1  # requests has whole-second granularity; C++ used 750ms
 STALE_AFTER_MS = 3000
+
+# M5 selection parameters live on CPU A. M6 may replace the bridge rules
+# reference and supply reviewed parameters, but CPU B never interprets these.
+SITE_ID = 'well-main'
+DEVICE_ID = 'tab5-well-main'
+MAX_DURABLE_OBSERVATION_INTERVAL_MS = 600000
+EVENT_HISTORY_DEPTH = 600
+MATERIAL_NUMERIC_THRESHOLDS = {
+    'values.power': 50.0,
+    'values.voltage': 2.0,
+    'values.adc_microvolts': 25000.0,
+    'values.battery_voltage': 0.1,
+    'values.battery_current': 0.1,
+    'values.battery_percent': 1.0,
+}
+MATERIAL_EXACT_CHANGE_PATHS = (
+    'values.is_valid',
+    'values.battery_charging',
+    'values.battery_charge_enabled',
+    'status.shelly_available',
+    'status.adc_available',
+    'status.battery_available',
+    'status.clock_synced',
+)
+PRE_M6_RULES_REFERENCE = {
+    'version': 1,
+    'contentHash': '0' * 64,
+}
 
 I2C_ANTENNA_ADDR = 0x43
 REG_IO_DIR = 0x03
@@ -253,6 +281,8 @@ def format_observed_at(clock_is_synced):
 
 
 def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
+                      shelly_is_available, shelly_poll_was_attempted,
+                      shelly_last_valid_ticks_ms,
                       ads_microvolts, battery_voltage, battery_current,
                       battery_percent, battery_is_charging, battery_is_valid,
                       battery_charge_is_enabled, battery_sample_ticks_ms,
@@ -284,7 +314,12 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
             'battery_charge_enabled': battery_charge_is_enabled,
         },
         'status': {
-            'shelly_available': True,
+            'shelly_available': shelly_is_available,
+            'shelly_poll_attempted': shelly_poll_was_attempted,
+            'shelly_last_valid_ticks_ms': shelly_last_valid_ticks_ms,
+            'shelly_age_ms': (time.ticks_diff(
+                observed_ticks_ms, shelly_last_valid_ticks_ms)
+                if shelly_last_valid_ticks_ms is not None else None),
             'adc_available': ads_microvolts is not None,
             'battery_available': battery_is_valid,
             'battery_sample_ticks_ms': battery_sample_ticks_ms,
@@ -297,6 +332,126 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
             'wifi_disconnect_count': wifi_disconnect_count,
         },
     }
+
+
+def new_event_history(depth=EVENT_HISTORY_DEPTH):
+    """Allocate the bounded CPU A RAM loop used by later event evaluation."""
+    if not isinstance(depth, int) or isinstance(depth, bool) or depth < 1:
+        raise ValueError('event history depth must be positive')
+    return {
+        'samples': [None] * depth,
+        'nextIndex': 0,
+        'count': 0,
+    }
+
+
+def append_event_history(history, observation):
+    """Retain a complete matched sample separately from durable selection."""
+    samples = history['samples']
+    index = history['nextIndex']
+    samples[index] = observation
+    history['nextIndex'] = (index + 1) % len(samples)
+    if history['count'] < len(samples):
+        history['count'] += 1
+
+
+def event_history_values(history):
+    """Return retained samples oldest-first for host tests and future M7 use."""
+    count = history['count']
+    samples = history['samples']
+    start = (history['nextIndex'] - count) % len(samples)
+    return [samples[(start + offset) % len(samples)] for offset in range(count)]
+
+
+def _observation_path_value(observation, path):
+    value = observation
+    for part in path.split('.'):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def _numeric_material_change(current, previous, threshold):
+    if isinstance(current, bool) or isinstance(previous, bool):
+        return False
+    if not isinstance(current, (int, float)) or not isinstance(previous, (int, float)):
+        return False
+    return abs(current - previous) >= threshold
+
+
+def durable_observation_reason(observation, previous, elapsed_ms,
+                               numeric_thresholds=None,
+                               exact_change_paths=None,
+                               maximum_interval_ms=MAX_DURABLE_OBSERVATION_INTERVAL_MS):
+    """Return CPU A's sparse durable-selection reason, or None.
+
+    The complete one-second observation stays in RAM unless a configured
+    material field changes or the maximum interval expires. A valid UTC sample
+    time is required by the durable-observation v1 contract.
+    """
+    if not isinstance(observation, dict) or observation.get('observedAt') is None:
+        return None
+    if previous is None:
+        return 'material-change'
+    if numeric_thresholds is None:
+        numeric_thresholds = MATERIAL_NUMERIC_THRESHOLDS
+    if exact_change_paths is None:
+        exact_change_paths = MATERIAL_EXACT_CHANGE_PATHS
+    for path in exact_change_paths:
+        if (_observation_path_value(observation, path) !=
+                _observation_path_value(previous, path)):
+            return 'material-change'
+    for path, threshold in numeric_thresholds.items():
+        if _numeric_material_change(
+                _observation_path_value(observation, path),
+                _observation_path_value(previous, path), threshold):
+            return 'material-change'
+    if elapsed_ms is not None and elapsed_ms >= maximum_interval_ms:
+        return 'maximum-interval'
+    return None
+
+
+def _record_timestamp_prefix(observed_at):
+    """Return YYYYMMDDhhmmss for the CPU A contract timestamp."""
+    if (not isinstance(observed_at, str) or len(observed_at) < 20 or
+            observed_at[4] != '-' or observed_at[7] != '-' or
+            observed_at[10] != 'T' or observed_at[13] != ':' or
+            observed_at[16] != ':'):
+        return None
+    prefix = ''.join((observed_at[0:4], observed_at[5:7],
+                      observed_at[8:10], observed_at[11:13],
+                      observed_at[14:16], observed_at[17:19]))
+    return prefix if prefix.isdigit() and len(prefix) == 14 else None
+
+
+def build_durable_observation(observation, session_id, publish_reason,
+                              rules_reference=None):
+    """Wrap the complete CPU A observation in the durable v1 contract."""
+    timestamp_prefix = _record_timestamp_prefix(observation.get('observedAt'))
+    sequence = observation.get('sequence')
+    if (timestamp_prefix is None or not isinstance(session_id, str) or
+            len(session_id) < 8 or not isinstance(sequence, int) or
+            isinstance(sequence, bool) or sequence < 0):
+        return None
+    if publish_reason not in ('material-change', 'maximum-interval'):
+        return None
+    if rules_reference is None:
+        rules_reference = PRE_M6_RULES_REFERENCE
+    record = dict(observation)
+    record.update({
+        'schemaVersion': 1,
+        'recordType': 'observation',
+        'recordId': '{}-observation-{}-{:010d}'.format(
+            timestamp_prefix, session_id, sequence),
+        'siteId': SITE_ID,
+        'deviceId': DEVICE_ID,
+        'sessionId': session_id,
+        'source': 'tab5',
+        'publishReason': publish_reason,
+        'rulesRelease': dict(rules_reference),
+    })
+    return record
 
 
 # --- display --- (M5.begin() already ran at the top, before any I2C() objects existed)
@@ -455,6 +610,10 @@ battery_charging = None
 battery_valid = False
 last_battery_poll_ms = -BATTERY_POLL_PERIOD_MS
 observation_sequence = 0
+device_session_id = cloud.device_session_id()
+event_history = new_event_history()
+last_durable_observation = None
+last_durable_observation_ms = None
 
 log('Platform validation harness initialized')
 
@@ -502,24 +661,46 @@ while True:
                 charge_enable))
 
     sample = None
+    shelly_poll_attempted = False
     if wifi_connected and network_traffic_allowed:
+        shelly_poll_attempted = True
         sample = read_shelly()
         if sample is None:
             sample_failure_count += 1
         else:
             last_valid_sample = sample
             last_valid_sample_ms = now
-            observation = build_observation(
-                observation_sequence, now, clock_synced, sample, ads_uv,
-                battery_v, battery_a, battery_level, battery_charging,
-                battery_valid, charge_enable, last_battery_poll_ms,
-                wifi_connected, network_traffic_allowed, wifi_driver_status,
-                wifi_ip, wifi_disconnect_events, sample_failure_count)
-            cloud.submit_observation(observation)
             if shelly_resume_confirmation_pending:
                 log('Shelly polling confirmed after connection: ticks_ms={}, connected={}, status={}, IP={}'.format(
                     now, wifi_connected, wifi_driver_status, wifi_ip))
                 shelly_resume_confirmation_pending = False
+
+    observation = build_observation(
+        observation_sequence, now, clock_synced,
+        sample if sample is not None else {}, sample is not None,
+        shelly_poll_attempted, last_valid_sample_ms, ads_uv,
+        battery_v, battery_a, battery_level, battery_charging,
+        battery_valid, charge_enable, last_battery_poll_ms,
+        wifi_connected, network_traffic_allowed, wifi_driver_status,
+        wifi_ip, wifi_disconnect_events, sample_failure_count)
+    append_event_history(event_history, observation)
+    cloud.submit_observation(observation)
+    elapsed_since_durable_ms = None
+    if last_durable_observation_ms is not None:
+        elapsed_since_durable_ms = time.ticks_diff(
+            now, last_durable_observation_ms)
+    durable_reason = durable_observation_reason(
+        observation, last_durable_observation,
+        elapsed_since_durable_ms)
+    if durable_reason is not None:
+        durable_record = build_durable_observation(
+            observation, device_session_id, durable_reason)
+        if (durable_record is not None and
+                cloud.submit_durable_record(durable_record)):
+            last_durable_observation = observation
+            last_durable_observation_ms = now
+            log('Durable observation selected: sequence={}, reason={}'.format(
+                observation_sequence, durable_reason))
 
     stale = last_valid_sample_ms is not None and time.ticks_diff(now, last_valid_sample_ms) > STALE_AFTER_MS
     if last_valid_sample is None:
@@ -536,7 +717,7 @@ while True:
 
     # Sleep out the rest of the sample period, but poll touch every 50 ms so
     # taps are not missed. Sensor cadence stays at SAMPLE_PERIOD_MS.
-    sleep_until = time.ticks_add(time.ticks_ms(), SAMPLE_PERIOD_MS)
+    sleep_until = time.ticks_add(now, SAMPLE_PERIOD_MS)
     while time.ticks_diff(sleep_until, time.ticks_ms()) > 0:
         # M5.Touch only refreshes when M5.update() runs. Pumping it once per
         # second in the outer loop left 19 of every 20 touch polls reading a

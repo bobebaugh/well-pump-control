@@ -9,5 +9,7 @@ Initial automated coverage will include:
 - Netlify authentication and request validation;
 - Firestore write-shape tests;
 - web formatting of unavailable future measurements.
+- CPU A durable-observation selection thresholds and maximum interval;
+- bounded CPU B durable-record transport and exact retry behavior.
 
 Physical pump observation, Tab5 display behavior, and network-loss recovery remain field acceptance tests.

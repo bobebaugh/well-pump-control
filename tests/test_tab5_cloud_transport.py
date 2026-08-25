@@ -1,4 +1,4 @@
-"""Host-only logic tests for the interpreted M3 CPU B transport.
+"""Host-only logic tests for the interpreted M3/M5 CPU B transport.
 
 These tests stub UIFlow/MicroPython modules. They do not prove TLS, threading,
 Wi-Fi, timing, or physical Tab5 behavior.
@@ -120,6 +120,76 @@ class CloudTransportTests(unittest.TestCase):
         self.assertEqual(self.cloud._retry_delay_ms(2), 10000)
         self.assertEqual(self.cloud._retry_delay_ms(5), 60000)
         self.assertEqual(self.cloud._retry_delay_ms(50), 60000)
+        self.assertEqual(self.cloud._durable_retry_delay_ms(1), 5000)
+        self.assertEqual(self.cloud._durable_retry_delay_ms(50), 60000)
+
+    def test_cpu_a_session_identity_is_stable(self):
+        first = self.cloud.device_session_id()
+        self.assertEqual(self.cloud.device_session_id(), first)
+        self.assertTrue(first.startswith("boot_"))
+
+    def test_durable_fifo_is_bounded_and_preserves_record_identity(self):
+        original = self.cloud._pending_durable_records
+        try:
+            self.cloud._pending_durable_records = []
+            records = [
+                {"schemaVersion": 1, "recordType": "observation", "sequence": sequence}
+                for sequence in range(self.cloud.DURABLE_QUEUE_DEPTH + 1)
+            ]
+            for record in records[:-1]:
+                self.assertTrue(self.cloud.submit_durable_record(record))
+            self.assertFalse(self.cloud.submit_durable_record(records[-1]))
+            first = self.cloud._peek_durable_record()
+            self.assertIs(first, records[0])
+            self.assertTrue(self.cloud._discard_durable_record(first))
+            self.assertIs(self.cloud._peek_durable_record(), records[1])
+        finally:
+            self.cloud._pending_durable_records = original
+
+    def test_durable_transport_posts_exact_record_and_accepts_duplicate(self):
+        record = {
+            "schemaVersion": 1,
+            "recordType": "observation",
+            "recordId": "20260825000042-observation-boot_A7f93k2Q-0000000042",
+            "futureEnvelope": {"preserved": True},
+        }
+        self.requests.queue({
+            "status": "ok",
+            "accepted": True,
+            "duplicate": True,
+            "recordId": record["recordId"],
+        }, status_code=200)
+        self.assertTrue(self.cloud._publish_durable_record(record))
+        method, url, kwargs = self.requests.calls[-1]
+        self.assertEqual(method, "POST")
+        self.assertEqual(url, self.cloud.DURABLE_INGEST_URL)
+        self.assertIs(kwargs["json"], record)
+        self.assertEqual(kwargs["headers"]["X-Pilot-Key"], "EXAMPLE_ONLY_INGEST_TOKEN")
+
+        self.requests.queue({
+            "status": "ok",
+            "accepted": True,
+            "duplicate": True,
+            "recordId": record["recordId"],
+        }, status_code=200)
+        self.cloud._publish_durable_record(record)
+        self.assertIs(self.requests.calls[-1][2]["json"], record)
+
+    def test_unavailable_current_observation_does_not_replace_legacy_sample(self):
+        valid = {
+            "sequence": 7,
+            "status": {"shelly_available": True},
+            "values": {"power": 1000.0},
+        }
+        unavailable = {
+            "sequence": 8,
+            "status": {"shelly_available": False},
+            "values": {"power": None},
+        }
+        self.assertIs(self.cloud._legacy_observation_candidate(valid, None), valid)
+        self.assertIs(
+            self.cloud._legacy_observation_candidate(unavailable, valid), valid
+        )
 
     def test_transport_error_avoids_builtin_exception_init_and_keeps_http_status(self):
         self.assertNotIn("__init__", self.cloud.TransportError.__dict__)

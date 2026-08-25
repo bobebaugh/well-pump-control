@@ -1,4 +1,4 @@
-# Release: 2026-08-24 — add bounded Firebase RTDB transport beside legacy Netlify telemetry.
+# Release: 2026-08-24 — transport CPU A-selected durable observations unchanged.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -37,6 +37,11 @@ VOLTAGE_CHANGE_V = 2.0
 DEVICE_ID = 'shelly-em-well'
 INGEST_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/ingest-power'
 PUBLISH_TIMEOUT_S = 3
+DURABLE_INGEST_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/ingest-record'
+DURABLE_INGEST_TIMEOUT_S = 3
+DURABLE_QUEUE_DEPTH = 8
+DURABLE_RETRY_BASE_MS = 5000
+DURABLE_RETRY_MAX_MS = 60000
 
 SITE_ID = 'well-main'
 RTDB_DEVICE_ID = 'tab5-well-main'
@@ -85,6 +90,15 @@ def _retry_delay_ms(failure_count):
         shift = 4
     delay = RTDB_RETRY_BASE_MS * (1 << shift)
     return min(delay, RTDB_RETRY_MAX_MS)
+
+
+def _durable_retry_delay_ms(failure_count):
+    shift = failure_count - 1
+    if shift < 0:
+        shift = 0
+    if shift > 4:
+        shift = 4
+    return min(DURABLE_RETRY_BASE_MS * (1 << shift), DURABLE_RETRY_MAX_MS)
 
 
 def _rtdb_url(base_url, path, id_token):
@@ -295,6 +309,9 @@ _state = (False, False, False, None, 'unavailable', 0)
 _observation_lock = _thread.allocate_lock()
 _pending_observation = None
 
+_durable_lock = _thread.allocate_lock()
+_pending_durable_records = []
+
 _command_lock = _thread.allocate_lock()
 _pending_commands = []
 _last_delivered_command_sequence = 0
@@ -330,6 +347,11 @@ def status_snapshot():
         _state_lock.release()
 
 
+def device_session_id():
+    """Return CPU B's immutable boot-session identity for CPU A record IDs."""
+    return _session_id
+
+
 def submit_observation(observation):
     """Transfer ownership into the one-slot variable-sized observation queue."""
     global _pending_observation
@@ -349,6 +371,52 @@ def _take_pending_observation():
         return observation
     finally:
         _observation_lock.release()
+
+
+def submit_durable_record(record):
+    """Queue one complete CPU A-authored record without blocking CPU A."""
+    if (not isinstance(record, dict) or record.get('schemaVersion') != 1 or
+            record.get('recordType') != 'observation'):
+        return False
+    _durable_lock.acquire()
+    try:
+        if len(_pending_durable_records) >= DURABLE_QUEUE_DEPTH:
+            return False
+        _pending_durable_records.append(record)
+        return True
+    finally:
+        _durable_lock.release()
+
+
+def _peek_durable_record():
+    _durable_lock.acquire()
+    try:
+        return _pending_durable_records[0] if _pending_durable_records else None
+    finally:
+        _durable_lock.release()
+
+
+def _discard_durable_record(record):
+    _durable_lock.acquire()
+    try:
+        if _pending_durable_records and _pending_durable_records[0] is record:
+            _pending_durable_records.pop(0)
+            return True
+        return False
+    finally:
+        _durable_lock.release()
+
+
+def _publish_durable_record(record):
+    """Transport the exact CPU A record; the cloud performs no reselection."""
+    reply = _http_json('POST', DURABLE_INGEST_URL, body=record, headers={
+        'Content-Type': 'application/json',
+        'X-Pilot-Key': INGEST_TOKEN,
+    }, timeout=DURABLE_INGEST_TIMEOUT_S)
+    if (not isinstance(reply, dict) or reply.get('accepted') is not True or
+            reply.get('recordId') != record.get('recordId')):
+        raise TransportError('durable ingest response mismatch')
+    return bool(reply.get('duplicate'))
 
 
 def take_command():
@@ -428,6 +496,14 @@ def _material_change(observation, previous):
     if abs(values.get('voltage', 0.0) - previous_values.get('voltage', 0.0)) >= VOLTAGE_CHANGE_V:
         return True
     return False
+
+
+def _legacy_observation_candidate(observation, previous_valid):
+    """Keep legacy telemetry on its last valid Shelly-backed observation."""
+    if (isinstance(observation, dict) and
+            observation.get('status', {}).get('shelly_available') is True):
+        return observation
+    return previous_valid
 
 
 def _safe_status(wlan):
@@ -839,8 +915,12 @@ def _run():
     last_publish = time.ticks_add(time.ticks_ms(), -HEARTBEAT_PERIOD_MS)
     last_published_observation = None
     latest_observation = None
+    latest_legacy_observation = None
     monitoring_active = False
     rtdb_schedule = _new_rtdb_schedule(time.ticks_ms())
+    next_durable_attempt = time.ticks_ms()
+    durable_failure_count = 0
+    durable_yield_to_rtdb = False
 
     while True:
         now = time.ticks_ms()
@@ -888,13 +968,15 @@ def _run():
             pending = _take_pending_observation()
             if pending is not None:
                 latest_observation = pending
+                latest_legacy_observation = _legacy_observation_candidate(
+                    pending, latest_legacy_observation)
 
             retry_due = time.ticks_diff(now, next_publish_attempt) >= 0
             heartbeat_due = time.ticks_diff(now, last_publish) >= HEARTBEAT_PERIOD_MS
-            monitor_due = (monitoring_active and latest_observation is not None and
+            monitor_due = (monitoring_active and latest_legacy_observation is not None and
                            time.ticks_diff(now, last_publish) >= MONITOR_PUBLISH_PERIOD_MS)
-            change_due = (not monitoring_active and latest_observation is not None and
-                          _material_change(latest_observation, last_published_observation))
+            change_due = (not monitoring_active and latest_legacy_observation is not None and
+                          _material_change(latest_legacy_observation, last_published_observation))
 
             reason = None
             if monitor_due:
@@ -905,7 +987,7 @@ def _run():
                 reason = 'heartbeat'
 
             if retry_due and reason is not None:
-                observation = (latest_observation if latest_observation is not None
+                observation = (latest_legacy_observation if latest_legacy_observation is not None
                                else last_published_observation)
                 if observation is not None:
                     ok, reported_monitoring = _publish_observation(observation, reason)
@@ -925,8 +1007,31 @@ def _run():
                             reason, PUBLISH_RETRY_MS))
 
             # Legacy Netlify publication above retains first service priority.
-            # This step performs at most one additional bounded network call.
-            _run_rtdb_step(rtdb_schedule, latest_observation)
+            # Sparse durable records outrank disposable RTDB work, but CPU B
+            # performs at most one additional bounded network call per pass and
+            # yields to RTDB after every accepted durable record.
+            durable_attempted = False
+            durable_record = _peek_durable_record()
+            if (durable_record is not None and not durable_yield_to_rtdb and
+                    time.ticks_diff(now, next_durable_attempt) >= 0):
+                durable_attempted = True
+                try:
+                    duplicate = _publish_durable_record(durable_record)
+                    _discard_durable_record(durable_record)
+                    durable_failure_count = 0
+                    next_durable_attempt = time.ticks_ms()
+                    durable_yield_to_rtdb = True
+                    log('Durable observation accepted: sequence={}, duplicate={}'.format(
+                        durable_record.get('sequence'), duplicate))
+                except Exception as e:
+                    durable_failure_count += 1
+                    delay = _durable_retry_delay_ms(durable_failure_count)
+                    next_durable_attempt = time.ticks_add(time.ticks_ms(), delay)
+                    log('Durable observation transport error: {}; retry in {} ms'.format(
+                        e, delay))
+            if not durable_attempted:
+                _run_rtdb_step(rtdb_schedule, latest_observation)
+                durable_yield_to_rtdb = False
 
         time.sleep_ms(100)
 
