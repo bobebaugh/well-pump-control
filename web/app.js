@@ -2,11 +2,14 @@ const healthRow = document.querySelector("#health-cloud");
 const firestoreRow = document.querySelector("#health-firestore");
 const tab5Row = document.querySelector("#health-tab5");
 const shellyRow = document.querySelector("#health-shelly");
+const shelly1Row = document.querySelector("#health-shelly1");
 const checkTime = document.querySelector("#api-check-time");
 const pumpState = document.querySelector("#pump-state");
 const powerValue = document.querySelector("#power-value");
 const voltageValue = document.querySelector("#voltage-value");
 const pfValue = document.querySelector("#pf-value");
+const sw0Value = document.querySelector("#sw0-value");
+const rly0Value = document.querySelector("#rly0-value");
 const monitorButton = document.querySelector("#monitor-toggle");
 const monitorStatus = document.querySelector("#monitor-status");
 
@@ -25,6 +28,11 @@ function formatTime(date) {
 function setHealth(row, state, text) {
   row.querySelector(".health-dot").className = `health-dot ${state}`;
   row.querySelector("small").textContent = text;
+}
+
+function setBinaryValue(element, value) {
+  element.textContent = typeof value === "boolean" ? (value ? "ON" : "OFF") : "—";
+  element.className = `binary-value ${value === true ? "on" : value === false ? "off" : "unknown"}`;
 }
 
 async function fetchStatus(path, options = {}) {
@@ -47,6 +55,7 @@ async function fetchStatus(path, options = {}) {
 
 function renderTelemetry(data) {
   const values = data.values || {};
+  const shelly1 = data.shelly1 || {};
   const fresh = data.ageSeconds !== null && data.ageSeconds <= 150;
   const stateText = !fresh ? "Telemetry stale" : (data.pumpRunning ? "RUNNING" : "STOPPED");
   const stateClass = !fresh ? "stale" : (data.pumpRunning ? "running" : "stopped");
@@ -56,10 +65,24 @@ function renderTelemetry(data) {
   powerValue.textContent = Number.isFinite(values.powerW) ? values.powerW.toFixed(0) : "—";
   voltageValue.textContent = Number.isFinite(values.voltageV) ? values.voltageV.toFixed(1) : "—";
   pfValue.textContent = Number.isFinite(values.powerFactor) ? values.powerFactor.toFixed(2) : "—";
+  setBinaryValue(sw0Value, shelly1.sw0);
+  setBinaryValue(rly0Value, shelly1.rly0);
 
   const ageText = data.ageSeconds === null ? "Timestamp unavailable" : `Last report ${data.ageSeconds}s ago`;
   setHealth(tab5Row, fresh ? "online" : "checking", ageText);
   setHealth(shellyRow, values.isValid === true ? "online" : "offline", values.isValid === true ? "Meter valid" : "Meter invalid");
+  if (shelly1.available === true) {
+    const mismatch = fresh && typeof shelly1.sw0 === "boolean" && shelly1.sw0 !== data.pumpRunning;
+    const state = !fresh ? "checking" : (mismatch ? "offline" : "online");
+    const detail = mismatch
+      ? `SW0 ${shelly1.sw0 ? "ON" : "OFF"} does not match pump state · RLY0 ${shelly1.rly0 ? "ON" : "OFF"}`
+      : `SW0 ${shelly1.sw0 ? "ON" : "OFF"} · RLY0 ${shelly1.rly0 ? "ON" : "OFF"} · relay not wired`;
+    setHealth(shelly1Row, state, detail);
+  } else if (shelly1.available === false) {
+    setHealth(shelly1Row, "offline", "Not reachable from Tab5 · RLY0 not wired");
+  } else {
+    setHealth(shelly1Row, "unavailable", "Firmware has not reported Shelly 1 yet");
+  }
 }
 
 function clearTelemetry() {
@@ -68,6 +91,9 @@ function clearTelemetry() {
   powerValue.textContent = "—";
   voltageValue.textContent = "—";
   pfValue.textContent = "—";
+  setBinaryValue(sw0Value, null);
+  setBinaryValue(rly0Value, null);
+  setHealth(shelly1Row, "unavailable", "Awaiting Tab5 telemetry · RLY0 not wired");
 }
 
 function updateMonitorControls() {
