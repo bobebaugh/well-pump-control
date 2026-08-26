@@ -1,4 +1,4 @@
-# Release: 2026-08-26 M6.13 — add fresh ADC batches and derived pressure flow to calibration.
+# Release: 2026-08-26 M6.14 — enlarge pressure calibration controls and status text.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -1389,15 +1389,15 @@ def _render_pressure_calibration(batch, direction, gauge_psi, flow_window_second
                                  flow_gpm, filename, capture_id):
     """Render the completed prior batch at the start of the next anchored cycle."""
     _qual_button(40, 92, 225, 72, direction.upper(),
-                 GREEN if direction == 'rising' else YELLOW, M5.Lcd.FONTS.Montserrat18)
-    _qual_button(285, 92, 130, 72, '- PSI', BLUE, M5.Lcd.FONTS.Montserrat18)
+                 GREEN if direction == 'rising' else YELLOW)
+    _qual_button(285, 92, 130, 72, '- PSI', BLUE)
     draw_label('{:.1f} PSI      '.format(gauge_psi), 440, 106,
                M5.Lcd.FONTS.DejaVu40, WHITE)
-    _qual_button(675, 92, 130, 72, '+ PSI', BLUE, M5.Lcd.FONTS.Montserrat18)
-    _qual_button(835, 92, 130, 72, 'WIN -', BLUE, M5.Lcd.FONTS.Montserrat18)
-    _qual_button(985, 92, 210, 72, 'WIN +', BLUE, M5.Lcd.FONTS.Montserrat18)
+    _qual_button(675, 92, 130, 72, '+ PSI', BLUE)
+    _qual_button(835, 92, 130, 72, 'WIN -', BLUE)
+    _qual_button(985, 92, 210, 72, 'WIN +', BLUE)
     draw_label('Flow window: {} s       '.format(flow_window_seconds), 835, 172,
-               M5.Lcd.FONTS.Montserrat18, CYAN)
+               M5.Lcd.FONTS.Montserrat24, CYAN)
 
     fields = _calibration_batch_text(batch)
     positions = ((45, 225), (430, 225), (815, 225),
@@ -1618,7 +1618,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.13: fresh pressure calibration batches and derived flow utility')
+log('CPU A release M6.14: enlarged pressure calibration controls and status text')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:
