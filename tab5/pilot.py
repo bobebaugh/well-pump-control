@@ -1,4 +1,4 @@
-# Release: 2026-08-26 M6.12 — refine pressure qualification and durable diagnostics.
+# Release: 2026-08-26 M6.13 — add fresh ADC batches and derived pressure flow to calibration.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -38,7 +38,6 @@ MAX_DURABLE_OBSERVATION_INTERVAL_MS = 600000
 EVENT_HISTORY_DEPTH = 600
 SHELLY_AVAILABILITY_CONFIRMATION_SAMPLES = 3
 ADC_FILTER_SAMPLE_COUNT = 5
-ADC_FILTER_SAMPLE_SPACING_MS = 70
 MATERIAL_NUMERIC_THRESHOLDS = {
     'values.power': 50.0,
     'values.voltage': 2.0,
@@ -187,16 +186,19 @@ def confirm_internal_antenna():
 
 
 # --- ADS1110 on the M5 Unit ADC v1.1 (Port A) ---
-# The unit is NOT a bare ADS1110. M5 puts a divider in front of it, giving a
-# 0-12 V UNIPOLAR terminal range from a converter whose own span is +/-2.048 V.
-# Full scale at the terminal is 12.288 V = 6 x 2.048 V, i.e. a 6:1 divider.
+# The unit is NOT a bare ADS1110. M5 puts a 6:1 divider in front of it.  At
+# the ADS1110's gain-1 hardware setting that gives a 0-12.288 V terminal
+# range from its +/-2.048 V converter span.  This pilot selects PGA 2, so its
+# effective terminal range is 0-6.144 V (still comfortably above the pressure
+# sensor's 4.5 V maximum output).
 # Confirmed on hardware 2026-08-19: a 7.8 V input read 1.3 V at the pin, exactly
 # 6.0x. Cross-check: M5 quote 16-bit resolution as "~0.183 mV"; 12.288/65536 =
 # 0.1875 mV, same number.
 #
-# Sample rate sets the resolution on this chip:
-#     240 SPS -> 12-bit -> 1000 uV/count at the pin ->   6000 uV at the terminal
-#      15 SPS -> 16-bit ->   62.5 uV/count at the pin -> 375 uV at the terminal
+# Sample rate sets resolution. At the unit's gain-1 hardware range, 15 SPS is
+# 62.5 uV/count at the pin and 375 uV/count at the terminal.  At this pilot's
+# PGA 2 configuration it is 31.25 uV/count at the pin and 187.5 uV/count at
+# the terminal.
 # We sample once per second, so there is no reason to run at 240 SPS and give up
 # 32x of resolution. 15 SPS it is.
 #
@@ -209,10 +211,15 @@ def confirm_internal_antenna():
 # at all: the transducer will be calibrated in PRESSURE against the well gauge,
 # via a boot-menu diagnostic stub, and that constant will live alongside this one.
 ADC_DIVIDER = 6.0                  # M5 Unit ADC v1.1 front end, nominal
-ADC_LSB_UV_AT_PIN = 62.5           # 15 SPS = 16-bit: 2.048 V / 32768
-ADC_UV_PER_COUNT = ADC_LSB_UV_AT_PIN * ADC_DIVIDER    # 375.0 uV at the terminal
+ADS1110_ADDRESS = 0x48
+ADS1110_READY_MASK = 0x80
+ADS1110_FRESH_TIMEOUT_MS = 250
+ADS1110_READY_POLL_MS = 4
+ADC_LSB_UV_AT_PIN = 31.25          # 15 SPS, PGA 2: 1.024 V / 32768
+ADC_UV_PER_COUNT = ADC_LSB_UV_AT_PIN * ADC_DIVIDER    # 187.5 uV at the terminal
 
 adc = None
+adc_i2c = None
 
 
 def init_adc():
@@ -227,47 +234,81 @@ def init_adc():
     # The internal bus (32/31) is the opposite case - M5 owns it, and
     # SoftI2C there fails with OSError(19) once M5.begin() has routed the
     # pins to the peripheral. Do not try to move the touch bus here.
-    global adc
+    global adc, adc_i2c
     try:
-        i2c_a = SoftI2C(scl=Pin(54), sda=Pin(53), freq=100000)
-        adc = ads1110.ADS1110(i2c_a)
-        adc.set_gain(ads1110.GAIN_ONE)
+        adc_i2c = SoftI2C(scl=Pin(54), sda=Pin(53), freq=100000)
+        adc = ads1110.ADS1110(adc_i2c)
+        # ADS1110 PGA bits 01 select gain 2. Use the numeric setting because
+        # older UIFlow driver builds do not all export a GAIN_TWO name.
+        adc.set_gain(0x01)
         adc.set_sample_rate(ads1110.SPS_15)
         adc.set_mode(ads1110.MODE_CONTIN)
-        log('ADS1110 configured: 0x48 continuous, 15 SPS (16-bit), PGA 1x, {} uV/count at terminal'.format(ADC_UV_PER_COUNT))
+        log('ADS1110 configured: 0x48 continuous, 15 SPS (16-bit), PGA 2x, {} uV/count at terminal'.format(ADC_UV_PER_COUNT))
     except Exception as e:
         adc = None
+        adc_i2c = None
         log('ADS1110 configuration failed: {}'.format(e))
 
 
 init_adc()
 
 
-def _read_ads1110_microvolts_once():
-    """Read one current ADS1110 conversion, with the established reinit retry."""
+def ads1110_signed_raw_count(reply):
+    """Decode the ADS1110's two-byte two's-complement conversion register."""
+    if not isinstance(reply, (bytes, bytearray)) or len(reply) != 3:
+        raise ValueError('ADS1110 reply must be exactly three bytes')
+    raw = (reply[0] << 8) | reply[1]
+    return raw - 65536 if raw >= 32768 else raw
+
+
+def _read_ads1110_reply():
+    """Read conversion plus config through the owned public SoftI2C bus."""
+    if adc_i2c is None:
+        raise OSError('ADS1110 bus unavailable')
+    return adc_i2c.readfrom(ADS1110_ADDRESS, 3)
+
+
+def _read_ads1110_fresh_raw_once(service=None):
+    """Wait for a new ADS1110 15-SPS conversion using ST/DRDY, not a delay.
+
+    The ADS1110 sets ST/DRDY high after a conversion has been read and clears
+    it when a new conversion arrives.  First discard whatever was present at
+    call entry, then return only a later reply whose ST/DRDY bit is clear.
+    """
+    _read_ads1110_reply()  # mark any already-complete conversion as consumed
+    deadline = time.ticks_add(time.ticks_ms(), ADS1110_FRESH_TIMEOUT_MS)
+    while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+        reply = _read_ads1110_reply()
+        new_conversion = (reply[2] & ADS1110_READY_MASK) == 0
+        if new_conversion:
+            return ads1110_signed_raw_count(reply)
+        if service is not None:
+            service()
+        time.sleep_ms(ADS1110_READY_POLL_MS)
+    raise OSError('ADS1110 fresh-conversion timeout')
+
+
+def read_ads1110_fresh_raw_count(service=None):
+    """Return one demonstrably fresh signed count; reinitialize once on fault."""
     global adc
-    if adc is None:
-        return None
-    try:
-        raw = adc.get_adc_raw_value()
-        if raw > 32767:
-            raw -= 65536  # two's complement over the full 16-bit register
-        return int(raw * ADC_UV_PER_COUNT)  # uV at the screw terminal, not the pin
-    except Exception as e:
-        # Kept as genuine fault recovery. Since Port A moved to SoftI2C this
-        # should effectively never fire - if it starts firing, suspect wiring
-        # or the ADS1110 itself, not bus contention.
-        init_adc()
+    for attempt in range(2):
         if adc is None:
             return None
         try:
-            raw = adc.get_adc_raw_value()
-            if raw > 32767:
-                raw -= 65536
-            return int(raw * ADC_UV_PER_COUNT)
-        except Exception as e2:
-            log('ADS1110 read failed after reinit: {}'.format(e2))
-        return None
+            return _read_ads1110_fresh_raw_once(service)
+        except Exception as e:
+            if attempt == 0:
+                log('ADS1110 fresh read failed, reinitializing: {}'.format(e))
+                init_adc()
+            else:
+                log('ADS1110 fresh read failed after reinit: {}'.format(e))
+    return None
+
+
+def _read_ads1110_microvolts_once():
+    """Return one fresh ADS1110 terminal-voltage conversion in microvolts."""
+    raw = read_ads1110_fresh_raw_count()
+    return None if raw is None else int(raw * ADC_UV_PER_COUNT)
 
 
 def trimmed_mean_microvolts(samples):
@@ -292,10 +333,6 @@ def read_ads1110_microvolts():
         if value is None:
             return None
         samples.append(value)
-        if index + 1 < ADC_FILTER_SAMPLE_COUNT:
-            # ADS1110 15 SPS conversions are 66.7 ms apart. This makes each
-            # retained input a new conversion without overrunning the 1 Hz loop.
-            time.sleep_ms(ADC_FILTER_SAMPLE_SPACING_MS)
     return trimmed_mean_microvolts(samples)
 
 
@@ -1060,7 +1097,19 @@ QUAL_PUMP_START_W = 1000.0
 QUAL_PUMP_STOP_W = 100.0
 QUAL_CALIBRATION_START_PSI = 60.0
 QUAL_CALIBRATION_START_DIRECTION = 'falling'
-QUAL_LIVE_ADC_REFRESH_MS = 1000
+QUAL_FLOW_WINDOW_DEFAULT_SECONDS = 3
+QUAL_FLOW_WINDOW_MIN_SECONDS = 3
+QUAL_FLOW_WINDOW_MAX_SECONDS = 30
+QUAL_FLOW_MIN_SPAN_MS = 900
+QUAL_FLOW_WINDOW_TOLERANCE_MS = 350
+PRESSURE_SENSOR_ZERO_UV = 500000.0
+PRESSURE_SENSOR_SPAN_UV = 4000000.0
+PRESSURE_SENSOR_SPAN_PSI = 100.0
+PRESSURE_PSI_PER_COUNT = (ADC_UV_PER_COUNT * PRESSURE_SENSOR_SPAN_PSI /
+                          PRESSURE_SENSOR_SPAN_UV)
+TANK_EFFECTIVE_VOLUME_GAL = 79.3
+TANK_PRECHARGE_PSIG = 38.0
+SITE_ATMOSPHERE_PSI = 13.1
 
 
 def summarize_adc_samples(samples):
@@ -1093,6 +1142,105 @@ def qualification_midpoint_ticks(start_ticks_ms, end_ticks_ms):
     return time.ticks_add(
         start_ticks_ms,
         time.ticks_diff(end_ticks_ms, start_ticks_ms) // 2)
+
+
+def average_raw_adc_counts(samples):
+    """Return the arithmetic mean only for a complete signed ADC batch."""
+    if not isinstance(samples, list) or len(samples) != QUAL_CAPTURE_SAMPLES:
+        return None
+    for value in samples:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+    return sum(samples) / QUAL_CAPTURE_SAMPLES
+
+
+def nominal_psi_from_raw_count(raw_count):
+    """Convert a raw terminal count with the nominal 0.5--4.5 V sensor map."""
+    if isinstance(raw_count, bool) or not isinstance(raw_count, (int, float)):
+        return None
+    terminal_uv = raw_count * ADC_UV_PER_COUNT
+    return ((terminal_uv - PRESSURE_SENSOR_ZERO_UV) * PRESSURE_SENSOR_SPAN_PSI /
+            PRESSURE_SENSOR_SPAN_UV)
+
+
+def raw_count_regression_slope(history, reference_ticks_ms, window_seconds,
+                               tolerance_ms=0):
+    """Least-squares counts/ms over a real tick horizon, handling tick wrap."""
+    if (isinstance(window_seconds, bool) or
+            not isinstance(window_seconds, (int, float)) or window_seconds <= 0):
+        return None
+    horizon_ms = int(window_seconds * 1000) + max(0, int(tolerance_ms))
+    points = []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        raw_count = item.get('average_raw_count')
+        midpoint = item.get('midpoint_ticks_ms')
+        if (isinstance(raw_count, bool) or not isinstance(raw_count, (int, float)) or
+                isinstance(midpoint, bool) or not isinstance(midpoint, int)):
+            continue
+        age_ms = time.ticks_diff(reference_ticks_ms, midpoint)
+        if 0 <= age_ms <= horizon_ms:
+            points.append((age_ms, raw_count))
+    if len(points) < 2:
+        return None
+    # x increases forward in time, while age decreases.  This avoids trusting
+    # a uniform one-second cadence and leaves tick arithmetic wrap-safe.
+    points = [(-age_ms, raw_count) for age_ms, raw_count in points]
+    mean_x = sum(point[0] for point in points) / len(points)
+    mean_y = sum(point[1] for point in points) / len(points)
+    denominator = sum((point[0] - mean_x) ** 2 for point in points)
+    if denominator <= 0:
+        return None
+    return (sum((point[0] - mean_x) * (point[1] - mean_y)
+                for point in points) / denominator)
+
+
+def estimated_flow_gpm(history, current_batch, window_seconds):
+    """Return signed, derived tank flow for a valid real-time regression window."""
+    if not isinstance(current_batch, dict):
+        return None
+    current_count = current_batch.get('average_raw_count')
+    midpoint = current_batch.get('midpoint_ticks_ms')
+    if (isinstance(current_count, bool) or not isinstance(current_count, (int, float)) or
+            isinstance(midpoint, bool) or not isinstance(midpoint, int)):
+        return None
+    pressure_psig = nominal_psi_from_raw_count(current_count)
+    if pressure_psig is None or pressure_psig < 0 or pressure_psig > PRESSURE_SENSOR_SPAN_PSI:
+        return None
+    horizon_ms = int(window_seconds * 1000) + QUAL_FLOW_WINDOW_TOLERANCE_MS
+    valid_points = []
+    for item in history:
+        if (isinstance(item, dict) and
+                isinstance(item.get('midpoint_ticks_ms'), int) and
+                isinstance(item.get('average_raw_count'), (int, float)) and
+                not isinstance(item.get('average_raw_count'), bool)):
+            age_ms = time.ticks_diff(midpoint, item['midpoint_ticks_ms'])
+            if 0 <= age_ms <= horizon_ms:
+                history_pressure = nominal_psi_from_raw_count(
+                    item['average_raw_count'])
+                if (history_pressure is not None and 0 <= history_pressure <=
+                        PRESSURE_SENSOR_SPAN_PSI):
+                    valid_points.append(item)
+    if len(valid_points) < 3:
+        return None
+    oldest_age_ms = max(time.ticks_diff(midpoint, item['midpoint_ticks_ms'])
+                        for item in valid_points)
+    required_span_ms = max(
+        QUAL_FLOW_MIN_SPAN_MS,
+        int(window_seconds * 1000) - QUAL_FLOW_WINDOW_TOLERANCE_MS)
+    if oldest_age_ms < required_span_ms:
+        return None
+    slope_counts_per_ms = raw_count_regression_slope(
+        valid_points, midpoint, window_seconds, QUAL_FLOW_WINDOW_TOLERANCE_MS)
+    if slope_counts_per_ms is None:
+        return None
+    pressure_slope_psi_per_min = (slope_counts_per_ms * PRESSURE_PSI_PER_COUNT *
+                                  60000.0)
+    dvol_dpressure = (TANK_EFFECTIVE_VOLUME_GAL *
+                      (TANK_PRECHARGE_PSIG + SITE_ATMOSPHERE_PSI) /
+                      ((pressure_psig + SITE_ATMOSPHERE_PSI) ** 2))
+    return dvol_dpressure * pressure_slope_psi_per_min
 
 
 def qualification_filename(prefix):
@@ -1159,111 +1307,194 @@ def _wait_until(target_ms):
         time.sleep_ms(25)
 
 
+def _qual_service_adc_wait():
+    """Keep the HMI alive while the bounded fresh-conversion wait polls ST/DRDY."""
+    try:
+        M5.update()
+    except Exception:
+        pass
+
+
+def _acquire_calibration_batch():
+    """Acquire exactly five fresh raw counts and timestamp the real interval."""
+    started_ms = time.ticks_ms()
+    samples = []
+    for unused in range(QUAL_CAPTURE_SAMPLES):
+        raw_count = read_ads1110_fresh_raw_count(_qual_service_adc_wait)
+        if raw_count is None:
+            samples.append(None)
+        else:
+            samples.append(raw_count)
+    ended_ms = time.ticks_ms()
+    return {
+        'raw_samples': samples,
+        'average_raw_count': average_raw_adc_counts(samples),
+        'start_ticks_ms': started_ms,
+        'end_ticks_ms': ended_ms,
+        'midpoint_ticks_ms': qualification_midpoint_ticks(started_ms, ended_ms),
+    }
+
+
+def _calibration_batch_text(batch):
+    if not isinstance(batch, dict):
+        return ['S1: --', 'S2: --', 'S3: --', 'S4: --', 'S5: --', 'AVG: --']
+    samples = batch.get('raw_samples') or []
+    fields = []
+    for index in range(QUAL_CAPTURE_SAMPLES):
+        value = samples[index] if index < len(samples) else None
+        fields.append('S{}: {}'.format(index + 1, '--' if value is None else value))
+    average = batch.get('average_raw_count')
+    fields.append('AVG: {}'.format('--' if average is None else '{:.1f}'.format(average)))
+    return fields
+
+
+def _open_calibration_log(filename):
+    """Open the capture-only CSV lazily: idle screen updates never touch flash."""
+    handle = open(filename, 'w')
+    handle.write('record_type,capture_id,direction,gauge_psi,'
+                 's1_raw_count,s2_raw_count,s3_raw_count,s4_raw_count,s5_raw_count,'
+                 'average_raw_count,measurement_start_ticks_ms,'
+                 'measurement_end_ticks_ms,measurement_midpoint_ticks_ms,'
+                 'nominal_psi,flow_window_seconds,estimated_flow_gpm\n')
+    handle.flush()
+    return handle
+
+
+def _write_calibration_capture(handle, capture_id, batch, direction, gauge_psi,
+                               flow_window_seconds, flow_gpm):
+    """Persist exactly the batch currently displayed when Capture was tapped."""
+    if handle is None or not isinstance(batch, dict):
+        return False
+    samples = batch.get('raw_samples') or []
+    if len(samples) != QUAL_CAPTURE_SAMPLES:
+        return False
+    average = batch.get('average_raw_count')
+    nominal_psi = nominal_psi_from_raw_count(average)
+    fields = ['capture', capture_id, direction, '{:.1f}'.format(gauge_psi)]
+    fields.extend('' if value is None else value for value in samples)
+    fields.extend([
+        '' if average is None else '{:.3f}'.format(average),
+        batch.get('start_ticks_ms', ''), batch.get('end_ticks_ms', ''),
+        batch.get('midpoint_ticks_ms', ''),
+        '' if nominal_psi is None else '{:.5f}'.format(nominal_psi),
+        flow_window_seconds,
+        '' if flow_gpm is None else '{:+.5f}'.format(flow_gpm),
+    ])
+    handle.write(','.join(str(value) for value in fields) + '\n')
+    handle.flush()
+    return True
+
+
+def _render_pressure_calibration(batch, direction, gauge_psi, flow_window_seconds,
+                                 flow_gpm, filename, capture_id):
+    """Render the completed prior batch at the start of the next anchored cycle."""
+    _qual_button(40, 92, 225, 72, direction.upper(),
+                 GREEN if direction == 'rising' else YELLOW, M5.Lcd.FONTS.Montserrat18)
+    _qual_button(285, 92, 130, 72, '- PSI', BLUE, M5.Lcd.FONTS.Montserrat18)
+    draw_label('{:.1f} PSI      '.format(gauge_psi), 440, 106,
+               M5.Lcd.FONTS.DejaVu40, WHITE)
+    _qual_button(675, 92, 130, 72, '+ PSI', BLUE, M5.Lcd.FONTS.Montserrat18)
+    _qual_button(835, 92, 130, 72, 'WIN -', BLUE, M5.Lcd.FONTS.Montserrat18)
+    _qual_button(985, 92, 210, 72, 'WIN +', BLUE, M5.Lcd.FONTS.Montserrat18)
+    draw_label('Flow window: {} s       '.format(flow_window_seconds), 835, 172,
+               M5.Lcd.FONTS.Montserrat18, CYAN)
+
+    fields = _calibration_batch_text(batch)
+    positions = ((45, 225), (430, 225), (815, 225),
+                 (45, 305), (430, 305), (815, 305))
+    for text, position in zip(fields, positions):
+        draw_label(text + '               ', position[0], position[1],
+                   M5.Lcd.FONTS.Montserrat24, WHITE if '--' not in text else YELLOW)
+    nominal_psi = (nominal_psi_from_raw_count(batch.get('average_raw_count'))
+                   if isinstance(batch, dict) else None)
+    draw_label('Nominal sensor: {} PSI       '.format(
+        '--' if nominal_psi is None else '{:.3f}'.format(nominal_psi)),
+        45, 385, M5.Lcd.FONTS.Montserrat24, CYAN)
+    draw_label('Derived flow: {} GPM       '.format(
+        'unavailable' if flow_gpm is None else '{:+.3f}'.format(flow_gpm)),
+        580, 385, M5.Lcd.FONTS.Montserrat24,
+        YELLOW if flow_gpm is None else (GREEN if flow_gpm >= 0 else BLUE))
+    _qual_button(40, 480, 760, 145, 'CAPTURE DISPLAYED BATCH', GREEN)
+    _qual_button(870, 480, 325, 145, 'BACK', RED)
+    draw_label('Raw counts | measured fresh at 15 SPS | direction is capture metadata only',
+               45, 650, M5.Lcd.FONTS.Montserrat18, CYAN)
+    draw_label('{} | captures: {}       '.format(filename, capture_id), 45, 685,
+               M5.Lcd.FONTS.Montserrat18, CYAN)
+
+
 def run_pressure_calibration():
-    """Capture gauge points; raw local readings are appended before summary."""
+    """Continuously show five fresh raw counts; save only an explicit displayed batch."""
     _qual_wait_release()
     filename = qualification_filename('pressure-cal')
-    handle = open(filename, 'w')
-    handle.write('record_type,capture_id,direction,gauge_psi,sample_index,'
-                 'adc_start_ticks_ms,adc_end_ticks_ms,adc_midpoint_ticks_ms,'
-                 'adc_microvolts,sample_count,'
-                 'representative_microvolts,spread_microvolts\n')
-    handle.flush()
+    handle = None
     gauge_psi = QUAL_CALIBRATION_START_PSI
     direction = QUAL_CALIBRATION_START_DIRECTION
+    flow_window_seconds = QUAL_FLOW_WINDOW_DEFAULT_SECONDS
     capture_id = 0
-    last_summary = None
-    live_adc_uv = None
-    next_live_adc_ms = time.ticks_ms()
+    history = []
+    completed_batch = None
+    displayed_batch = None
+    displayed_flow_gpm = None
+    next_cycle_ms = time.ticks_ms()
     was_down = False
+    _qual_title('GAUGE CALIBRATION')
 
     while True:
-        _qual_title('GAUGE CALIBRATION', 'Local ADS1110 only | {}'.format(filename))
-        _qual_button(45, 150, 270, 90, direction.upper(), GREEN if direction == 'rising' else YELLOW)
-        _qual_button(355, 150, 160, 90, '- 1 PSI')
-        draw_label('{:.1f} PSI'.format(gauge_psi), 555, 171, M5.Lcd.FONTS.DejaVu40, WHITE)
-        _qual_button(820, 150, 160, 90, '+ 1 PSI')
-        _qual_button(45, 300, 760, 190, 'CAPTURE {} FILTERED SAMPLES'.format(QUAL_CAPTURE_SAMPLES), GREEN)
-        _qual_button(850, 300, 380, 190, 'BACK')
-        if last_summary is None:
-            detail = 'Set the gauge value and direction, then capture.'
-        else:
-            detail = ('Capture {}: {} samples | median {:.6f} V | spread {} uV'.format(
-                capture_id, last_summary['count'],
-                last_summary['representativeMicrovolts'] / 1000000,
-                last_summary['spreadMicrovolts']))
-        draw_label(detail + '          ', 48, 555, M5.Lcd.FONTS.Montserrat24, CYAN)
-        draw_label('Each raw point is appended immediately; no PSI calculation is performed.',
-                   48, 620, M5.Lcd.FONTS.Montserrat18, CYAN)
-        draw_label('Live ADC (not saved): {}          '.format(
-            'waiting...' if live_adc_uv is None else '{:.6f} V'.format(
-                live_adc_uv / 1000000)),
-            48, 675, M5.Lcd.FONTS.Montserrat18,
-            YELLOW if live_adc_uv is None else CYAN)
+        now_ms = time.ticks_ms()
+        if time.ticks_diff(now_ms, next_cycle_ms) >= 0:
+            # This exact ordering is intentional: draw the fully completed
+            # prior batch at the cycle boundary, then measure the next batch.
+            displayed_batch = completed_batch
+            displayed_flow_gpm = estimated_flow_gpm(
+                history, displayed_batch, flow_window_seconds)
+            _render_pressure_calibration(
+                displayed_batch, direction, gauge_psi, flow_window_seconds,
+                displayed_flow_gpm, filename, capture_id)
+            completed_batch = _acquire_calibration_batch()
+            if completed_batch['average_raw_count'] is not None:
+                history.append(completed_batch)
+                # 30 seconds is the largest selectable horizon. Keep one
+                # older endpoint to make an exact boundary regression possible.
+                current_midpoint = completed_batch['midpoint_ticks_ms']
+                history = [item for item in history if time.ticks_diff(
+                    current_midpoint, item['midpoint_ticks_ms']) <=
+                    (QUAL_FLOW_WINDOW_MAX_SECONDS * 1000 + SAMPLE_PERIOD_MS)]
+            next_cycle_ms = time.ticks_add(next_cycle_ms, SAMPLE_PERIOD_MS)
+            if time.ticks_diff(time.ticks_ms(), next_cycle_ms) >= 0:
+                # Processing was slower than the schedule.  Restart the
+                # anchor from real time rather than claiming skipped seconds.
+                next_cycle_ms = time.ticks_ms()
 
-        while True:
-            point, was_down = _qual_tap(was_down)
-            if _in_button(point, 45, 150, 270, 90):
-                direction = 'falling' if direction == 'rising' else 'rising'
-                break
-            if _in_button(point, 355, 150, 160, 90):
-                gauge_psi -= 1.0
-                break
-            if _in_button(point, 820, 150, 160, 90):
-                gauge_psi += 1.0
-                break
-            if _in_button(point, 850, 300, 380, 190):
+        point, was_down = _qual_tap(was_down)
+        if _in_button(point, 40, 92, 225, 72):
+            direction = 'falling' if direction == 'rising' else 'rising'
+        elif _in_button(point, 285, 92, 130, 72):
+            gauge_psi -= 1.0
+        elif _in_button(point, 675, 92, 130, 72):
+            gauge_psi += 1.0
+        elif _in_button(point, 835, 92, 130, 72):
+            flow_window_seconds = max(
+                QUAL_FLOW_WINDOW_MIN_SECONDS, flow_window_seconds - 1)
+        elif _in_button(point, 985, 92, 210, 72):
+            flow_window_seconds = min(
+                QUAL_FLOW_WINDOW_MAX_SECONDS, flow_window_seconds + 1)
+        elif _in_button(point, 870, 480, 325, 145):
+            if handle is not None:
                 handle.close()
-                _qual_wait_release()
-                return
-            if _in_button(point, 45, 300, 760, 190):
-                capture_id += 1
-                readings = []
-                started_ms = time.ticks_ms()
-                next_sample_ms = started_ms
-                for sample_index in range(1, QUAL_CAPTURE_SAMPLES + 1):
-                    _wait_until(next_sample_ms)
-                    adc_start_ticks_ms = time.ticks_ms()
-                    adc_uv = read_ads1110_microvolts()
-                    adc_end_ticks_ms = time.ticks_ms()
-                    adc_midpoint_ticks_ms = qualification_midpoint_ticks(
-                        adc_start_ticks_ms, adc_end_ticks_ms)
-                    readings.append(adc_uv)
-                    handle.write('sample,{},{},{:.1f},{},{},{},{},{},,,\n'.format(
-                        capture_id, direction, gauge_psi, sample_index,
-                        adc_start_ticks_ms, adc_end_ticks_ms,
-                        adc_midpoint_ticks_ms,
-                        '' if adc_uv is None else adc_uv))
-                    handle.flush()
-                    draw_label('Capturing {}/{}: {}          '.format(
-                        sample_index, QUAL_CAPTURE_SAMPLES,
-                        'ADC unavailable' if adc_uv is None else '{:.6f} V'.format(adc_uv / 1000000)),
-                        48, 555, M5.Lcd.FONTS.Montserrat24,
-                        RED if adc_uv is None else CYAN)
-                    next_sample_ms = time.ticks_add(started_ms, sample_index * SAMPLE_PERIOD_MS)
-                last_summary = summarize_adc_samples(readings)
-                if last_summary is not None:
-                    handle.write('summary,{},{},{:.1f},,,,,,{},{},{}\n'.format(
-                        capture_id, direction, gauge_psi,
-                        last_summary['count'],
-                        last_summary['representativeMicrovolts'],
-                        last_summary['spreadMicrovolts']))
-                    handle.flush()
-                gauge_psi += 1.0 if direction == 'rising' else -1.0
-                break
-            now_ms = time.ticks_ms()
-            if time.ticks_diff(now_ms, next_live_adc_ms) >= 0:
-                # This is an idle-screen aid only. It does not touch the CSV;
-                # a deliberate Capture is still the only calibration evidence.
-                live_adc_uv = read_ads1110_microvolts()
-                draw_label('Live ADC (not saved): {}          '.format(
-                    'ADC unavailable' if live_adc_uv is None else
-                    '{:.6f} V'.format(live_adc_uv / 1000000)),
-                    48, 675, M5.Lcd.FONTS.Montserrat18,
-                    RED if live_adc_uv is None else CYAN)
-                next_live_adc_ms = time.ticks_add(
-                    now_ms, QUAL_LIVE_ADC_REFRESH_MS)
-            time.sleep_ms(35)
+            _qual_wait_release()
+            return
+        elif _in_button(point, 40, 480, 760, 145):
+            if displayed_batch is not None:
+                if handle is None:
+                    handle = _open_calibration_log(filename)
+                capture_flow_gpm = estimated_flow_gpm(
+                    history, displayed_batch, flow_window_seconds)
+                if _write_calibration_capture(
+                        handle, capture_id + 1, displayed_batch, direction,
+                        gauge_psi, flow_window_seconds, capture_flow_gpm):
+                    capture_id += 1
+                    gauge_psi += 1.0 if direction == 'rising' else -1.0
+        time.sleep_ms(20)
 
 
 def run_pressure_fill():
@@ -1387,7 +1618,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.11: local pressure qualification boot utility')
+log('CPU A release M6.13: fresh pressure calibration batches and derived flow utility')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:
