@@ -26,7 +26,17 @@ function harness(pointerStatus = 200) {
     async create(value) { documents.set(value.releaseId, value); }
   };
   const releases = { doc() { return releaseDocument; } };
-  const site = { collection() { return releases; } };
+  const adoptions = [
+    { observedAt: { toDate: () => new Date("2026-08-25T14:00:00Z") }, activeRules: { version: 1 } },
+    { observedAt: { toDate: () => new Date("2026-08-25T15:00:00Z") }, activeRules: { version: 2 } }
+  ];
+  const eventRecords = {
+    where(field, operator, value) {
+      calls.push({ query: [field, operator, value] });
+      return { async get() { return { empty: false, docs: adoptions.map(data => ({ data: () => data })) }; } };
+    }
+  };
+  const site = { collection(name) { return name === "eventRecords" ? eventRecords : releases; } };
   const sites = { doc() { return site; } };
   const db = { collection() { return sites; } };
   const firebase = {
@@ -57,6 +67,13 @@ test("rules store uses a fixed custom identity and ETag guarded pointer update",
   const put = calls.find(call => call.options.method === "PUT");
   assert.equal(put.options.headers["If-Match"], '"pointer-v1"');
   assert.match(put.url, /\/v1\/sites\/well-main\/rules\/current\.json\?auth=id-token$/);
+});
+
+test("rules store selects the latest durable Tab5 adoption without a composite index", async () => {
+  const { store, calls } = harness();
+  const adoption = await store.getLatestRuleAdoption();
+  assert.equal(adoption.activeRules.version, 2);
+  assert.deepEqual(calls.find(call => call.query).query, ["recordType", "==", "rule-adoption"]);
 });
 
 test("rules store reports a concurrent pointer change and rejects other RTDB hosts", async () => {

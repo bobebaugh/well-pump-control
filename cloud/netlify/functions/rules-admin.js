@@ -61,6 +61,28 @@ function validPointer(pointer) {
     pointer.rulesSchemaVersion === 1 && /^[a-f0-9]{64}$/.test(pointer.contentHash);
 }
 
+function adoptionView(record) {
+  const observedAt = record && record.observedAt;
+  const reportedAt = observedAt && typeof observedAt.toDate === "function" ? observedAt.toDate() : new Date(observedAt);
+  if (!record || record.recordType !== "rule-adoption" ||
+      !Number.isInteger(record.activeRules?.version) || record.activeRules.version < 1 ||
+      !/^[a-f0-9]{64}$/.test(record.activeRules?.contentHash) ||
+      !Number.isFinite(reportedAt.getTime())) return null;
+  return {
+    releaseId: typeof record.releaseId === "string" ? record.releaseId : null,
+    rulesVersion: record.activeRules.version,
+    contentHash: record.activeRules.contentHash,
+    reportedAt: reportedAt.toISOString()
+  };
+}
+
+function adoptionStatus(pointer, adopted) {
+  if (!adopted) return "UNKNOWN";
+  if (adopted.rulesVersion === pointer.rulesVersion && adopted.contentHash === pointer.contentHash) return "ACTIVE";
+  if (adopted.rulesVersion < pointer.rulesVersion) return "PENDING";
+  return "MISMATCH";
+}
+
 function createHandler(dependencies = {}) {
   const env = dependencies.env || process.env;
   const readFile = dependencies.readFile || readFileSync;
@@ -87,7 +109,14 @@ function createHandler(dependencies = {}) {
       const currentPackage = validatePackage(JSON.parse(currentBody));
 
       if (event.httpMethod === "GET") {
-        return response(200, { status: "ok", pointer: current, rulesPackage: currentPackage });
+        const adopted = adoptionView(await store.getLatestRuleAdoption());
+        return response(200, {
+          status: "ok",
+          pointer: current,
+          adoptedRules: adopted,
+          adoptionStatus: adoptionStatus(current, adopted),
+          rulesPackage: currentPackage
+        });
       }
 
       const request = parseBody(event);
@@ -146,3 +175,5 @@ function createHandler(dependencies = {}) {
 exports.handler = createHandler();
 exports._createHandler = createHandler;
 exports._releaseIdAt = releaseIdAt;
+exports._adoptionStatus = adoptionStatus;
+exports._adoptionView = adoptionView;

@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#09111f">
   <title>Rules Editor — Well Pump Pilot</title>
-  <link rel="stylesheet" href="/styles.css">
-  <script src="/rules.js?v=20260825-2" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=20260825-3">
+  <script src="/rules.js?v=20260825-3" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -31,6 +31,11 @@
         <p class="kicker">PUBLISHED RELEASE</p>
         <h2 id="release-name">Not loaded</h2>
         <small id="release-hash">Enter the pilot key to load the live pointer and package.</small>
+      </div>
+      <div class="adoption-summary">
+        <p class="kicker">TAB5 ADOPTED RULES <strong id="adoption-state" class="adoption-state unknown">UNKNOWN</strong></p>
+        <h2 id="adoption-name">No adoption report loaded</h2>
+        <small id="adoption-detail">Version, hash, and report time will appear after loading.</small>
       </div>
       <div class="toolbar-actions">
         <button class="secondary-button" id="load-rules" type="button">Load current rules</button>

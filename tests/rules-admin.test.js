@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const { readFileSync } = require("node:fs");
 const path = require("node:path");
-const { _createHandler } = require("../cloud/netlify/functions/rules-admin");
+const { _adoptionStatus, _adoptionView, _createHandler } = require("../cloud/netlify/functions/rules-admin");
 
 const root = path.resolve(__dirname, "..");
 const body = readFileSync(path.join(root, "cloud/netlify/rules-releases/20260825010000-rules-v1.json"), "utf8");
@@ -25,6 +25,7 @@ function harness() {
   const store = {
     async getCurrentPointer() { return { ...pointer }; },
     async getReleaseBody() { return null; },
+    async getLatestRuleAdoption() { return null; },
     async publish(...args) { published.push(args); }
   };
   const handler = _createHandler({
@@ -43,6 +44,39 @@ test("loads the exact currently published rules package", async () => {
   assert.deepEqual(response.pointer, pointer);
   assert.equal(response.rulesPackage.releaseId, pointer.releaseId);
   assert.equal(response.rulesPackage.rules.length, 59);
+  assert.equal(response.adoptionStatus, "UNKNOWN");
+  assert.equal(response.adoptedRules, null);
+});
+
+test("classifies published versus latest adopted rules", async t => {
+  const published = { rulesVersion: 2, contentHash: "c".repeat(64) };
+  const cases = [
+    ["ACTIVE", 2, published.contentHash],
+    ["PENDING", 1, "a".repeat(64)],
+    ["MISMATCH", 2, "a".repeat(64)],
+    ["MISMATCH", 3, "b".repeat(64)]
+  ];
+  for (const [expected, version, contentHash] of cases) {
+    await t.test(expected, () => {
+      assert.equal(_adoptionStatus(published, { rulesVersion: version, contentHash }), expected);
+    });
+  }
+  assert.equal(_adoptionStatus(published, null), "UNKNOWN");
+});
+
+test("returns a narrow adoption view with the Tab5 report time", () => {
+  const adopted = _adoptionView({
+    recordType: "rule-adoption",
+    releaseId: "20260825010000-rules-v1",
+    activeRules: { version: 1, contentHash: "a".repeat(64) },
+    observedAt: { toDate: () => new Date("2026-08-25T15:00:00Z") }
+  });
+  assert.deepEqual(adopted, {
+    releaseId: "20260825010000-rules-v1",
+    rulesVersion: 1,
+    contentHash: "a".repeat(64),
+    reportedAt: "2026-08-25T15:00:00.000Z"
+  });
 });
 
 test("publishes an immutable incremented release before returning its pointer", async () => {

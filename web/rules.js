@@ -21,6 +21,7 @@ const ruleList = document.querySelector("#rule-list");
 const publishButton = document.querySelector("#publish-rules");
 const downloadButton = document.querySelector("#download-draft");
 let pointer = null;
+let adoptedRules = null;
 let draft = [];
 let baseline = [];
 let selected = 0;
@@ -40,6 +41,28 @@ function canonical(value) {
 function sameValue(left, right) { return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right)); }
 function setStatus(text, kind = "") { statusBox.className = `editor-status ${kind}`; statusBox.textContent = text; }
 function key() { return sessionStorage.getItem("pilotMonitorKey"); }
+
+function adoptionState(published, adopted) {
+  if (!adopted) return "UNKNOWN";
+  if (adopted.rulesVersion === published.rulesVersion && adopted.contentHash === published.contentHash) return "ACTIVE";
+  if (adopted.rulesVersion < published.rulesVersion) return "PENDING";
+  return "MISMATCH";
+}
+
+function renderAdoption(result) {
+  const state = result.adoptionStatus || "UNKNOWN";
+  const adopted = result.adoptedRules;
+  const stateBox = document.querySelector("#adoption-state");
+  stateBox.className = `adoption-state ${state.toLowerCase()}`;
+  stateBox.textContent = state;
+  if (!adopted) {
+    document.querySelector("#adoption-name").textContent = "No sufficient adoption evidence";
+    document.querySelector("#adoption-detail").textContent = "Tab5 has not reported a valid adopted rules reference.";
+    return;
+  }
+  document.querySelector("#adoption-name").textContent = `${adopted.releaseId || "Release not reported"} · version ${adopted.rulesVersion}`;
+  document.querySelector("#adoption-detail").textContent = `SHA-256 ${adopted.contentHash} · reported ${new Date(adopted.reportedAt).toLocaleString()}`;
+}
 
 async function api(method, payload) {
   let pilotKey = key();
@@ -155,10 +178,11 @@ async function loadRules() {
   setStatus("Loading the published pointer and exact release…");
   try {
     const result = await api("GET");
-    pointer = result.pointer; draft = clone(result.rulesPackage.rules); baseline = clone(draft);
+    pointer = result.pointer; adoptedRules = result.adoptedRules; draft = clone(result.rulesPackage.rules); baseline = clone(draft);
     selected = 0; changed = new Set();
     document.querySelector("#release-name").textContent = `${pointer.releaseId} · version ${pointer.rulesVersion}`;
     document.querySelector("#release-hash").textContent = `SHA-256 ${pointer.contentHash}`;
+    renderAdoption(result);
     workspace.hidden = false; publishButton.disabled = true; downloadButton.disabled = false;
     renderList(); loadForm(); setStatus("All 59 published rules loaded and validated.", "ok");
   } catch (error) {
@@ -189,6 +213,7 @@ async function publishRules() {
     pointer = result.pointer; baseline = clone(draft); changed.clear();
     document.querySelector("#release-name").textContent = `${pointer.releaseId} · version ${pointer.rulesVersion}`;
     document.querySelector("#release-hash").textContent = `SHA-256 ${pointer.contentHash}`;
+    renderAdoption({ adoptionStatus: adoptionState(pointer, adoptedRules), adoptedRules });
     renderList(); setStatus(`Published ${pointer.releaseId}. Tab5 may now download and adopt it.`, "ok");
   } catch (error) {
     publishButton.disabled = false;

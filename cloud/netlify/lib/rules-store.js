@@ -31,6 +31,7 @@ function createRulesStore(env = process.env, dependencies = {}) {
   }
   const rtdbUrl = approvedRtdbUrl(env.FIREBASE_RTDB_URL);
   const releases = db.collection("sites").doc(SITE_ID).collection("rulesReleases");
+  const eventRecords = db.collection("sites").doc(SITE_ID).collection("eventRecords");
   let idTokenPromise;
   let currentEtag = null;
 
@@ -78,6 +79,15 @@ function createRulesStore(env = process.env, dependencies = {}) {
       if (!snapshot.exists) return null;
       const body = snapshot.data().releaseBody;
       return typeof body === "string" ? body : null;
+    },
+    async getLatestRuleAdoption() {
+      const snapshot = await eventRecords.where("recordType", "==", "rule-adoption").get();
+      if (snapshot.empty) return null;
+      return snapshot.docs.map(document => document.data()).reduce((latest, candidate) => {
+        const latestMs = latest.observedAt.toDate().getTime();
+        const candidateMs = candidate.observedAt.toDate().getTime();
+        return candidateMs > latestMs ? candidate : latest;
+      });
     },
     async publish(releaseId, releaseBody, metadata) {
       await releases.doc(releaseId).create({
