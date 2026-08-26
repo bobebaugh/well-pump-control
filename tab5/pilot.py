@@ -1,4 +1,4 @@
-# Release: 2026-08-26 M6.14 — enlarge pressure calibration controls and status text.
+# Release: 2026-08-26 M6.15 — preserve raw ADC batches in uninterrupted fill traces.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -1503,7 +1503,9 @@ def run_pressure_fill():
     filename = qualification_filename('pressure-fill')
     handle = open(filename, 'w')
     handle.write('sample_number,pressure_elapsed_ms,adc_start_ticks_ms,'
-                 'adc_end_ticks_ms,adc_midpoint_ticks_ms,adc_microvolts,'
+                 'adc_end_ticks_ms,adc_midpoint_ticks_ms,'
+                 's1_raw_count,s2_raw_count,s3_raw_count,s4_raw_count,'
+                 's5_raw_count,average_raw_count,nominal_psi,'
                  'adc_available,shelly_start_ticks_ms,shelly_end_ticks_ms,'
                  'pump_running_derived,power_w,voltage_v,shelly_available,'
                  'shelly_valid\n')
@@ -1527,11 +1529,12 @@ def run_pressure_fill():
 
         now = time.ticks_ms()
         if time.ticks_diff(now, next_sample_ms) >= 0:
-            adc_start_ticks_ms = time.ticks_ms()
-            adc_uv = read_ads1110_microvolts()
-            adc_end_ticks_ms = time.ticks_ms()
-            adc_midpoint_ticks_ms = qualification_midpoint_ticks(
-                adc_start_ticks_ms, adc_end_ticks_ms)
+            batch = _acquire_calibration_batch()
+            adc_start_ticks_ms = batch['start_ticks_ms']
+            adc_end_ticks_ms = batch['end_ticks_ms']
+            adc_midpoint_ticks_ms = batch['midpoint_ticks_ms']
+            average_raw_count = batch['average_raw_count']
+            nominal_psi = nominal_psi_from_raw_count(average_raw_count)
             pressure_elapsed_ms = time.ticks_diff(
                 adc_midpoint_ticks_ms, started_ms)
             shelly_start_ticks_ms = time.ticks_ms()
@@ -1547,31 +1550,42 @@ def run_pressure_fill():
             pump_running = qualification_pump_running(power_w, pump_running)
             reported_pump_running = pump_running if power_w is not None else None
             sample_count += 1
-            handle.write('{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n'.format(
+            fields = [
                 sample_count, pressure_elapsed_ms,
                 adc_start_ticks_ms, adc_end_ticks_ms,
-                adc_midpoint_ticks_ms,
-                '' if adc_uv is None else adc_uv,
-                1 if adc_uv is not None else 0,
+                adc_midpoint_ticks_ms]
+            fields.extend('' if value is None else value
+                          for value in batch['raw_samples'])
+            fields.extend([
+                '' if average_raw_count is None else
+                '{:.3f}'.format(average_raw_count),
+                '' if nominal_psi is None else '{:.5f}'.format(nominal_psi),
+                1 if average_raw_count is not None else 0,
                 shelly_start_ticks_ms, shelly_end_ticks_ms,
                 '' if reported_pump_running is None else (1 if reported_pump_running else 0),
                 '' if power_w is None else power_w,
                 '' if voltage_v is None else voltage_v,
                 1 if shelly_available else 0,
-                1 if is_valid else 0))
+                1 if is_valid else 0])
+            handle.write(','.join(str(value) for value in fields) + '\n')
             handle.flush()
             draw_label('Elapsed {:>5.1f} s | samples {}          '.format(
                 pressure_elapsed_ms / 1000, sample_count), 48, 205,
                 M5.Lcd.FONTS.DejaVu40, WHITE)
-            draw_label('ADC: {}          '.format(
-                'UNAVAILABLE' if adc_uv is None else '{:.6f} V'.format(adc_uv / 1000000)),
+            draw_label('ADC AVG: {} counts          '.format(
+                'UNAVAILABLE' if average_raw_count is None else
+                '{:.1f}'.format(average_raw_count)),
                 48, 285, M5.Lcd.FONTS.DejaVu40,
-                RED if adc_uv is None else WHITE)
+                RED if average_raw_count is None else WHITE)
+            draw_label('Nominal sensor: {} PSI          '.format(
+                '--' if nominal_psi is None else '{:.3f}'.format(nominal_psi)),
+                48, 355, M5.Lcd.FONTS.Montserrat24,
+                RED if nominal_psi is None else CYAN)
             draw_label('Pump (power-derived): {} | Power: {} W | Voltage: {} V          '.format(
                 'UNKNOWN' if reported_pump_running is None else ('RUNNING' if reported_pump_running else 'STOPPED'),
                 '--' if power_w is None else round(power_w),
                 '--' if voltage_v is None else '{:.1f}'.format(voltage_v)),
-                48, 375, M5.Lcd.FONTS.Montserrat24,
+                48, 420, M5.Lcd.FONTS.Montserrat24,
                 RED if not shelly_available else CYAN)
             next_sample_ms = time.ticks_add(next_sample_ms, SAMPLE_PERIOD_MS)
             completed_ms = time.ticks_ms()
@@ -1618,7 +1632,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.14: enlarged pressure calibration controls and status text')
+log('CPU A release M6.15: raw ADC batches retained in uninterrupted fill traces')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:

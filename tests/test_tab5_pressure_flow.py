@@ -1,4 +1,4 @@
-"""Host-only pure-logic tests for Tab5 M6.13 pressure calibration flow."""
+"""Host-only pure-logic tests for Tab5 pressure calibration and fill flow."""
 
 import ast
 import io
@@ -109,6 +109,17 @@ class PressureFlowTests(unittest.TestCase):
         self.assertIn(('set_gain', 0x01), settings)
         self.assertIn(('set_sample_rate', 'SPS_15'), settings)
         self.assertIn(('set_mode', 'MODE_CONTIN'), settings)
+
+    def test_fill_trace_preserves_each_raw_batch_instead_of_only_microvolts(self):
+        source = PILOT_PATH.read_text(encoding='utf-8')
+        tree = ast.parse(source)
+        fill_node = next(node for node in tree.body
+                         if isinstance(node, ast.FunctionDef) and
+                         node.name == 'run_pressure_fill')
+        fill_source = ast.get_source_segment(source, fill_node)
+        self.assertIn('s1_raw_count,s2_raw_count,s3_raw_count', fill_source)
+        self.assertIn("batch = _acquire_calibration_batch()", fill_source)
+        self.assertNotIn('read_ads1110_microvolts()', fill_source)
 
     def test_regression_uses_irregular_actual_timestamps(self):
         slope = self.logic['raw_count_regression_slope']([
