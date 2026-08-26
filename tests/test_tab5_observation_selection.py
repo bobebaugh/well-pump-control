@@ -17,6 +17,9 @@ FUNCTIONS = {
     "_numeric_material_change",
     "trimmed_mean_microvolts",
     "normalize_shelly1_status",
+    "summarize_adc_samples",
+    "qualification_pump_running",
+    "qualification_midpoint_ticks",
     "build_observation",
     "new_event_history",
     "append_event_history",
@@ -46,6 +49,8 @@ CONSTANTS = {
     "EVENT_HISTORY_DEPTH",
     "SHELLY_AVAILABILITY_CONFIRMATION_SAMPLES",
     "ADC_FILTER_SAMPLE_COUNT",
+    "QUAL_PUMP_START_W",
+    "QUAL_PUMP_STOP_W",
     "MATERIAL_NUMERIC_THRESHOLDS",
     "MATERIAL_EXACT_CHANGE_PATHS",
     "RULES_FILE",
@@ -69,6 +74,7 @@ def load_selection_logic():
                 nodes.append(node)
     namespace = {"time": types.SimpleNamespace(
         ticks_diff=lambda left, right: left - right,
+        ticks_add=lambda value, delta: value + delta,
         localtime=lambda: (2026, 8, 25, 0, 0, 8, 0, 0),
     ), "ujson": json, "uhashlib": hashlib, "os": __import__("os")}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(PILOT_PATH), "exec"), namespace)
@@ -174,6 +180,28 @@ class ObservationSelectionTests(unittest.TestCase):
             "switch:0": {"output": "off"},
             "input:0": {"state": False},
         }))
+
+    def test_pressure_qualification_summarizes_raw_adc_points(self):
+        summarize = self.logic["summarize_adc_samples"]
+        self.assertEqual(summarize([4010000, 3990000, None, 4000000, 4020000]), {
+            "count": 4,
+            "representativeMicrovolts": 4010000,
+            "spreadMicrovolts": 30000,
+        })
+        self.assertIsNone(summarize([None, True]))
+
+    def test_pressure_fill_pump_state_uses_local_hysteresis(self):
+        classify = self.logic["qualification_pump_running"]
+        self.assertIsNone(classify(None, None))
+        self.assertFalse(classify(999.0, None))
+        self.assertTrue(classify(1000.0, False))
+        self.assertTrue(classify(500.0, True))
+        self.assertFalse(classify(100.0, True))
+
+    def test_pressure_measurement_time_is_adc_interval_midpoint(self):
+        midpoint = self.logic["qualification_midpoint_ticks"]
+        self.assertEqual(midpoint(1000, 1280), 1140)
+        self.assertEqual(midpoint(1000, 1281), 1140)
 
     def test_transient_shelly_poll_failures_do_not_select_durable_records(self):
         confirmation = self.logic["new_shelly_availability_confirmation"](3)

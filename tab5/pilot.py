@@ -1,4 +1,4 @@
-# Release: 2026-08-25 M6.10 — observe installed Shelly 1 SW0 and RLY0.
+# Release: 2026-08-26 M6.11 — add a touch-selected local pressure qualification utility.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -13,13 +13,14 @@
 # BATTERY_LOW_PCT and BATTERY_HIGH_PCT - see the battery section below.
 
 import M5
+import __main__
 import os
 import time
 import uhashlib
 import ujson
 import requests
 import driver.ads1110 as ads1110
-from machine import I2C, Pin, SoftI2C
+from machine import I2C, Pin, SoftI2C, reset
 import cloud
 
 # --- config (values from firmware/tab5/main/pilot_config.h) ---
@@ -121,7 +122,9 @@ def log(msg):
 
 
 # --- board I/O + internal antenna confirmation ---
-# This runs BEFORE M5.begin(), deliberately. The internal bus (SCL 32 / SDA 31)
+# This historical diagnostic was designed to run before M5.begin(). main.py now
+# owns that call so it can present the startup selector; keep this disabled. The
+# internal bus (SCL 32 / SDA 31)
 # belongs to M5Unified: it drives the INA226, the expanders and the ST7123 touch
 # controller. Holding a machine.I2C handle on those pins is what breaks M5.Touch
 # and M5.Power - measured on this board 2026-08-19. So this readback takes the
@@ -146,10 +149,11 @@ if ANTENNA_READBACK:
     except Exception as _e:
         _tmp_i2c = None
 
-# M5.begin() reclaims the internal I2C peripheral for M5Unified. Nothing of ours
+# main.py calls M5.begin() once before its bounded boot selector. Nothing of ours
 # may hold a machine.I2C handle on ports 0 or 1 after this point - Port A uses
 # SoftI2C (immune, bit-banged GPIO) and touch uses M5.Touch.
-M5.begin()
+_pressure_qualification_selected = bool(getattr(
+    __main__, 'PRESSURE_QUALIFICATION_SELECTED', False))
 
 
 def confirm_internal_antenna():
@@ -858,7 +862,7 @@ def adopt_rules_release(candidate, active_reference,
     return checked, 'adopted'
 
 
-# --- display --- (M5.begin() already ran at the top, before any I2C() objects existed)
+# --- display --- (main.py already ran M5.begin() before starting CPU A)
 M5.Lcd.setRotation(1)
 M5.Lcd.fillScreen(BG)
 
@@ -992,10 +996,318 @@ def check_touch_button(was_pressed):
     return tapped, inside
 
 
+# --- manually selected pressure qualification utility ---
+QUAL_CAPTURE_SAMPLES = 5
+QUAL_PUMP_START_W = 1000.0
+QUAL_PUMP_STOP_W = 100.0
+
+
+def summarize_adc_samples(samples):
+    """Return the median and full range of valid local filtered ADC samples."""
+    valid = [value for value in samples
+             if isinstance(value, int) and not isinstance(value, bool)]
+    if not valid:
+        return None
+    valid.sort()
+    return {
+        'count': len(valid),
+        'representativeMicrovolts': valid[len(valid) // 2],
+        'spreadMicrovolts': valid[-1] - valid[0],
+    }
+
+
+def qualification_pump_running(power_w, previous,
+                               start_w=QUAL_PUMP_START_W,
+                               stop_w=QUAL_PUMP_STOP_W):
+    """Apply the pilot's cloud thresholds locally, retaining hysteresis."""
+    if isinstance(power_w, bool) or not isinstance(power_w, (int, float)):
+        return previous
+    if previous is True:
+        return power_w > stop_w
+    return power_w >= start_w
+
+
+def qualification_midpoint_ticks(start_ticks_ms, end_ticks_ms):
+    """Return the wrap-safe midpoint of a completed local measurement."""
+    return time.ticks_add(
+        start_ticks_ms,
+        time.ticks_diff(end_ticks_ms, start_ticks_ms) // 2)
+
+
+def qualification_filename(prefix):
+    """Choose a short collision-free root filename without relying on UTC."""
+    existing = set(os.listdir())
+    for number in range(1, 1000):
+        name = '{}-{:03d}.csv'.format(prefix, number)
+        if name not in existing:
+            return name
+    raise OSError('qualification filename range exhausted')
+
+
+def _qual_button(x, y, w, h, text, color=BLUE, font=None):
+    M5.Lcd.fillRoundRect(x, y, w, h, 16, color)
+    M5.Lcd.setFont(font or M5.Lcd.FONTS.Montserrat24)
+    M5.Lcd.setTextColor(WHITE, color)
+    M5.Lcd.drawString(text, x + 24, y + (h // 2) - 14)
+
+
+def _qual_title(title, subtitle=None):
+    M5.Lcd.fillScreen(BG)
+    draw_label(title, 45, 30, M5.Lcd.FONTS.DejaVu40, WHITE)
+    if subtitle:
+        draw_label(subtitle, 48, 90, M5.Lcd.FONTS.Montserrat18, CYAN)
+
+
+def _qual_tap(was_down):
+    """Return one landscape touch-down edge and the current down state."""
+    M5.update()
+    try:
+        down = M5.Touch.getCount() > 0
+        if not down:
+            return None, False
+        if was_down:
+            return None, True
+        x = M5.Touch.getX()
+        y = M5.Touch.getY()
+        if x is None or y is None or x < 0 or y < 0:
+            return None, True
+        return (x, y), True
+    except Exception:
+        return None, False
+
+
+def _qual_wait_release():
+    while True:
+        M5.update()
+        try:
+            if M5.Touch.getCount() <= 0:
+                return
+        except Exception:
+            return
+        time.sleep_ms(30)
+
+
+def _in_button(point, x, y, w, h):
+    return (point is not None and x <= point[0] <= x + w and
+            y <= point[1] <= y + h)
+
+
+def _wait_until(target_ms):
+    while time.ticks_diff(target_ms, time.ticks_ms()) > 0:
+        M5.update()
+        time.sleep_ms(25)
+
+
+def run_pressure_calibration():
+    """Capture gauge points; raw local readings are appended before summary."""
+    _qual_wait_release()
+    filename = qualification_filename('pressure-cal')
+    handle = open(filename, 'w')
+    handle.write('record_type,capture_id,direction,gauge_psi,sample_index,'
+                 'adc_start_ticks_ms,adc_end_ticks_ms,adc_midpoint_ticks_ms,'
+                 'adc_microvolts,sample_count,'
+                 'representative_microvolts,spread_microvolts\n')
+    handle.flush()
+    gauge_psi = 40.0
+    direction = 'rising'
+    capture_id = 0
+    last_summary = None
+    was_down = False
+
+    while True:
+        _qual_title('GAUGE CALIBRATION', 'Local ADS1110 only | {}'.format(filename))
+        _qual_button(45, 150, 270, 90, direction.upper(), GREEN if direction == 'rising' else YELLOW)
+        _qual_button(355, 150, 160, 90, '- 1 PSI')
+        draw_label('{:.1f} PSI'.format(gauge_psi), 555, 171, M5.Lcd.FONTS.DejaVu40, WHITE)
+        _qual_button(820, 150, 160, 90, '+ 1 PSI')
+        _qual_button(45, 300, 760, 190, 'CAPTURE {} FILTERED SAMPLES'.format(QUAL_CAPTURE_SAMPLES), GREEN)
+        _qual_button(850, 300, 380, 190, 'BACK')
+        if last_summary is None:
+            detail = 'Set the gauge value and direction, then capture.'
+        else:
+            detail = ('Capture {}: {} samples | median {:.6f} V | spread {} uV'.format(
+                capture_id, last_summary['count'],
+                last_summary['representativeMicrovolts'] / 1000000,
+                last_summary['spreadMicrovolts']))
+        draw_label(detail + '          ', 48, 555, M5.Lcd.FONTS.Montserrat24, CYAN)
+        draw_label('Each raw point is appended immediately; no PSI calculation is performed.',
+                   48, 620, M5.Lcd.FONTS.Montserrat18, CYAN)
+
+        while True:
+            point, was_down = _qual_tap(was_down)
+            if _in_button(point, 45, 150, 270, 90):
+                direction = 'falling' if direction == 'rising' else 'rising'
+                break
+            if _in_button(point, 355, 150, 160, 90):
+                gauge_psi -= 1.0
+                break
+            if _in_button(point, 820, 150, 160, 90):
+                gauge_psi += 1.0
+                break
+            if _in_button(point, 850, 300, 380, 190):
+                handle.close()
+                _qual_wait_release()
+                return
+            if _in_button(point, 45, 300, 760, 190):
+                capture_id += 1
+                readings = []
+                started_ms = time.ticks_ms()
+                next_sample_ms = started_ms
+                for sample_index in range(1, QUAL_CAPTURE_SAMPLES + 1):
+                    _wait_until(next_sample_ms)
+                    adc_start_ticks_ms = time.ticks_ms()
+                    adc_uv = read_ads1110_microvolts()
+                    adc_end_ticks_ms = time.ticks_ms()
+                    adc_midpoint_ticks_ms = qualification_midpoint_ticks(
+                        adc_start_ticks_ms, adc_end_ticks_ms)
+                    readings.append(adc_uv)
+                    handle.write('sample,{},{},{:.1f},{},{},{},{},{},,,\n'.format(
+                        capture_id, direction, gauge_psi, sample_index,
+                        adc_start_ticks_ms, adc_end_ticks_ms,
+                        adc_midpoint_ticks_ms,
+                        '' if adc_uv is None else adc_uv))
+                    handle.flush()
+                    draw_label('Capturing {}/{}: {}          '.format(
+                        sample_index, QUAL_CAPTURE_SAMPLES,
+                        'ADC unavailable' if adc_uv is None else '{:.6f} V'.format(adc_uv / 1000000)),
+                        48, 555, M5.Lcd.FONTS.Montserrat24,
+                        RED if adc_uv is None else CYAN)
+                    next_sample_ms = time.ticks_add(started_ms, sample_index * SAMPLE_PERIOD_MS)
+                last_summary = summarize_adc_samples(readings)
+                if last_summary is not None:
+                    handle.write('summary,{},{},{:.1f},,,,,,{},{},{}\n'.format(
+                        capture_id, direction, gauge_psi,
+                        last_summary['count'],
+                        last_summary['representativeMicrovolts'],
+                        last_summary['spreadMicrovolts']))
+                    handle.flush()
+                gauge_psi += 1.0 if direction == 'rising' else -1.0
+                break
+            time.sleep_ms(35)
+
+
+def run_pressure_fill():
+    """Append an uninterrupted local ADC + Shelly EM fill trace at about 1 Hz."""
+    _qual_wait_release()
+    filename = qualification_filename('pressure-fill')
+    handle = open(filename, 'w')
+    handle.write('sample_number,pressure_elapsed_ms,adc_start_ticks_ms,'
+                 'adc_end_ticks_ms,adc_midpoint_ticks_ms,adc_microvolts,'
+                 'adc_available,shelly_start_ticks_ms,shelly_end_ticks_ms,'
+                 'pump_running_derived,power_w,voltage_v,shelly_available,'
+                 'shelly_valid\n')
+    handle.flush()
+    _qual_title('UNINTERRUPTED FILL RUN', 'Local timing and sampling | {}'.format(filename))
+    _qual_button(920, 510, 300, 150, 'STOP', RED)
+    draw_label('Recording begins now. STOP closes the CSV and returns.',
+               48, 115, M5.Lcd.FONTS.Montserrat24, CYAN)
+    started_ms = time.ticks_ms()
+    next_sample_ms = started_ms
+    sample_count = 0
+    pump_running = None
+    was_down = False
+
+    while True:
+        point, was_down = _qual_tap(was_down)
+        if _in_button(point, 920, 510, 300, 150):
+            handle.close()
+            _qual_wait_release()
+            return
+
+        now = time.ticks_ms()
+        if time.ticks_diff(now, next_sample_ms) >= 0:
+            adc_start_ticks_ms = time.ticks_ms()
+            adc_uv = read_ads1110_microvolts()
+            adc_end_ticks_ms = time.ticks_ms()
+            adc_midpoint_ticks_ms = qualification_midpoint_ticks(
+                adc_start_ticks_ms, adc_end_ticks_ms)
+            pressure_elapsed_ms = time.ticks_diff(
+                adc_midpoint_ticks_ms, started_ms)
+            shelly_start_ticks_ms = time.ticks_ms()
+            shelly = read_shelly()
+            shelly_end_ticks_ms = time.ticks_ms()
+            shelly_available = isinstance(shelly, dict)
+            power_w = shelly.get('power') if shelly_available else None
+            voltage_v = shelly.get('voltage') if shelly_available else None
+            is_valid = shelly.get('is_valid') is True if shelly_available else False
+            if not is_valid:
+                power_w = None
+                voltage_v = None
+            pump_running = qualification_pump_running(power_w, pump_running)
+            reported_pump_running = pump_running if power_w is not None else None
+            sample_count += 1
+            handle.write('{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n'.format(
+                sample_count, pressure_elapsed_ms,
+                adc_start_ticks_ms, adc_end_ticks_ms,
+                adc_midpoint_ticks_ms,
+                '' if adc_uv is None else adc_uv,
+                1 if adc_uv is not None else 0,
+                shelly_start_ticks_ms, shelly_end_ticks_ms,
+                '' if reported_pump_running is None else (1 if reported_pump_running else 0),
+                '' if power_w is None else power_w,
+                '' if voltage_v is None else voltage_v,
+                1 if shelly_available else 0,
+                1 if is_valid else 0))
+            handle.flush()
+            draw_label('Elapsed {:>5.1f} s | samples {}          '.format(
+                pressure_elapsed_ms / 1000, sample_count), 48, 205,
+                M5.Lcd.FONTS.DejaVu40, WHITE)
+            draw_label('ADC: {}          '.format(
+                'UNAVAILABLE' if adc_uv is None else '{:.6f} V'.format(adc_uv / 1000000)),
+                48, 285, M5.Lcd.FONTS.DejaVu40,
+                RED if adc_uv is None else WHITE)
+            draw_label('Pump (power-derived): {} | Power: {} W | Voltage: {} V          '.format(
+                'UNKNOWN' if reported_pump_running is None else ('RUNNING' if reported_pump_running else 'STOPPED'),
+                '--' if power_w is None else round(power_w),
+                '--' if voltage_v is None else '{:.1f}'.format(voltage_v)),
+                48, 375, M5.Lcd.FONTS.Montserrat24,
+                RED if not shelly_available else CYAN)
+            next_sample_ms = time.ticks_add(next_sample_ms, SAMPLE_PERIOD_MS)
+            completed_ms = time.ticks_ms()
+            if time.ticks_diff(completed_ms, next_sample_ms) >= 0:
+                # Do not add a fictitious idle second after an overrun. The
+                # next local cycle begins promptly; recorded timing remains
+                # the authority for later flow analysis.
+                next_sample_ms = completed_ms
+        time.sleep_ms(30)
+
+
+def run_pressure_qualification():
+    """Run the local-only utility until normal monitoring is explicitly chosen."""
+    log('Pressure qualification selected; CPU B remains active for Wi-Fi recovery only')
+    _qual_wait_release()
+    was_down = False
+    while True:
+        _qual_title('PRESSURE QUALIFICATION', 'Local timing | CPU B maintains Wi-Fi | no commands')
+        _qual_button(45, 170, 550, 240, 'GAUGE CALIBRATION', GREEN)
+        _qual_button(685, 170, 550, 240, 'FILL RUN', BLUE)
+        _qual_button(400, 505, 480, 130, 'RESTART NORMAL', YELLOW)
+        draw_label('CSV files are stored on Tab5 flash and named on each screen.',
+                   330, 665, M5.Lcd.FONTS.Montserrat18, CYAN)
+        while True:
+            point, was_down = _qual_tap(was_down)
+            if _in_button(point, 45, 170, 550, 240):
+                run_pressure_calibration()
+                was_down = False
+                break
+            if _in_button(point, 685, 170, 550, 240):
+                run_pressure_fill()
+                was_down = False
+                break
+            if _in_button(point, 400, 505, 480, 130):
+                _qual_title('RESTARTING', 'Leave the screen untouched to enter normal monitoring.')
+                time.sleep_ms(800)
+                reset()
+            time.sleep_ms(35)
+
+
 # --- boot sequence ---
+if _pressure_qualification_selected:
+    run_pressure_qualification()
+
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.10: Shelly 1 SW0/RLY0 telemetry')
+log('CPU A release M6.11: local pressure qualification boot utility')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:
