@@ -1,4 +1,4 @@
-# Release: 2026-08-26 M6.15 — preserve raw ADC batches in uninterrupted fill traces.
+# Release: 2026-08-26 M6.16 — apply field pressure calibration and 10 s flow evidence.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -446,6 +446,9 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
             'total': shelly.get('total'),
             'total_returned': shelly.get('total_returned'),
             'adc_microvolts': ads_microvolts,
+            # End-to-end calibrated estimate; retain the ADC source value as
+            # independent evidence rather than replacing it.
+            'pressure_psi': calibrated_psi_from_microvolts(ads_microvolts),
             'battery_voltage': battery_voltage,
             'battery_current': battery_current,
             'battery_percent': battery_percent,
@@ -1097,7 +1100,7 @@ QUAL_PUMP_START_W = 1000.0
 QUAL_PUMP_STOP_W = 100.0
 QUAL_CALIBRATION_START_PSI = 60.0
 QUAL_CALIBRATION_START_DIRECTION = 'falling'
-QUAL_FLOW_WINDOW_DEFAULT_SECONDS = 3
+QUAL_FLOW_WINDOW_DEFAULT_SECONDS = 10
 QUAL_FLOW_WINDOW_MIN_SECONDS = 3
 QUAL_FLOW_WINDOW_MAX_SECONDS = 30
 QUAL_FLOW_MIN_SPAN_MS = 900
@@ -1105,8 +1108,12 @@ QUAL_FLOW_WINDOW_TOLERANCE_MS = 350
 PRESSURE_SENSOR_ZERO_UV = 500000.0
 PRESSURE_SENSOR_SPAN_UV = 4000000.0
 PRESSURE_SENSOR_SPAN_PSI = 100.0
-PRESSURE_PSI_PER_COUNT = (ADC_UV_PER_COUNT * PRESSURE_SENSOR_SPAN_PSI /
-                          PRESSURE_SENSOR_SPAN_UV)
+# End-to-end field fit from 22 usable gauge captures over about 40--61 PSIG.
+# The count intercept is extrapolated sensor-system output at zero gauge
+# pressure; it is not the ADC electrical-zero offset.
+PRESSURE_CALIBRATION_COUNT_INTERCEPT = 3732.02
+PRESSURE_CALIBRATION_COUNTS_PER_PSI = 211.492
+PRESSURE_PSI_PER_COUNT = 1.0 / PRESSURE_CALIBRATION_COUNTS_PER_PSI
 TANK_EFFECTIVE_VOLUME_GAL = 79.3
 TANK_PRECHARGE_PSIG = 38.0
 SITE_ATMOSPHERE_PSI = 13.1
@@ -1154,13 +1161,19 @@ def average_raw_adc_counts(samples):
     return sum(samples) / QUAL_CAPTURE_SAMPLES
 
 
-def nominal_psi_from_raw_count(raw_count):
-    """Convert a raw terminal count with the nominal 0.5--4.5 V sensor map."""
+def calibrated_psi_from_raw_count(raw_count):
+    """Apply the qualified end-to-end field fit to one raw ADC count."""
     if isinstance(raw_count, bool) or not isinstance(raw_count, (int, float)):
         return None
-    terminal_uv = raw_count * ADC_UV_PER_COUNT
-    return ((terminal_uv - PRESSURE_SENSOR_ZERO_UV) * PRESSURE_SENSOR_SPAN_PSI /
-            PRESSURE_SENSOR_SPAN_UV)
+    return ((raw_count - PRESSURE_CALIBRATION_COUNT_INTERCEPT) /
+            PRESSURE_CALIBRATION_COUNTS_PER_PSI)
+
+
+def calibrated_psi_from_microvolts(microvolts):
+    """Apply the count-domain fit while preserving raw microvolts separately."""
+    if isinstance(microvolts, bool) or not isinstance(microvolts, (int, float)):
+        return None
+    return calibrated_psi_from_raw_count(microvolts / ADC_UV_PER_COUNT)
 
 
 def raw_count_regression_slope(history, reference_ticks_ms, window_seconds,
@@ -1196,8 +1209,8 @@ def raw_count_regression_slope(history, reference_ticks_ms, window_seconds,
                 for point in points) / denominator)
 
 
-def estimated_flow_gpm(history, current_batch, window_seconds):
-    """Return signed, derived tank flow for a valid real-time regression window."""
+def pressure_flow_evidence(history, current_batch, window_seconds):
+    """Return distinct calibrated slope and derived flow evidence."""
     if not isinstance(current_batch, dict):
         return None
     current_count = current_batch.get('average_raw_count')
@@ -1205,7 +1218,7 @@ def estimated_flow_gpm(history, current_batch, window_seconds):
     if (isinstance(current_count, bool) or not isinstance(current_count, (int, float)) or
             isinstance(midpoint, bool) or not isinstance(midpoint, int)):
         return None
-    pressure_psig = nominal_psi_from_raw_count(current_count)
+    pressure_psig = calibrated_psi_from_raw_count(current_count)
     if pressure_psig is None or pressure_psig < 0 or pressure_psig > PRESSURE_SENSOR_SPAN_PSI:
         return None
     horizon_ms = int(window_seconds * 1000) + QUAL_FLOW_WINDOW_TOLERANCE_MS
@@ -1217,7 +1230,7 @@ def estimated_flow_gpm(history, current_batch, window_seconds):
                 not isinstance(item.get('average_raw_count'), bool)):
             age_ms = time.ticks_diff(midpoint, item['midpoint_ticks_ms'])
             if 0 <= age_ms <= horizon_ms:
-                history_pressure = nominal_psi_from_raw_count(
+                history_pressure = calibrated_psi_from_raw_count(
                     item['average_raw_count'])
                 if (history_pressure is not None and 0 <= history_pressure <=
                         PRESSURE_SENSOR_SPAN_PSI):
@@ -1240,7 +1253,16 @@ def estimated_flow_gpm(history, current_batch, window_seconds):
     dvol_dpressure = (TANK_EFFECTIVE_VOLUME_GAL *
                       (TANK_PRECHARGE_PSIG + SITE_ATMOSPHERE_PSI) /
                       ((pressure_psig + SITE_ATMOSPHERE_PSI) ** 2))
-    return dvol_dpressure * pressure_slope_psi_per_min
+    return {
+        'pressure_slope_psi_per_min': pressure_slope_psi_per_min,
+        'estimated_flow_gpm': dvol_dpressure * pressure_slope_psi_per_min,
+    }
+
+
+def estimated_flow_gpm(history, current_batch, window_seconds):
+    """Return signed derived tank flow for a valid real-time window."""
+    evidence = pressure_flow_evidence(history, current_batch, window_seconds)
+    return None if evidence is None else evidence['estimated_flow_gpm']
 
 
 def qualification_filename(prefix):
@@ -1355,13 +1377,14 @@ def _open_calibration_log(filename):
                  's1_raw_count,s2_raw_count,s3_raw_count,s4_raw_count,s5_raw_count,'
                  'average_raw_count,measurement_start_ticks_ms,'
                  'measurement_end_ticks_ms,measurement_midpoint_ticks_ms,'
-                 'nominal_psi,flow_window_seconds,estimated_flow_gpm\n')
+                 'calibrated_psi,flow_window_seconds,'
+                 'pressure_slope_psi_per_min,estimated_flow_gpm\n')
     handle.flush()
     return handle
 
 
 def _write_calibration_capture(handle, capture_id, batch, direction, gauge_psi,
-                               flow_window_seconds, flow_gpm):
+                               flow_window_seconds, flow_evidence):
     """Persist exactly the batch currently displayed when Capture was tapped."""
     if handle is None or not isinstance(batch, dict):
         return False
@@ -1369,15 +1392,20 @@ def _write_calibration_capture(handle, capture_id, batch, direction, gauge_psi,
     if len(samples) != QUAL_CAPTURE_SAMPLES:
         return False
     average = batch.get('average_raw_count')
-    nominal_psi = nominal_psi_from_raw_count(average)
+    calibrated_psi = calibrated_psi_from_raw_count(average)
+    slope_psi_per_min = (flow_evidence.get('pressure_slope_psi_per_min')
+                         if isinstance(flow_evidence, dict) else None)
+    flow_gpm = (flow_evidence.get('estimated_flow_gpm')
+                if isinstance(flow_evidence, dict) else None)
     fields = ['capture', capture_id, direction, '{:.1f}'.format(gauge_psi)]
     fields.extend('' if value is None else value for value in samples)
     fields.extend([
         '' if average is None else '{:.3f}'.format(average),
         batch.get('start_ticks_ms', ''), batch.get('end_ticks_ms', ''),
         batch.get('midpoint_ticks_ms', ''),
-        '' if nominal_psi is None else '{:.5f}'.format(nominal_psi),
+        '' if calibrated_psi is None else '{:.5f}'.format(calibrated_psi),
         flow_window_seconds,
+        '' if slope_psi_per_min is None else '{:+.5f}'.format(slope_psi_per_min),
         '' if flow_gpm is None else '{:+.5f}'.format(flow_gpm),
     ])
     handle.write(','.join(str(value) for value in fields) + '\n')
@@ -1386,7 +1414,7 @@ def _write_calibration_capture(handle, capture_id, batch, direction, gauge_psi,
 
 
 def _render_pressure_calibration(batch, direction, gauge_psi, flow_window_seconds,
-                                 flow_gpm, filename, capture_id):
+                                 flow_evidence, filename, capture_id):
     """Render the completed prior batch at the start of the next anchored cycle."""
     _qual_button(40, 92, 225, 72, direction.upper(),
                  GREEN if direction == 'rising' else YELLOW)
@@ -1405,10 +1433,16 @@ def _render_pressure_calibration(batch, direction, gauge_psi, flow_window_second
     for text, position in zip(fields, positions):
         draw_label(text + '               ', position[0], position[1],
                    M5.Lcd.FONTS.Montserrat24, WHITE if '--' not in text else YELLOW)
-    nominal_psi = (nominal_psi_from_raw_count(batch.get('average_raw_count'))
-                   if isinstance(batch, dict) else None)
-    draw_label('Nominal sensor: {} PSI       '.format(
-        '--' if nominal_psi is None else '{:.3f}'.format(nominal_psi)),
+    calibrated_psi = (calibrated_psi_from_raw_count(batch.get('average_raw_count'))
+                      if isinstance(batch, dict) else None)
+    slope_psi_per_min = (flow_evidence.get('pressure_slope_psi_per_min')
+                         if isinstance(flow_evidence, dict) else None)
+    flow_gpm = (flow_evidence.get('estimated_flow_gpm')
+                if isinstance(flow_evidence, dict) else None)
+    draw_label('Calibrated: {} PSI | slope: {} PSI/min       '.format(
+        '--' if calibrated_psi is None else '{:.3f}'.format(calibrated_psi),
+        '--' if slope_psi_per_min is None else
+        '{:+.3f}'.format(slope_psi_per_min)),
         45, 385, M5.Lcd.FONTS.Montserrat24, CYAN)
     draw_label('Derived flow: {} GPM       '.format(
         'unavailable' if flow_gpm is None else '{:+.3f}'.format(flow_gpm)),
@@ -1434,7 +1468,7 @@ def run_pressure_calibration():
     history = []
     completed_batch = None
     displayed_batch = None
-    displayed_flow_gpm = None
+    displayed_flow_evidence = None
     next_cycle_ms = time.ticks_ms()
     was_down = False
     _qual_title('GAUGE CALIBRATION')
@@ -1445,11 +1479,11 @@ def run_pressure_calibration():
             # This exact ordering is intentional: draw the fully completed
             # prior batch at the cycle boundary, then measure the next batch.
             displayed_batch = completed_batch
-            displayed_flow_gpm = estimated_flow_gpm(
+            displayed_flow_evidence = pressure_flow_evidence(
                 history, displayed_batch, flow_window_seconds)
             _render_pressure_calibration(
                 displayed_batch, direction, gauge_psi, flow_window_seconds,
-                displayed_flow_gpm, filename, capture_id)
+                displayed_flow_evidence, filename, capture_id)
             completed_batch = _acquire_calibration_batch()
             if completed_batch['average_raw_count'] is not None:
                 history.append(completed_batch)
@@ -1487,11 +1521,11 @@ def run_pressure_calibration():
             if displayed_batch is not None:
                 if handle is None:
                     handle = _open_calibration_log(filename)
-                capture_flow_gpm = estimated_flow_gpm(
+                capture_flow_evidence = pressure_flow_evidence(
                     history, displayed_batch, flow_window_seconds)
                 if _write_calibration_capture(
                         handle, capture_id + 1, displayed_batch, direction,
-                        gauge_psi, flow_window_seconds, capture_flow_gpm):
+                        gauge_psi, flow_window_seconds, capture_flow_evidence):
                     capture_id += 1
                     gauge_psi += 1.0 if direction == 'rising' else -1.0
         time.sleep_ms(20)
@@ -1505,7 +1539,9 @@ def run_pressure_fill():
     handle.write('sample_number,pressure_elapsed_ms,adc_start_ticks_ms,'
                  'adc_end_ticks_ms,adc_midpoint_ticks_ms,'
                  's1_raw_count,s2_raw_count,s3_raw_count,s4_raw_count,'
-                 's5_raw_count,average_raw_count,nominal_psi,'
+                 's5_raw_count,average_raw_count,calibrated_psi,'
+                 'flow_window_seconds,pressure_slope_psi_per_min,'
+                 'estimated_flow_gpm,'
                  'adc_available,shelly_start_ticks_ms,shelly_end_ticks_ms,'
                  'pump_running_derived,power_w,voltage_v,shelly_available,'
                  'shelly_valid\n')
@@ -1518,6 +1554,8 @@ def run_pressure_fill():
     next_sample_ms = started_ms
     sample_count = 0
     pump_running = None
+    flow_window_seconds = QUAL_FLOW_WINDOW_DEFAULT_SECONDS
+    pressure_history = []
     was_down = False
 
     while True:
@@ -1534,7 +1572,21 @@ def run_pressure_fill():
             adc_end_ticks_ms = batch['end_ticks_ms']
             adc_midpoint_ticks_ms = batch['midpoint_ticks_ms']
             average_raw_count = batch['average_raw_count']
-            nominal_psi = nominal_psi_from_raw_count(average_raw_count)
+            calibrated_psi = calibrated_psi_from_raw_count(average_raw_count)
+            if average_raw_count is not None:
+                pressure_history.append(batch)
+                pressure_history = [item for item in pressure_history
+                                    if time.ticks_diff(
+                                        adc_midpoint_ticks_ms,
+                                        item['midpoint_ticks_ms']) <=
+                                    (flow_window_seconds * 1000 +
+                                     SAMPLE_PERIOD_MS)]
+            flow_evidence = pressure_flow_evidence(
+                pressure_history, batch, flow_window_seconds)
+            slope_psi_per_min = (flow_evidence.get('pressure_slope_psi_per_min')
+                                 if isinstance(flow_evidence, dict) else None)
+            flow_gpm = (flow_evidence.get('estimated_flow_gpm')
+                        if isinstance(flow_evidence, dict) else None)
             pressure_elapsed_ms = time.ticks_diff(
                 adc_midpoint_ticks_ms, started_ms)
             shelly_start_ticks_ms = time.ticks_ms()
@@ -1559,7 +1611,11 @@ def run_pressure_fill():
             fields.extend([
                 '' if average_raw_count is None else
                 '{:.3f}'.format(average_raw_count),
-                '' if nominal_psi is None else '{:.5f}'.format(nominal_psi),
+                '' if calibrated_psi is None else '{:.5f}'.format(calibrated_psi),
+                flow_window_seconds,
+                '' if slope_psi_per_min is None else
+                '{:+.5f}'.format(slope_psi_per_min),
+                '' if flow_gpm is None else '{:+.5f}'.format(flow_gpm),
                 1 if average_raw_count is not None else 0,
                 shelly_start_ticks_ms, shelly_end_ticks_ms,
                 '' if reported_pump_running is None else (1 if reported_pump_running else 0),
@@ -1577,14 +1633,17 @@ def run_pressure_fill():
                 '{:.1f}'.format(average_raw_count)),
                 48, 285, M5.Lcd.FONTS.DejaVu40,
                 RED if average_raw_count is None else WHITE)
-            draw_label('Nominal sensor: {} PSI          '.format(
-                '--' if nominal_psi is None else '{:.3f}'.format(nominal_psi)),
+            draw_label('Calibrated: {} PSI | {} s slope: {} PSI/min          '.format(
+                '--' if calibrated_psi is None else '{:.3f}'.format(calibrated_psi),
+                flow_window_seconds,
+                '--' if slope_psi_per_min is None else
+                '{:+.3f}'.format(slope_psi_per_min)),
                 48, 355, M5.Lcd.FONTS.Montserrat24,
-                RED if nominal_psi is None else CYAN)
-            draw_label('Pump (power-derived): {} | Power: {} W | Voltage: {} V          '.format(
+                RED if calibrated_psi is None else CYAN)
+            draw_label('Pump: {} | Power: {} W | Flow est: {} GPM          '.format(
                 'UNKNOWN' if reported_pump_running is None else ('RUNNING' if reported_pump_running else 'STOPPED'),
                 '--' if power_w is None else round(power_w),
-                '--' if voltage_v is None else '{:.1f}'.format(voltage_v)),
+                '--' if flow_gpm is None else '{:+.2f}'.format(flow_gpm)),
                 48, 420, M5.Lcd.FONTS.Montserrat24,
                 RED if not shelly_available else CYAN)
             next_sample_ms = time.ticks_add(next_sample_ms, SAMPLE_PERIOD_MS)
@@ -1632,7 +1691,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.15: raw ADC batches retained in uninterrupted fill traces')
+log('CPU A release M6.16: empirical pressure calibration and 10 s flow evidence')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:

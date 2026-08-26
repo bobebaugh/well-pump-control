@@ -22,6 +22,8 @@ FUNCTIONS = {
     "summarize_adc_samples",
     "qualification_pump_running",
     "qualification_midpoint_ticks",
+    "calibrated_psi_from_raw_count",
+    "calibrated_psi_from_microvolts",
     "build_observation",
     "new_event_history",
     "append_event_history",
@@ -55,7 +57,11 @@ CONSTANTS = {
     "QUAL_PUMP_STOP_W",
     "QUAL_CALIBRATION_START_PSI",
     "QUAL_CALIBRATION_START_DIRECTION",
-    "QUAL_LIVE_ADC_REFRESH_MS",
+    "ADC_DIVIDER",
+    "ADC_LSB_UV_AT_PIN",
+    "ADC_UV_PER_COUNT",
+    "PRESSURE_CALIBRATION_COUNT_INTERCEPT",
+    "PRESSURE_CALIBRATION_COUNTS_PER_PSI",
     "MATERIAL_NUMERIC_THRESHOLDS",
     "MATERIAL_EXACT_CHANGE_PATHS",
     "MATERIAL_CHANGE_LABELS",
@@ -98,6 +104,7 @@ def observation(sequence=1, power=1000.0, voltage=240.0, **changes):
             "power": power,
             "voltage": voltage,
             "adc_microvolts": 7000000,
+            "pressure_psi": 158.877,
             "battery_voltage": 7.8,
             "battery_current": 0.0,
             "battery_percent": 76,
@@ -174,6 +181,10 @@ class ObservationSelectionTests(unittest.TestCase):
         self.assertTrue(unavailable["status"]["shelly_poll_attempted"])
         self.assertEqual(unavailable["status"]["shelly_age_ms"], 2000)
         self.assertIsNone(unavailable["values"]["power"])
+        self.assertAlmostEqual(
+            unavailable["values"]["pressure_psi"],
+            self.logic["calibrated_psi_from_microvolts"](7000000),
+        )
         previous = observation()
         self.assertIsNone(self.reason(unavailable, previous, 1000))
 
@@ -222,7 +233,38 @@ class ObservationSelectionTests(unittest.TestCase):
     def test_pressure_calibration_starts_at_sixty_and_falls(self):
         self.assertEqual(self.logic["QUAL_CALIBRATION_START_PSI"], 60.0)
         self.assertEqual(self.logic["QUAL_CALIBRATION_START_DIRECTION"], "falling")
-        self.assertEqual(self.logic["QUAL_LIVE_ADC_REFRESH_MS"], 1000)
+
+    def test_normal_observation_preserves_raw_adc_and_derived_pressure(self):
+        built = self.logic["build_observation"](
+            sequence=9,
+            observed_ticks_ms=9000,
+            clock_is_synced=True,
+            shelly={},
+            shelly_is_available=False,
+            shelly_poll_was_attempted=True,
+            shelly_last_valid_ticks_ms=None,
+            ads_microvolts=3073125,
+            battery_voltage=None,
+            battery_current=None,
+            battery_percent=None,
+            battery_is_charging=None,
+            battery_is_valid=False,
+            battery_charge_is_enabled=True,
+            battery_sample_ticks_ms=0,
+            wifi_is_connected=True,
+            traffic_is_allowed=True,
+            wifi_status=1010,
+            wifi_address="192.0.2.10",
+            wifi_disconnect_count=0,
+            shelly_failures=0,
+        )
+        self.assertEqual(built["values"]["adc_microvolts"], 3073125)
+        expected_count = 3073125 / self.logic["ADC_UV_PER_COUNT"]
+        self.assertAlmostEqual(
+            built["values"]["pressure_psi"],
+            (expected_count - self.logic["PRESSURE_CALIBRATION_COUNT_INTERCEPT"]) /
+            self.logic["PRESSURE_CALIBRATION_COUNTS_PER_PSI"],
+        )
 
     def test_transient_shelly_poll_failures_do_not_select_durable_records(self):
         confirmation = self.logic["new_shelly_availability_confirmation"](3)

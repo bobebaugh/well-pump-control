@@ -13,8 +13,10 @@ FUNCTIONS = {
     '_read_ads1110_reply',
     '_read_ads1110_fresh_raw_once',
     'average_raw_adc_counts',
-    'nominal_psi_from_raw_count',
+    'calibrated_psi_from_raw_count',
+    'calibrated_psi_from_microvolts',
     'raw_count_regression_slope',
+    'pressure_flow_evidence',
     'estimated_flow_gpm',
     '_write_calibration_capture',
 }
@@ -22,10 +24,12 @@ CONSTANTS = {
     'ADS1110_ADDRESS', 'ADS1110_READY_MASK', 'ADS1110_FRESH_TIMEOUT_MS',
     'ADS1110_READY_POLL_MS', 'ADC_DIVIDER', 'ADC_LSB_UV_AT_PIN',
     'ADC_UV_PER_COUNT',
-    'QUAL_CAPTURE_SAMPLES', 'QUAL_FLOW_MIN_SPAN_MS',
+    'QUAL_CAPTURE_SAMPLES', 'QUAL_FLOW_WINDOW_DEFAULT_SECONDS',
+    'QUAL_FLOW_MIN_SPAN_MS',
     'QUAL_FLOW_WINDOW_TOLERANCE_MS',
     'PRESSURE_SENSOR_ZERO_UV', 'PRESSURE_SENSOR_SPAN_UV',
-    'PRESSURE_SENSOR_SPAN_PSI', 'PRESSURE_PSI_PER_COUNT',
+    'PRESSURE_SENSOR_SPAN_PSI', 'PRESSURE_CALIBRATION_COUNT_INTERCEPT',
+    'PRESSURE_CALIBRATION_COUNTS_PER_PSI', 'PRESSURE_PSI_PER_COUNT',
     'TANK_EFFECTIVE_VOLUME_GAL', 'TANK_PRECHARGE_PSIG',
     'SITE_ATMOSPHERE_PSI',
 }
@@ -57,11 +61,22 @@ class PressureFlowTests(unittest.TestCase):
     def setUpClass(cls):
         cls.logic = load_pressure_logic()
 
-    def test_gain_two_terminal_scaling_and_nominal_sensor_map(self):
+    def test_gain_two_terminal_scaling_and_empirical_pressure_fit(self):
         self.assertEqual(self.logic['ADC_UV_PER_COUNT'], 187.5)
-        self.assertAlmostEqual(self.logic['PRESSURE_PSI_PER_COUNT'], 0.0046875)
-        self.assertAlmostEqual(self.logic['nominal_psi_from_raw_count'](8000), 25.0)
-        self.assertAlmostEqual(self.logic['nominal_psi_from_raw_count'](24000), 100.0)
+        self.assertAlmostEqual(
+            self.logic['PRESSURE_PSI_PER_COUNT'], 1.0 / 211.492)
+        count_at_40 = 3732.02 + (40.0 * 211.492)
+        count_at_60 = 3732.02 + (60.0 * 211.492)
+        convert = self.logic['calibrated_psi_from_raw_count']
+        self.assertAlmostEqual(convert(count_at_40), 40.0)
+        self.assertAlmostEqual(convert(count_at_60), 60.0)
+        self.assertAlmostEqual(
+            self.logic['calibrated_psi_from_microvolts'](
+                count_at_60 * self.logic['ADC_UV_PER_COUNT']), 60.0)
+        self.assertIsNone(convert(True))
+
+    def test_operational_flow_window_defaults_to_ten_seconds(self):
+        self.assertEqual(self.logic['QUAL_FLOW_WINDOW_DEFAULT_SECONDS'], 10)
 
     def test_signed_ads1110_counts_and_exact_batch_average(self):
         decode = self.logic['ads1110_signed_raw_count']
@@ -118,6 +133,8 @@ class PressureFlowTests(unittest.TestCase):
                          node.name == 'run_pressure_fill')
         fill_source = ast.get_source_segment(source, fill_node)
         self.assertIn('s1_raw_count,s2_raw_count,s3_raw_count', fill_source)
+        self.assertIn('pressure_slope_psi_per_min', fill_source)
+        self.assertIn('estimated_flow_gpm', fill_source)
         self.assertIn("batch = _acquire_calibration_batch()", fill_source)
         self.assertNotIn('read_ads1110_microvolts()', fill_source)
 
@@ -158,6 +175,25 @@ class PressureFlowTests(unittest.TestCase):
         self.assertGreater(rising, 0)
         self.assertLess(falling, 0)
 
+    def test_flow_evidence_keeps_pressure_slope_distinct_from_gpm(self):
+        current = {'midpoint_ticks_ms': 10000, 'average_raw_count': 14300.0}
+        history = [
+            {'midpoint_ticks_ms': 0, 'average_raw_count': 12300.0},
+            {'midpoint_ticks_ms': 5000, 'average_raw_count': 13300.0},
+            current,
+        ]
+        evidence = self.logic['pressure_flow_evidence'](history, current, 10)
+        self.assertEqual(
+            set(evidence),
+            {'pressure_slope_psi_per_min', 'estimated_flow_gpm'},
+        )
+        self.assertGreater(evidence['pressure_slope_psi_per_min'], 0)
+        self.assertGreater(evidence['estimated_flow_gpm'], 0)
+        self.assertNotEqual(
+            evidence['pressure_slope_psi_per_min'],
+            evidence['estimated_flow_gpm'],
+        )
+
     def test_flow_is_unavailable_until_window_has_real_coverage(self):
         current = {'midpoint_ticks_ms': 1000, 'average_raw_count': 13333.333333}
         self.assertIsNone(self.logic['estimated_flow_gpm']([
@@ -190,13 +226,16 @@ class PressureFlowTests(unittest.TestCase):
         }
         handle = CaptureBuffer()
         self.assertTrue(self.logic['_write_calibration_capture'](
-            handle, 1, batch, 'falling', 60.0, 3, -1.25))
+            handle, 1, batch, 'falling', 60.0, 10, {
+                'pressure_slope_psi_per_min': -2.5,
+                'estimated_flow_gpm': -1.25,
+            }))
         self.assertTrue(handle.flushed)
         row = handle.getvalue().strip().split(',')
         self.assertEqual(row[:9], ['capture', '1', 'falling', '60.0',
                                    '100', '101', '102', '103', '104'])
         self.assertEqual(row[10:13], ['10', '350', '180'])
-        self.assertEqual(row[-2:], ['3', '-1.25000'])
+        self.assertEqual(row[-3:], ['10', '-2.50000', '-1.25000'])
 
 
 if __name__ == '__main__':
