@@ -15,6 +15,8 @@ FUNCTIONS = {
     "format_observed_at",
     "_observation_path_value",
     "_numeric_material_change",
+    "_material_change_detail",
+    "material_change_details",
     "trimmed_mean_microvolts",
     "normalize_shelly1_status",
     "summarize_adc_samples",
@@ -51,8 +53,12 @@ CONSTANTS = {
     "ADC_FILTER_SAMPLE_COUNT",
     "QUAL_PUMP_START_W",
     "QUAL_PUMP_STOP_W",
+    "QUAL_CALIBRATION_START_PSI",
+    "QUAL_CALIBRATION_START_DIRECTION",
+    "QUAL_LIVE_ADC_REFRESH_MS",
     "MATERIAL_NUMERIC_THRESHOLDS",
     "MATERIAL_EXACT_CHANGE_PATHS",
+    "MATERIAL_CHANGE_LABELS",
     "RULES_FILE",
     "RULES_TEMP_FILE",
     "RULES_FETCH_RETRY_MS",
@@ -124,10 +130,20 @@ class ObservationSelectionTests(unittest.TestCase):
         return self.logic["durable_observation_reason"](
             current, previous, elapsed, **kwargs)
 
+    def material_details(self, current, previous, **kwargs):
+        return self.logic["material_change_details"](
+            current, previous, **kwargs)
+
     def test_first_valid_clocked_observation_is_selected(self):
         self.assertEqual(self.reason(observation(), None, None), "material-change")
         unsynced = observation(observedAt=None)
         self.assertIsNone(self.reason(unsynced, None, None))
+
+    def test_initial_material_change_has_an_explicit_diagnostic_label(self):
+        self.assertEqual(
+            self.material_details(observation(), None),
+            ["initial valid observation"],
+        )
 
     def test_failed_shelly_poll_still_builds_a_matched_observation(self):
         build = self.logic["build_observation"]
@@ -202,6 +218,11 @@ class ObservationSelectionTests(unittest.TestCase):
         midpoint = self.logic["qualification_midpoint_ticks"]
         self.assertEqual(midpoint(1000, 1280), 1140)
         self.assertEqual(midpoint(1000, 1281), 1140)
+
+    def test_pressure_calibration_starts_at_sixty_and_falls(self):
+        self.assertEqual(self.logic["QUAL_CALIBRATION_START_PSI"], 60.0)
+        self.assertEqual(self.logic["QUAL_CALIBRATION_START_DIRECTION"], "falling")
+        self.assertEqual(self.logic["QUAL_LIVE_ADC_REFRESH_MS"], 1000)
 
     def test_transient_shelly_poll_failures_do_not_select_durable_records(self):
         confirmation = self.logic["new_shelly_availability_confirmation"](3)
@@ -289,6 +310,54 @@ class ObservationSelectionTests(unittest.TestCase):
         current = observation(2)
         current["status"]["adc_available"] = False
         self.assertEqual(self.reason(current, previous, 1000), "material-change")
+        self.assertEqual(
+            self.material_details(current, previous),
+            ["pressure ADC (status.adc_available): True -> False"],
+        )
+
+    def test_numeric_material_change_names_sensor_field_and_values(self):
+        previous = observation()
+        current = observation(2, power=1050.0)
+        self.assertEqual(
+            self.material_details(current, previous),
+            ["Shelly EM (values.power): 1000.0 -> 1050.0"],
+        )
+
+    def test_compound_material_change_reports_all_triggering_fields(self):
+        previous = observation()
+        current = observation(2, power=1060.0)
+        current["status"]["adc_available"] = False
+        self.assertEqual(
+            self.material_details(current, previous),
+            [
+                "pressure ADC (status.adc_available): True -> False",
+                "Shelly EM (values.power): 1000.0 -> 1060.0",
+            ],
+        )
+
+    def test_confirmed_shelly_availability_change_has_sensor_and_values(self):
+        previous = observation()
+        current = observation(2)
+        current["status"]["shelly_available"] = False
+        current["values"]["is_valid"] = None
+        self.assertEqual(
+            self.material_details(
+                current, previous,
+                confirmed_shelly_availability_change=True),
+            ["Shelly EM (status.shelly_available): True -> False"],
+        )
+
+    def test_confirmed_shelly1_availability_change_has_sensor_and_values(self):
+        previous = observation()
+        previous["status"]["shelly1_available"] = True
+        current = observation(2)
+        current["status"]["shelly1_available"] = False
+        self.assertEqual(
+            self.material_details(
+                current, previous,
+                confirmed_shelly1_availability_change=True),
+            ["Shelly 1 (status.shelly1_available): True -> False"],
+        )
 
     def test_shelly1_sw0_and_rly0_changes_are_material(self):
         previous = observation()

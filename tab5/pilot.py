@@ -1,4 +1,4 @@
-# Release: 2026-08-26 M6.11 — add a touch-selected local pressure qualification utility.
+# Release: 2026-08-26 M6.12 — refine pressure qualification and durable diagnostics.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -56,6 +56,23 @@ MATERIAL_EXACT_CHANGE_PATHS = (
     'status.battery_available',
     'status.clock_synced',
 )
+MATERIAL_CHANGE_LABELS = {
+    'values.power': 'Shelly EM',
+    'values.voltage': 'Shelly EM',
+    'values.adc_microvolts': 'pressure ADC',
+    'values.battery_voltage': 'Tab5 battery',
+    'values.battery_current': 'Tab5 battery',
+    'values.battery_percent': 'Tab5 battery',
+    'values.battery_charging': 'Tab5 battery',
+    'values.battery_charge_enabled': 'Tab5 battery',
+    'values.shelly1_sw0': 'Shelly 1',
+    'values.shelly1_rly0': 'Shelly 1',
+    'status.adc_available': 'pressure ADC',
+    'status.battery_available': 'Tab5 battery',
+    'status.clock_synced': 'Tab5 clock',
+    'status.shelly_available': 'Shelly EM',
+    'status.shelly1_available': 'Shelly 1',
+}
 RULES_FILE = 'rules.json'
 RULES_TEMP_FILE = '.rules.json.download'
 RULES_FETCH_RETRY_MS = 60000
@@ -518,27 +535,30 @@ def _numeric_material_change(current, previous, threshold):
     return abs(current - previous) >= threshold
 
 
-def durable_observation_reason(observation, previous, elapsed_ms,
-                               numeric_thresholds=None,
-                               exact_change_paths=None,
-                               maximum_interval_ms=MAX_DURABLE_OBSERVATION_INTERVAL_MS,
-                               confirmed_shelly_availability_change=False):
-    """Return CPU A's sparse durable-selection reason, or None.
+def _material_change_detail(path, previous_value, current_value):
+    """Name one diagnostic-only material change without altering its record."""
+    label = MATERIAL_CHANGE_LABELS.get(path, path)
+    return '{} ({}): {} -> {}'.format(
+        label, path, previous_value, current_value)
 
-    The complete one-second observation stays in RAM unless a configured
-    material field changes or the maximum interval expires. A valid UTC sample
-    time is required by the durable-observation v1 contract.
+
+def material_change_details(observation, previous, numeric_thresholds=None,
+                            exact_change_paths=None,
+                            confirmed_shelly_availability_change=False,
+                            confirmed_shelly1_availability_change=False):
+    """Return every independent material-change detail for operator logging.
+
+    This is deliberately presentation-only. Durable selection and the record
+    sent to CPU B retain their existing contract and identity.
     """
-    if not isinstance(observation, dict) or observation.get('observedAt') is None:
-        return None
     if previous is None:
-        return 'material-change'
+        return ['initial valid observation']
     if numeric_thresholds is None:
         numeric_thresholds = MATERIAL_NUMERIC_THRESHOLDS
     if exact_change_paths is None:
         exact_change_paths = MATERIAL_EXACT_CHANGE_PATHS
-    if confirmed_shelly_availability_change:
-        return 'material-change'
+    details = []
+    detail_paths = set()
     for path in exact_change_paths:
         current_value = _observation_path_value(observation, path)
         previous_value = _observation_path_value(previous, path)
@@ -549,12 +569,50 @@ def durable_observation_reason(observation, previous, elapsed_ms,
                  not isinstance(previous_value, bool))):
             continue
         if current_value != previous_value:
-            return 'material-change'
+            details.append(_material_change_detail(
+                path, previous_value, current_value))
+            detail_paths.add(path)
     for path, threshold in numeric_thresholds.items():
-        if _numeric_material_change(
-                _observation_path_value(observation, path),
-                _observation_path_value(previous, path), threshold):
-            return 'material-change'
+        current_value = _observation_path_value(observation, path)
+        previous_value = _observation_path_value(previous, path)
+        if _numeric_material_change(current_value, previous_value, threshold):
+            details.append(_material_change_detail(
+                path, previous_value, current_value))
+            detail_paths.add(path)
+    if confirmed_shelly_availability_change:
+        path = 'status.shelly_available'
+        if path not in detail_paths:
+            details.append(_material_change_detail(
+                path, _observation_path_value(previous, path),
+                _observation_path_value(observation, path)))
+    if confirmed_shelly1_availability_change:
+        path = 'status.shelly1_available'
+        if path not in detail_paths:
+            details.append(_material_change_detail(
+                path, _observation_path_value(previous, path),
+                _observation_path_value(observation, path)))
+    return details
+
+
+def durable_observation_reason(observation, previous, elapsed_ms,
+                               numeric_thresholds=None,
+                               exact_change_paths=None,
+                               maximum_interval_ms=MAX_DURABLE_OBSERVATION_INTERVAL_MS,
+                               confirmed_shelly_availability_change=False,
+                               confirmed_shelly1_availability_change=False):
+    """Return CPU A's sparse durable-selection reason, or None.
+
+    The complete one-second observation stays in RAM unless a configured
+    material field changes or the maximum interval expires. A valid UTC sample
+    time is required by the durable-observation v1 contract.
+    """
+    if not isinstance(observation, dict) or observation.get('observedAt') is None:
+        return None
+    if material_change_details(
+            observation, previous, numeric_thresholds, exact_change_paths,
+            confirmed_shelly_availability_change,
+            confirmed_shelly1_availability_change):
+        return 'material-change'
     if elapsed_ms is not None and elapsed_ms >= maximum_interval_ms:
         return 'maximum-interval'
     return None
@@ -1000,6 +1058,9 @@ def check_touch_button(was_pressed):
 QUAL_CAPTURE_SAMPLES = 5
 QUAL_PUMP_START_W = 1000.0
 QUAL_PUMP_STOP_W = 100.0
+QUAL_CALIBRATION_START_PSI = 60.0
+QUAL_CALIBRATION_START_DIRECTION = 'falling'
+QUAL_LIVE_ADC_REFRESH_MS = 1000
 
 
 def summarize_adc_samples(samples):
@@ -1108,10 +1169,12 @@ def run_pressure_calibration():
                  'adc_microvolts,sample_count,'
                  'representative_microvolts,spread_microvolts\n')
     handle.flush()
-    gauge_psi = 40.0
-    direction = 'rising'
+    gauge_psi = QUAL_CALIBRATION_START_PSI
+    direction = QUAL_CALIBRATION_START_DIRECTION
     capture_id = 0
     last_summary = None
+    live_adc_uv = None
+    next_live_adc_ms = time.ticks_ms()
     was_down = False
 
     while True:
@@ -1132,6 +1195,11 @@ def run_pressure_calibration():
         draw_label(detail + '          ', 48, 555, M5.Lcd.FONTS.Montserrat24, CYAN)
         draw_label('Each raw point is appended immediately; no PSI calculation is performed.',
                    48, 620, M5.Lcd.FONTS.Montserrat18, CYAN)
+        draw_label('Live ADC (not saved): {}          '.format(
+            'waiting...' if live_adc_uv is None else '{:.6f} V'.format(
+                live_adc_uv / 1000000)),
+            48, 675, M5.Lcd.FONTS.Montserrat18,
+            YELLOW if live_adc_uv is None else CYAN)
 
         while True:
             point, was_down = _qual_tap(was_down)
@@ -1183,6 +1251,18 @@ def run_pressure_calibration():
                     handle.flush()
                 gauge_psi += 1.0 if direction == 'rising' else -1.0
                 break
+            now_ms = time.ticks_ms()
+            if time.ticks_diff(now_ms, next_live_adc_ms) >= 0:
+                # This is an idle-screen aid only. It does not touch the CSV;
+                # a deliberate Capture is still the only calibration evidence.
+                live_adc_uv = read_ads1110_microvolts()
+                draw_label('Live ADC (not saved): {}          '.format(
+                    'ADC unavailable' if live_adc_uv is None else
+                    '{:.6f} V'.format(live_adc_uv / 1000000)),
+                    48, 675, M5.Lcd.FONTS.Montserrat18,
+                    RED if live_adc_uv is None else CYAN)
+                next_live_adc_ms = time.ticks_add(
+                    now_ms, QUAL_LIVE_ADC_REFRESH_MS)
             time.sleep_ms(35)
 
 
@@ -1514,9 +1594,14 @@ while True:
     durable_reason = durable_observation_reason(
         observation, last_durable_observation,
         elapsed_since_durable_ms,
-        confirmed_shelly_availability_change=(
-            shelly_availability_pending or shelly1_availability_pending))
+        confirmed_shelly_availability_change=shelly_availability_pending,
+        confirmed_shelly1_availability_change=shelly1_availability_pending)
     if durable_reason is not None:
+        material_changes = (material_change_details(
+            observation, last_durable_observation,
+            confirmed_shelly_availability_change=shelly_availability_pending,
+            confirmed_shelly1_availability_change=shelly1_availability_pending)
+            if durable_reason == 'material-change' else None)
         durable_record = build_durable_observation(
             observation, device_session_id, durable_reason,
             active_rules_reference)
@@ -1530,8 +1615,14 @@ while True:
             if shelly1_availability_pending:
                 acknowledge_shelly_availability_change(
                     shelly1_availability_confirmation)
-            log('Durable observation selected: sequence={}, reason={}'.format(
-                observation_sequence, durable_reason))
+            if durable_reason == 'material-change':
+                log('Durable observation selected: sequence={}, reason={}, '
+                    'changes={}'.format(
+                        observation_sequence, durable_reason,
+                        '; '.join(material_changes)))
+            else:
+                log('Durable observation selected: sequence={}, reason={}'.format(
+                    observation_sequence, durable_reason))
 
     stale = last_valid_sample_ms is not None and time.ticks_diff(now, last_valid_sample_ms) > STALE_AFTER_MS
     if last_valid_sample is None:
