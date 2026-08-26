@@ -1,4 +1,4 @@
-# Release: 2026-08-26 M6.16 — apply field pressure calibration and 10 s flow evidence.
+# Release: 2026-08-26 M6.17 — apply field pressure calibration and 10 s flow evidence.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -1691,7 +1691,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.16: empirical pressure calibration and 10 s flow evidence')
+log('CPU A release M6.17: empirical pressure calibration and 10 s flow evidence')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:
