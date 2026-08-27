@@ -24,6 +24,7 @@ FUNCTIONS = {
     "qualification_midpoint_ticks",
     "calibrated_psi_from_raw_count",
     "calibrated_psi_from_microvolts",
+    "sample_age_ms",
     "build_observation",
     "new_event_history",
     "append_event_history",
@@ -164,6 +165,7 @@ class ObservationSelectionTests(unittest.TestCase):
             shelly_poll_was_attempted=True,
             shelly_last_valid_ticks_ms=6000,
             ads_microvolts=7000000,
+            adc_last_valid_ticks_ms=7900,
             battery_voltage=7.8,
             battery_current=0.0,
             battery_percent=76,
@@ -181,6 +183,7 @@ class ObservationSelectionTests(unittest.TestCase):
         self.assertFalse(unavailable["status"]["shelly_available"])
         self.assertTrue(unavailable["status"]["shelly_poll_attempted"])
         self.assertEqual(unavailable["status"]["shelly_age_ms"], 2000)
+        self.assertEqual(unavailable["status"]["adc_age_ms"], 100)
         self.assertIsNone(unavailable["values"]["power"])
         self.assertAlmostEqual(
             unavailable["values"]["pressure_psi"],
@@ -247,6 +250,7 @@ class ObservationSelectionTests(unittest.TestCase):
             shelly_poll_was_attempted=True,
             shelly_last_valid_ticks_ms=None,
             ads_microvolts=3073125,
+            adc_last_valid_ticks_ms=8950,
             battery_voltage=None,
             battery_current=None,
             battery_percent=None,
@@ -262,6 +266,8 @@ class ObservationSelectionTests(unittest.TestCase):
             shelly_failures=0,
         )
         self.assertEqual(built["values"]["adc_microvolts"], 3073125)
+        self.assertEqual(built["status"]["adc_last_valid_ticks_ms"], 8950)
+        self.assertEqual(built["status"]["adc_age_ms"], 50)
         expected_count = 3073125 / self.logic["ADC_UV_PER_COUNT"]
         self.assertAlmostEqual(
             built["values"]["pressure_psi"],

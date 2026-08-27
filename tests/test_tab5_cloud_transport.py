@@ -121,6 +121,8 @@ class CloudTransportTests(unittest.TestCase):
         self.cloud._pending_rules_pointer = None
         self.cloud._applied_rules_reference = dict(
             self.cloud.PRE_M6_TRANSPORT_ONLY_RULES_REFERENCE)
+        for key in self.cloud._transport_status:
+            self.cloud._transport_status[key] = None
 
     def test_retry_delay_is_exponential_and_bounded(self):
         self.assertEqual(self.cloud._retry_delay_ms(1), 5000)
@@ -134,6 +136,37 @@ class CloudTransportTests(unittest.TestCase):
         first = self.cloud.device_session_id()
         self.assertEqual(self.cloud.device_session_id(), first)
         self.assertTrue(first.startswith("boot_"))
+
+    def test_transport_status_reports_confirmed_results_and_queue_depth(self):
+        original_observation = self.cloud._pending_observation
+        original_durable = self.cloud._pending_durable_records
+        try:
+            self.cloud._pending_observation = {"sequence": 4}
+            self.cloud._pending_durable_records = [{"recordId": "one"}]
+            self.assertTrue(
+                self.cloud._record_transport_result("telemetry", True, 1000))
+            self.assertTrue(
+                self.cloud._record_transport_result("telemetry", False, 2000))
+            self.assertTrue(
+                self.cloud._record_transport_result("rtdb", True, 1500))
+            snapshot = self.cloud.transport_status_snapshot()
+            self.assertEqual(snapshot["telemetryLastAttemptTicksMs"], 2000)
+            self.assertEqual(snapshot["telemetryLastSuccessTicksMs"], 1000)
+            self.assertFalse(snapshot["telemetryLastAttemptOk"])
+            self.assertEqual(snapshot["rtdbLastSuccessTicksMs"], 1500)
+            self.assertTrue(snapshot["observationPending"])
+            self.assertEqual(snapshot["durableQueueDepth"], 1)
+            self.assertEqual(
+                snapshot["durableQueueCapacity"],
+                self.cloud.DURABLE_QUEUE_DEPTH,
+            )
+            snapshot["telemetryLastAttemptOk"] = True
+            self.assertFalse(
+                self.cloud.transport_status_snapshot()[
+                    "telemetryLastAttemptOk"])
+        finally:
+            self.cloud._pending_observation = original_observation
+            self.cloud._pending_durable_records = original_durable
 
     def test_durable_fifo_is_bounded_and_preserves_record_identity(self):
         original = self.cloud._pending_durable_records

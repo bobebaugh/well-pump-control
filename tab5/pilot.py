@@ -1,4 +1,4 @@
-# Release: 2026-08-27 M6.19 — service touch throughout the acquisition cycle.
+# Release: 2026-08-27 M6.20 — steady NOW display, source ages, and touch fallback.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -29,13 +29,16 @@ SHELLY_1_STATUS_URL = 'http://192.168.50.201/rpc/Shelly.GetStatus'
 SAMPLE_PERIOD_MS = 1000
 SHELLY_TIMEOUT_S = 1  # requests has whole-second granularity; C++ used 750ms
 STALE_AFTER_MS = 3000
+CLOUD_TELEMETRY_FRESH_MS = 90000
+CLOUD_RTDB_FRESH_MS = 45000
+CLOUD_FAILED_RED_MS = 180000
 PUMP_RUNNING_THRESHOLD_W = 1000.0
 # The transducer remains at the well while the Tab5 is being bench-developed.
 # ADS1110 communication alone must not turn a disconnected input into apparent
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.19'
+SOFTWARE_RELEASE = 'M6.20'
 
 # M5 selection parameters live on CPU A. M6 supplies a validated rules
 # reference while CPU B remains a byte-preserving transport only.
@@ -422,10 +425,18 @@ def format_observed_at(clock_is_synced):
         return None
 
 
+def sample_age_ms(reference_ticks_ms, sample_ticks_ms):
+    """Return a nonnegative within-session age using MicroPython tick math."""
+    if sample_ticks_ms is None:
+        return None
+    return max(0, time.ticks_diff(reference_ticks_ms, sample_ticks_ms))
+
+
 def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
                       shelly_is_available, shelly_poll_was_attempted,
                       shelly_last_valid_ticks_ms,
-                      ads_microvolts, battery_voltage, battery_current,
+                      ads_microvolts, adc_last_valid_ticks_ms,
+                      battery_voltage, battery_current,
                       battery_percent, battery_is_charging, battery_is_valid,
                       battery_charge_is_enabled, battery_sample_ticks_ms,
                       wifi_is_connected, traffic_is_allowed, wifi_status,
@@ -469,10 +480,12 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
             'shelly_available': shelly_is_available,
             'shelly_poll_attempted': shelly_poll_was_attempted,
             'shelly_last_valid_ticks_ms': shelly_last_valid_ticks_ms,
-            'shelly_age_ms': (time.ticks_diff(
-                observed_ticks_ms, shelly_last_valid_ticks_ms)
-                if shelly_last_valid_ticks_ms is not None else None),
+            'shelly_age_ms': sample_age_ms(
+                observed_ticks_ms, shelly_last_valid_ticks_ms),
             'adc_available': ads_microvolts is not None,
+            'adc_last_valid_ticks_ms': adc_last_valid_ticks_ms,
+            'adc_age_ms': sample_age_ms(
+                observed_ticks_ms, adc_last_valid_ticks_ms),
             'pressure_sensor_commissioned': PRESSURE_SENSOR_COMMISSIONED,
             'pressure_valid': (PRESSURE_SENSOR_COMMISSIONED and
                                ads_microvolts is not None),
@@ -482,9 +495,8 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
             'shelly1_available': shelly1_is_available,
             'shelly1_poll_attempted': shelly1_poll_was_attempted,
             'shelly1_last_valid_ticks_ms': shelly1_last_valid_ticks_ms,
-            'shelly1_age_ms': (time.ticks_diff(
-                observed_ticks_ms, shelly1_last_valid_ticks_ms)
-                if shelly1_last_valid_ticks_ms is not None else None),
+            'shelly1_age_ms': sample_age_ms(
+                observed_ticks_ms, shelly1_last_valid_ticks_ms),
             'shelly1_failure_count': shelly1_failures,
             'wifi_connected': wifi_is_connected,
             'network_traffic_allowed': traffic_is_allowed,
@@ -1035,7 +1047,97 @@ def shelly_local_lock_status(shelly1_available, reported_lock=None):
     return 'NOT REPORTED'
 
 
-def build_now_hmi_model(observation):
+def source_age_ms(status, last_ticks_key, stored_age_key, current_ticks_ms):
+    """Prefer an actual source timestamp; retain older-record compatibility."""
+    last_ticks_ms = status.get(last_ticks_key)
+    if _is_number(current_ticks_ms) and _is_number(last_ticks_ms):
+        return sample_age_ms(current_ticks_ms, last_ticks_ms)
+    stored_age_ms = status.get(stored_age_key)
+    return stored_age_ms if _is_number(stored_age_ms) else None
+
+
+def compact_age_text(age_ms):
+    """Fit three independently measured ages in one large-font HMI field."""
+    if not _is_number(age_ms):
+        return '--'
+    if age_ms < 1000:
+        return '<1s'
+    seconds = int(age_ms / 1000)
+    return '{}s'.format(seconds) if seconds <= 99 else '99+s'
+
+
+def transport_age_ms(transport_status, key, current_ticks_ms):
+    if not isinstance(transport_status, dict):
+        return None
+    ticks_ms = transport_status.get(key)
+    if not (_is_number(current_ticks_ms) and _is_number(ticks_ms)):
+        return None
+    return sample_age_ms(current_ticks_ms, ticks_ms)
+
+
+def cloud_indicator_state(transport_status, current_ticks_ms,
+                          wifi_connected, network_ready):
+    """Summarize confirmed CPU B responses without treating queueing as success."""
+    if not wifi_connected:
+        return 'red'
+    if not network_ready:
+        return 'yellow'
+    if not isinstance(transport_status, dict):
+        return 'yellow'
+
+    telemetry_age_ms = transport_age_ms(
+        transport_status, 'telemetryLastSuccessTicksMs', current_ticks_ms)
+    rtdb_age_ms = transport_age_ms(
+        transport_status, 'rtdbLastSuccessTicksMs', current_ticks_ms)
+    telemetry_ok = transport_status.get('telemetryLastAttemptOk')
+    rtdb_ok = transport_status.get('rtdbLastAttemptOk')
+    queue_depth = transport_status.get('durableQueueDepth')
+    queue_depth = queue_depth if isinstance(queue_depth, int) else 0
+
+    if ((telemetry_ok is False and telemetry_age_ms is None) or
+            (rtdb_ok is False and rtdb_age_ms is None) or
+            (_is_number(telemetry_age_ms) and
+             telemetry_age_ms > CLOUD_FAILED_RED_MS) or
+            (_is_number(rtdb_age_ms) and
+             rtdb_age_ms > CLOUD_FAILED_RED_MS)):
+        return 'red'
+    if (_is_number(telemetry_age_ms) and
+            telemetry_age_ms <= CLOUD_TELEMETRY_FRESH_MS and
+            _is_number(rtdb_age_ms) and
+            rtdb_age_ms <= CLOUD_RTDB_FRESH_MS and
+            telemetry_ok is not False and rtdb_ok is not False and
+            queue_depth == 0):
+        return 'green'
+    return 'yellow'
+
+
+def cloud_detail_text(transport_status, current_ticks_ms):
+    telemetry_age = transport_age_ms(
+        transport_status, 'telemetryLastSuccessTicksMs', current_ticks_ms)
+    rtdb_age = transport_age_ms(
+        transport_status, 'rtdbLastSuccessTicksMs', current_ticks_ms)
+    queue_depth = (transport_status.get('durableQueueDepth')
+                   if isinstance(transport_status, dict) else None)
+    queue_capacity = (transport_status.get('durableQueueCapacity')
+                      if isinstance(transport_status, dict) else None)
+    queue_text = ('{}/{}'.format(queue_depth, queue_capacity)
+                  if isinstance(queue_depth, int) and
+                  isinstance(queue_capacity, int) else '--')
+    telemetry_result = (transport_status.get('telemetryLastAttemptOk')
+                        if isinstance(transport_status, dict) else None)
+    rtdb_result = (transport_status.get('rtdbLastAttemptOk')
+                   if isinstance(transport_status, dict) else None)
+    telemetry_text = ('OK' if telemetry_result is True else
+                      'ERR' if telemetry_result is False else 'WAIT')
+    rtdb_text = ('OK' if rtdb_result is True else
+                 'ERR' if rtdb_result is False else 'WAIT')
+    return 'CLOUD {} {}  RTDB {} {}  Q{}'.format(
+        telemetry_text, compact_age_text(telemetry_age),
+        rtdb_text, compact_age_text(rtdb_age), queue_text)
+
+
+def build_now_hmi_model(observation, transport_status=None,
+                        current_ticks_ms=None):
     """Create the small current-state view without retaining mutable input."""
     if not isinstance(observation, dict):
         observation = {}
@@ -1043,6 +1145,17 @@ def build_now_hmi_model(observation):
     status = observation.get('status')
     values = values if isinstance(values, dict) else {}
     status = status if isinstance(status, dict) else {}
+    if not _is_number(current_ticks_ms):
+        current_ticks_ms = observation.get('observedTicksMs')
+    shelly_age_ms = source_age_ms(
+        status, 'shelly_last_valid_ticks_ms', 'shelly_age_ms',
+        current_ticks_ms)
+    shelly1_age_ms = source_age_ms(
+        status, 'shelly1_last_valid_ticks_ms', 'shelly1_age_ms',
+        current_ticks_ms)
+    adc_age_ms = source_age_ms(
+        status, 'adc_last_valid_ticks_ms', 'adc_age_ms',
+        current_ticks_ms)
     pressure_psi, pressure_status = pressure_hmi_value(
         values.get('adc_microvolts'))
     shelly1_available = status.get('shelly1_available') is True
@@ -1056,22 +1169,42 @@ def build_now_hmi_model(observation):
     return {
         'pump_state': operational_pump_state(
             values.get('power'), status.get('shelly_available') is True,
-            status.get('shelly_age_ms')),
+            shelly_age_ms),
         'power_w': values.get('power') if _is_number(values.get('power')) else None,
         'voltage_v': values.get('voltage') if _is_number(values.get('voltage')) else None,
         'pressure_psi': pressure_psi,
         'pressure_status': pressure_status,
         'shelly1': shelly1_text,
         'shelly_lock': shelly_local_lock_status(shelly1_available),
-        'shelly_age_ms': (status.get('shelly_age_ms')
-                          if _is_number(status.get('shelly_age_ms')) else None),
+        'shelly_age_ms': shelly_age_ms,
+        'shelly1_age_ms': shelly1_age_ms,
+        'adc_age_ms': adc_age_ms,
+        'age_text': 'EM {}  S1 {}  ADC {}'.format(
+            compact_age_text(shelly_age_ms),
+            compact_age_text(shelly1_age_ms),
+            compact_age_text(adc_age_ms)),
         'wifi_connected': status.get('wifi_connected') is True,
         'network_ready': status.get('network_traffic_allowed') is True,
+        'wifi_indicator': ('green'
+                           if status.get('network_traffic_allowed') is True
+                           else 'yellow'
+                           if status.get('wifi_connected') is True else 'red'),
+        'cloud_indicator': cloud_indicator_state(
+            transport_status, current_ticks_ms,
+            status.get('wifi_connected') is True,
+            status.get('network_traffic_allowed') is True),
+        'adc_indicator': ('green'
+                          if status.get('adc_available') is True and
+                          _is_number(adc_age_ms) and adc_age_ms <= STALE_AFTER_MS
+                          else 'yellow'
+                          if _is_number(adc_age_ms) and
+                          adc_age_ms <= STALE_AFTER_MS else 'red'),
     }
 
 
 def build_system_hmi_model(observation, adopted_reference, rules_package,
-                           published_reference=None):
+                           published_reference=None, transport_status=None,
+                           current_ticks_ms=None):
     """Create system status; override and rule processing remain unavailable."""
     if not isinstance(observation, dict):
         observation = {}
@@ -1079,6 +1212,8 @@ def build_system_hmi_model(observation, adopted_reference, rules_package,
     status = observation.get('status')
     values = values if isinstance(values, dict) else {}
     status = status if isinstance(status, dict) else {}
+    if not _is_number(current_ticks_ms):
+        current_ticks_ms = observation.get('observedTicksMs')
     adopted_hash = (adopted_reference.get('contentHash')
                     if isinstance(adopted_reference, dict) else None)
     published_hash = (published_reference.get('contentHash')
@@ -1091,6 +1226,12 @@ def build_system_hmi_model(observation, adopted_reference, rules_package,
         'wifi': 'UP' if status.get('wifi_connected') is True else 'DOWN',
         'network': ('READY' if status.get('network_traffic_allowed') is True
                     else 'QUIET'),
+        'cloud_state': cloud_indicator_state(
+            transport_status, current_ticks_ms,
+            status.get('wifi_connected') is True,
+            status.get('network_traffic_allowed') is True),
+        'cloud_detail': cloud_detail_text(
+            transport_status, current_ticks_ms),
         'shelly_em': ('AVAILABLE' if status.get('shelly_available') is True
                       else 'UNAVAILABLE'),
         'shelly1': ('AVAILABLE' if status.get('shelly1_available') is True
@@ -1132,6 +1273,7 @@ HMI_PAGE_SYSTEM = 'system'
 NAV_Y, NAV_H = 630, 70
 NAV_NOW_X, NAV_SYSTEM_X, NAV_W = 35, 655, 590
 _last_rendered_page = None
+_field_cache = {}
 
 
 def navigation_page_at(x, y):
@@ -1145,9 +1287,40 @@ def navigation_page_at(x, y):
     return None
 
 
-def _draw_field(text, x, y, width, height, font, color=WHITE):
+def _draw_field(text, x, y, width, height, font, color=WHITE,
+                cache_key=None):
+    state = (text, color)
+    if cache_key is not None and _field_cache.get(cache_key) == state:
+        return False
     M5.Lcd.fillRect(x, y, width, height, BG)
     draw_label(text, x, y, font, color)
+    if cache_key is not None:
+        _field_cache[cache_key] = state
+    return True
+
+
+def _indicator_color(state):
+    if state == 'green':
+        return GREEN
+    if state == 'red':
+        return RED
+    return YELLOW
+
+
+def _draw_communications(model):
+    state = (model['wifi_indicator'], model['cloud_indicator'],
+             model['adc_indicator'])
+    if _field_cache.get('now.communications') == state:
+        return False
+    M5.Lcd.fillRect(665, 498, 570, 55, BG)
+    draw_label('WiFi', 665, 498, M5.Lcd.FONTS.DejaVu40,
+               _indicator_color(model['wifi_indicator']))
+    draw_label('Cloud', 825, 498, M5.Lcd.FONTS.DejaVu40,
+               _indicator_color(model['cloud_indicator']))
+    draw_label('ADC', 1060, 498, M5.Lcd.FONTS.DejaVu40,
+               _indicator_color(model['adc_indicator']))
+    _field_cache['now.communications'] = state
+    return True
 
 
 def _draw_navigation(page):
@@ -1162,6 +1335,7 @@ def _draw_navigation(page):
 
 
 def _draw_page_frame(page):
+    _field_cache.clear()
     M5.Lcd.fillScreen(BG)
     title = 'WELL PUMP - NOW' if page == HMI_PAGE_NOW else 'WELL PUMP - SYSTEM'
     draw_label(title, 40, 22, M5.Lcd.FONTS.DejaVu40, WHITE)
@@ -1175,7 +1349,7 @@ def render_now(model):
                   else WHITE if model['pump_state'] == 'STOPPED' else YELLOW)
     draw_label('PUMP', 45, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
     _draw_field(model['pump_state'], 45, 128, 560, 55,
-                M5.Lcd.FONTS.DejaVu40, pump_color)
+                M5.Lcd.FONTS.DejaVu40, pump_color, 'now.pump')
 
     draw_label('PRESSURE', 665, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
     pressure_text = ('{:.2f} PSI'.format(model['pressure_psi'])
@@ -1183,46 +1357,45 @@ def render_now(model):
                      else model['pressure_status'])
     pressure_color = WHITE if model['pressure_psi'] is not None else YELLOW
     _draw_field(pressure_text, 665, 128, 570, 55,
-                M5.Lcd.FONTS.DejaVu40, pressure_color)
+                M5.Lcd.FONTS.DejaVu40, pressure_color, 'now.pressure')
 
     draw_label('POWER', 45, 215, M5.Lcd.FONTS.Montserrat18, CYAN)
     power_text = ('{:.0f} W'.format(model['power_w'])
                   if model['power_w'] is not None else 'UNAVAILABLE')
-    _draw_field(power_text, 45, 248, 560, 55, M5.Lcd.FONTS.DejaVu40)
+    _draw_field(power_text, 45, 248, 560, 55, M5.Lcd.FONTS.DejaVu40,
+                cache_key='now.power')
     draw_label('VOLTAGE', 665, 215, M5.Lcd.FONTS.Montserrat18, CYAN)
     voltage_text = ('{:.1f} V'.format(model['voltage_v'])
                     if model['voltage_v'] is not None else 'UNAVAILABLE')
-    _draw_field(voltage_text, 665, 248, 570, 55, M5.Lcd.FONTS.DejaVu40)
+    _draw_field(voltage_text, 665, 248, 570, 55, M5.Lcd.FONTS.DejaVu40,
+                cache_key='now.voltage')
 
     draw_label('SHELLY 1', 45, 340, M5.Lcd.FONTS.Montserrat18, CYAN)
-    _draw_field(model['shelly1'], 45, 373, 560, 42,
-                M5.Lcd.FONTS.Montserrat24)
+    _draw_field(model['shelly1'], 45, 373, 560, 55,
+                M5.Lcd.FONTS.DejaVu40, cache_key='now.shelly1')
     draw_label('SHELLY LOCAL LOCK', 665, 340, M5.Lcd.FONTS.Montserrat18, CYAN)
     lock_color = RED if model['shelly_lock'] == 'LOCKED' else YELLOW
-    _draw_field(model['shelly_lock'], 665, 373, 570, 42,
-                M5.Lcd.FONTS.Montserrat24, lock_color)
+    _draw_field(model['shelly_lock'], 665, 373, 570, 55,
+                M5.Lcd.FONTS.DejaVu40, lock_color, 'now.shelly_lock')
 
-    age_text = ('{} ms'.format(int(model['shelly_age_ms']))
-                if model['shelly_age_ms'] is not None else 'UNAVAILABLE')
-    draw_label('ELECTRICAL DATA AGE', 45, 465, M5.Lcd.FONTS.Montserrat18, CYAN)
-    _draw_field(age_text, 45, 498, 560, 42, M5.Lcd.FONTS.Montserrat24)
+    draw_label('DATA AGE', 45, 465, M5.Lcd.FONTS.Montserrat18, CYAN)
+    _draw_field(model['age_text'], 45, 498, 560, 55,
+                M5.Lcd.FONTS.DejaVu40, cache_key='now.data_age')
     draw_label('COMMUNICATIONS', 665, 465, M5.Lcd.FONTS.Montserrat18, CYAN)
-    comms = 'WIFI {}  NETWORK {}'.format(
-        'UP' if model['wifi_connected'] else 'DOWN',
-        'READY' if model['network_ready'] else 'QUIET')
-    _draw_field(comms, 665, 498, 570, 42, M5.Lcd.FONTS.Montserrat24)
-    _draw_field('NO EVENT ENGINE - NO CONTROL AUTHORITY', 45, 575, 1190, 35,
-                M5.Lcd.FONTS.Montserrat18, CYAN)
+    _draw_communications(model)
+    _draw_field('EVENT ENGINE: NOT IMPLEMENTED', 45, 575, 1190, 35,
+                M5.Lcd.FONTS.Montserrat24, YELLOW, 'now.event')
 
 
 def render_system(model):
     draw_label('RUNTIME', 45, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
     _draw_field('COLLECTION: {}'.format(model['collection']), 45, 128, 570, 36,
-                M5.Lcd.FONTS.Montserrat24, GREEN)
+                M5.Lcd.FONTS.Montserrat24, GREEN, 'system.collection')
     _draw_field('RULE ENGINE: {}'.format(model['rule_engine']), 45, 173, 570, 36,
-                M5.Lcd.FONTS.Montserrat24, YELLOW)
+                M5.Lcd.FONTS.Montserrat24, YELLOW, 'system.rule_engine')
     _draw_field('SYSTEM OVERRIDE: {}'.format(model['system_override']),
-                45, 218, 570, 36, M5.Lcd.FONTS.Montserrat24, YELLOW)
+                45, 218, 570, 36, M5.Lcd.FONTS.Montserrat24, YELLOW,
+                'system.override')
 
     draw_label('DEVICES', 665, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
     device_text = 'WIFI {}  NET {}\nEM {}  S1 {}\nADC {}  PSI {}'.format(
@@ -1231,7 +1404,11 @@ def render_system(model):
     device_lines = device_text.split('\n')
     for index, line in enumerate(device_lines):
         _draw_field(line, 665, 128 + (index * 45), 570, 36,
-                    M5.Lcd.FONTS.Montserrat24)
+                    M5.Lcd.FONTS.Montserrat24,
+                    cache_key='system.device{}'.format(index))
+    _draw_field(model['cloud_detail'], 665, 263, 570, 36,
+                M5.Lcd.FONTS.Montserrat24,
+                _indicator_color(model['cloud_state']), 'system.cloud')
 
     draw_label('RULES PACKAGE', 45, 315, M5.Lcd.FONTS.Montserrat18, CYAN)
     adopted = 'ADOPTED v{} {}'.format(
@@ -1240,12 +1417,15 @@ def render_system(model):
     published = 'PUBLISHED v{} {}'.format(
         model['published_version'] if model['published_version'] is not None else '?',
         model['published_hash_prefix'] or 'UNKNOWN')
-    _draw_field(adopted, 45, 348, 570, 36, M5.Lcd.FONTS.Montserrat24)
-    _draw_field(published, 665, 348, 570, 36, M5.Lcd.FONTS.Montserrat24)
+    _draw_field(adopted, 45, 348, 570, 36, M5.Lcd.FONTS.Montserrat24,
+                cache_key='system.adopted')
+    _draw_field(published, 665, 348, 570, 36, M5.Lcd.FONTS.Montserrat24,
+                cache_key='system.published')
     rules_color = GREEN if model['rules_status'] == 'ACTIVE' else YELLOW
     _draw_field('STATUS: {}  |  ENABLED: {}'.format(
         model['rules_status'], model['enabled_rules']),
-        45, 400, 1190, 40, M5.Lcd.FONTS.Montserrat24, rules_color)
+        45, 400, 1190, 40, M5.Lcd.FONTS.Montserrat24, rules_color,
+        'system.rules_status')
 
     draw_label('TAB5', 45, 475, M5.Lcd.FONTS.Montserrat18, CYAN)
     battery = ('BATTERY {}% {}'.format(
@@ -1253,9 +1433,11 @@ def render_system(model):
         'CHARGING' if model['battery_charging'] else 'NOT CHARGING')
         if model['battery_percent'] is not None else 'BATTERY UNAVAILABLE')
     _draw_field('{}  |  RELEASE {}'.format(battery, model['release']),
-                45, 508, 1190, 42, M5.Lcd.FONTS.Montserrat24)
+                45, 508, 1190, 42, M5.Lcd.FONTS.Montserrat24,
+                cache_key='system.tab5')
     _draw_field('PARAMETERS AND HISTORY ARE MANAGED ON THE WEB APP',
-                45, 575, 1190, 35, M5.Lcd.FONTS.Montserrat18, CYAN)
+                45, 575, 1190, 35, M5.Lcd.FONTS.Montserrat18, CYAN,
+                'system.footer')
 
 
 def render_hmi(page, observation, adopted_reference, rules_package,
@@ -1266,12 +1448,15 @@ def render_hmi(page, observation, adopted_reference, rules_package,
     if page != _last_rendered_page:
         _draw_page_frame(page)
         _last_rendered_page = page
+    transport_status = cloud.transport_status_snapshot()
+    rendered_ticks_ms = time.ticks_ms()
     if page == HMI_PAGE_SYSTEM:
         render_system(build_system_hmi_model(
             observation, adopted_reference, rules_package,
-            published_reference))
+            published_reference, transport_status, rendered_ticks_ms))
     else:
-        render_now(build_now_hmi_model(observation))
+        render_now(build_now_hmi_model(
+            observation, transport_status, rendered_ticks_ms))
 
 
 # --- touch: M5.Touch (M5Unified's own API) ---
@@ -1315,11 +1500,18 @@ def read_touch_point():
 _touch_was_down = False
 
 
+def navigation_selection_allowed(was_pressed, current_page, selected_page):
+    """Allow a held direct-selection button to recover a missed release."""
+    return (selected_page is not None and
+            (not was_pressed or selected_page != current_page))
+
+
 def check_navigation(was_pressed, current_page):
-    """Return a page change only on a fresh touch inside navigation.
+    """Return a direct page selection from a fresh or held target touch.
 
     was_pressed tracks whether the finger was inside either navigation button
-    on the previous poll. Logging remains keyed on the separate finger edge."""
+    on the previous poll. A different target remains selectable if an entire
+    release occurred between polls. Logging remains keyed on the finger edge."""
     global _touch_was_down
     p = read_touch_point()
     if p is None:
@@ -1332,7 +1524,8 @@ def check_navigation(was_pressed, current_page):
         log('touch screen=({},{}) page={}'.format(
             x, y, selected_page if selected_page is not None else 'none'))
     _touch_was_down = True
-    if inside and not was_pressed:
+    if navigation_selection_allowed(
+            was_pressed, current_page, selected_page):
         return selected_page, True
     return current_page, inside
 
@@ -1970,6 +2163,7 @@ charge_enable = True
 last_valid_sample = None
 last_valid_sample_ms = None
 sample_failure_count = 0
+last_valid_adc_ms = None
 last_valid_shelly1 = None
 last_valid_shelly1_ms = None
 shelly1_failure_count = 0
@@ -2085,6 +2279,9 @@ while True:
     # cycle. Service touch inside their DRDY waits instead of limiting touch
     # detection to whatever sleep time happens to remain afterward.
     ads_uv = read_ads1110_microvolts(service_navigation)
+    adc_completed_ms = time.ticks_ms()
+    if ads_uv is not None:
+        last_valid_adc_ms = adc_completed_ms
 
     if time.ticks_diff(now, last_battery_poll_ms) >= BATTERY_POLL_PERIOD_MS:
         last_battery_poll_ms = now
@@ -2121,10 +2318,11 @@ while True:
             sample_failure_count += 1
         else:
             last_valid_sample = sample
-            last_valid_sample_ms = now
+            last_valid_sample_ms = time.ticks_ms()
             if shelly_resume_confirmation_pending:
                 log('Shelly polling confirmed after connection: ticks_ms={}, connected={}, status={}, IP={}'.format(
-                    now, wifi_connected, wifi_driver_status, wifi_ip))
+                    last_valid_sample_ms, wifi_connected,
+                    wifi_driver_status, wifi_ip))
                 shelly_resume_confirmation_pending = False
         shelly1_poll_attempted = True
         shelly1_sample = read_shelly1()
@@ -2133,17 +2331,19 @@ while True:
             shelly1_failure_count += 1
         else:
             last_valid_shelly1 = shelly1_sample
-            last_valid_shelly1_ms = now
+            last_valid_shelly1_ms = time.ticks_ms()
             if shelly1_resume_confirmation_pending:
                 log('Shelly 1 polling confirmed: SW0={}, RLY0={}'.format(
                     'ON' if shelly1_sample['sw0'] else 'OFF',
                     'ON' if shelly1_sample['rly0'] else 'OFF'))
                 shelly1_resume_confirmation_pending = False
 
+    observation_ticks_ms = time.ticks_ms()
     observation = build_observation(
-        observation_sequence, now, clock_synced,
+        observation_sequence, observation_ticks_ms, clock_synced,
         sample if sample is not None else {}, sample is not None,
         shelly_poll_attempted, last_valid_sample_ms, ads_uv,
+        last_valid_adc_ms,
         battery_v, battery_a, battery_level, battery_charging,
         battery_valid, charge_enable, last_battery_poll_ms,
         wifi_connected, network_traffic_allowed, wifi_driver_status,

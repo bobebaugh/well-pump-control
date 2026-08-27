@@ -1,4 +1,4 @@
-# Release: 2026-08-25 M6.8 — call the rules service with its releaseId query.
+# Release: 2026-08-27 M6.20 — expose immutable cloud response and queue status.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -358,6 +358,19 @@ _pending_observation = None
 _durable_lock = _thread.allocate_lock()
 _pending_durable_records = []
 
+_transport_status_lock = _thread.allocate_lock()
+_transport_status = {
+    'telemetryLastAttemptTicksMs': None,
+    'telemetryLastSuccessTicksMs': None,
+    'telemetryLastAttemptOk': None,
+    'rtdbLastAttemptTicksMs': None,
+    'rtdbLastSuccessTicksMs': None,
+    'rtdbLastAttemptOk': None,
+    'durableLastAttemptTicksMs': None,
+    'durableLastSuccessTicksMs': None,
+    'durableLastAttemptOk': None,
+}
+
 _command_lock = _thread.allocate_lock()
 _pending_commands = []
 _last_delivered_command_sequence = 0
@@ -401,6 +414,52 @@ def status_snapshot():
         return _state
     finally:
         _state_lock.release()
+
+
+def _record_transport_result(channel, succeeded, completed_ticks_ms):
+    """Record transport evidence without exposing CPU B working state."""
+    prefix = {
+        'telemetry': 'telemetry',
+        'rtdb': 'rtdb',
+        'durable': 'durable',
+    }.get(channel)
+    if prefix is None or not isinstance(succeeded, bool):
+        return False
+    attempt_key = '{}LastAttemptTicksMs'.format(prefix)
+    success_key = '{}LastSuccessTicksMs'.format(prefix)
+    result_key = '{}LastAttemptOk'.format(prefix)
+    _transport_status_lock.acquire()
+    try:
+        _transport_status[attempt_key] = completed_ticks_ms
+        _transport_status[result_key] = succeeded
+        if succeeded:
+            _transport_status[success_key] = completed_ticks_ms
+        return True
+    finally:
+        _transport_status_lock.release()
+
+
+def transport_status_snapshot():
+    """Return immutable response ages and bounded queue occupancy to CPU A."""
+    _transport_status_lock.acquire()
+    try:
+        snapshot = dict(_transport_status)
+    finally:
+        _transport_status_lock.release()
+
+    _observation_lock.acquire()
+    try:
+        snapshot['observationPending'] = _pending_observation is not None
+    finally:
+        _observation_lock.release()
+
+    _durable_lock.acquire()
+    try:
+        snapshot['durableQueueDepth'] = len(_pending_durable_records)
+        snapshot['durableQueueCapacity'] = DURABLE_QUEUE_DEPTH
+    finally:
+        _durable_lock.release()
+    return snapshot
 
 
 def device_session_id():
@@ -1086,12 +1145,14 @@ def _run_rtdb_step(schedule, latest_observation):
             schedule['nextCoordinationAt'] = time.ticks_add(
                 completed_at, RTDB_COORDINATION_PERIOD_MS)
         _complete_rtdb_action(schedule, action, completed_at, True)
+        _record_transport_result('rtdb', True, completed_at)
         return action
     except Exception as e:
         completed_at = time.ticks_ms()
         status_code = e.status_code if isinstance(e, TransportError) else None
         _complete_rtdb_action(
             schedule, action, completed_at, False, status_code)
+        _record_transport_result('rtdb', False, completed_at)
         delay = time.ticks_diff(schedule['nextOperationAt'], completed_at)
         log('RTDB {} error: {}; retry in {} ms'.format(action, e, delay))
         return action
@@ -1188,6 +1249,8 @@ def _run():
                                else last_published_observation)
                 if observation is not None:
                     ok, reported_monitoring = _publish_observation(observation, reason)
+                    _record_transport_result(
+                        'telemetry', ok, time.ticks_ms())
                     if ok:
                         last_publish = now
                         last_published_observation = observation
@@ -1215,6 +1278,8 @@ def _run():
                 try:
                     duplicate = _publish_durable_record(durable_record)
                     _discard_durable_record(durable_record)
+                    _record_transport_result(
+                        'durable', True, time.ticks_ms())
                     durable_failure_count = 0
                     next_durable_attempt = time.ticks_ms()
                     durable_yield_to_rtdb = True
@@ -1226,6 +1291,8 @@ def _run():
                             durable_record.get('recordType'),
                             durable_record.get('sequence'), duplicate))
                 except Exception as e:
+                    _record_transport_result(
+                        'durable', False, time.ticks_ms())
                     durable_failure_count += 1
                     delay = _durable_retry_delay_ms(durable_failure_count)
                     next_durable_attempt = time.ticks_add(time.ticks_ms(), delay)
@@ -1270,7 +1337,7 @@ def start():
         if _started:
             return False
         _started = True
-        log('CPU B release M6.8: rules releaseId query transport')
+        log('CPU B release M6.20: cloud response and queue status')
         _thread.start_new_thread(_worker, ())
         return True
     finally:

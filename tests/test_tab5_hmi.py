@@ -1,7 +1,8 @@
-"""Host-only pure-logic tests for the bounded M6.18 Tab5 HMI foundation."""
+"""Host-only pure-logic tests for the bounded Tab5 HMI foundation."""
 
 import ast
 import pathlib
+import types
 import unittest
 
 
@@ -15,12 +16,22 @@ FUNCTIONS = {
     "enabled_rule_count",
     "rules_alignment_status",
     "shelly_local_lock_status",
+    "sample_age_ms",
+    "source_age_ms",
+    "compact_age_text",
+    "transport_age_ms",
+    "cloud_indicator_state",
+    "cloud_detail_text",
     "build_now_hmi_model",
     "build_system_hmi_model",
     "navigation_page_at",
+    "navigation_selection_allowed",
 }
 CONSTANTS = {
     "STALE_AFTER_MS",
+    "CLOUD_TELEMETRY_FRESH_MS",
+    "CLOUD_RTDB_FRESH_MS",
+    "CLOUD_FAILED_RED_MS",
     "PUMP_RUNNING_THRESHOLD_W",
     "PRESSURE_SENSOR_COMMISSIONED",
     "SOFTWARE_RELEASE",
@@ -63,7 +74,9 @@ def load_hmi_logic():
                 names.update(assigned_names(target))
             if names & CONSTANTS:
                 nodes.append(node)
-    namespace = {}
+    namespace = {"time": types.SimpleNamespace(
+        ticks_diff=lambda left, right: left - right,
+    )}
     exec(compile(ast.Module(body=nodes, type_ignores=[]),
                  str(PILOT_PATH), "exec"), namespace)
     return namespace
@@ -84,11 +97,27 @@ def observation(power=2920.0, shelly_available=True, shelly_age_ms=250,
         "status": {
             "shelly_available": shelly_available,
             "shelly_age_ms": shelly_age_ms,
+            "shelly_last_valid_ticks_ms": 9750,
             "shelly1_available": shelly1_available,
+            "shelly1_last_valid_ticks_ms": 9800,
             "adc_available": adc_available,
+            "adc_last_valid_ticks_ms": 9900,
             "wifi_connected": True,
             "network_traffic_allowed": True,
         },
+        "observedTicksMs": 10000,
+    }
+
+
+def transport(telemetry_success=9950, rtdb_success=9975, queue_depth=0,
+              telemetry_ok=True, rtdb_ok=True):
+    return {
+        "telemetryLastSuccessTicksMs": telemetry_success,
+        "telemetryLastAttemptOk": telemetry_ok,
+        "rtdbLastSuccessTicksMs": rtdb_success,
+        "rtdbLastAttemptOk": rtdb_ok,
+        "durableQueueDepth": queue_depth,
+        "durableQueueCapacity": 8,
     }
 
 
@@ -136,12 +165,17 @@ class HmiFoundationTests(unittest.TestCase):
         ]}), 1)
 
     def test_now_model_hides_uncommissioned_pressure_and_unknown_lock(self):
-        model = self.logic["build_now_hmi_model"](observation())
+        model = self.logic["build_now_hmi_model"](
+            observation(), transport(), 10000)
         self.assertEqual(model["pump_state"], "RUNNING")
         self.assertEqual(model["pressure_status"], "NOT COMMISSIONED")
         self.assertIsNone(model["pressure_psi"])
         self.assertEqual(model["shelly_lock"], "NOT REPORTED")
         self.assertEqual(model["shelly1"], "SW0 ON  RLY0 OFF")
+        self.assertEqual(model["age_text"], "EM <1s  S1 <1s  ADC <1s")
+        self.assertEqual(model["wifi_indicator"], "green")
+        self.assertEqual(model["cloud_indicator"], "green")
+        self.assertEqual(model["adc_indicator"], "green")
 
     def test_system_model_does_not_claim_unimplemented_authority(self):
         adopted_hash = "aeca11754cae" + ("1" * 52)
@@ -150,6 +184,8 @@ class HmiFoundationTests(unittest.TestCase):
             observation(), adopted,
             {"rules": [{"enabled": False}]},
             dict(adopted),
+            transport(),
+            10000,
         )
         self.assertEqual(model["collection"], "ACTIVE")
         self.assertEqual(model["rule_engine"], "NOT IMPLEMENTED")
@@ -157,6 +193,29 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertEqual(model["pressure"], "NOT COMMISSIONED")
         self.assertEqual(model["rules_status"], "ACTIVE")
         self.assertEqual(model["enabled_rules"], 0)
+        self.assertEqual(model["cloud_state"], "green")
+        self.assertEqual(
+            model["cloud_detail"],
+            "CLOUD OK <1s  RTDB OK <1s  Q0/8",
+        )
+
+    def test_cloud_color_requires_confirmed_cpu_b_responses(self):
+        state = self.logic["cloud_indicator_state"]
+        self.assertEqual(state(transport(), 10000, True, True), "green")
+        self.assertEqual(
+            state(transport(queue_depth=1), 10000, True, True), "yellow")
+        self.assertEqual(state(transport(), 10000, True, False), "yellow")
+        self.assertEqual(state(transport(), 10000, False, False), "red")
+        failed = transport(telemetry_success=None, telemetry_ok=False)
+        self.assertEqual(state(failed, 10000, True, True), "red")
+
+    def test_direct_page_target_recovers_a_missed_release(self):
+        allowed = self.logic["navigation_selection_allowed"]
+        now = self.logic["HMI_PAGE_NOW"]
+        system = self.logic["HMI_PAGE_SYSTEM"]
+        self.assertTrue(allowed(False, now, system))
+        self.assertTrue(allowed(True, now, system))
+        self.assertFalse(allowed(True, system, system))
 
     def test_navigation_exposes_only_now_and_system(self):
         select = self.logic["navigation_page_at"]
@@ -192,6 +251,24 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertIn(
             "read_ads1110_microvolts(service_navigation)", boot_loop)
         self.assertGreaterEqual(boot_loop.count("service_navigation()"), 5)
+
+    def test_now_page_uses_large_bottom_rows_and_dirty_field_cache(self):
+        source = PILOT_PATH.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        def function_source(name):
+            node = next(item for item in tree.body
+                        if isinstance(item, ast.FunctionDef) and
+                        item.name == name)
+            return ast.get_source_segment(source, node)
+
+        now_source = function_source("render_now")
+        self.assertGreaterEqual(now_source.count("M5.Lcd.FONTS.DejaVu40"), 6)
+        self.assertIn("EVENT ENGINE: NOT IMPLEMENTED", now_source)
+        self.assertIn("_draw_communications", now_source)
+        field_source = function_source("_draw_field")
+        self.assertIn("_field_cache.get(cache_key)", field_source)
+        self.assertIn("return False", field_source)
 
 
 if __name__ == "__main__":
