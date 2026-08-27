@@ -53,6 +53,7 @@ CONSTANTS = {
     "EVENT_HISTORY_DEPTH",
     "SHELLY_AVAILABILITY_CONFIRMATION_SAMPLES",
     "ADC_FILTER_SAMPLE_COUNT",
+    "PRESSURE_SENSOR_COMMISSIONED",
     "QUAL_PUMP_START_W",
     "QUAL_PUMP_STOP_W",
     "QUAL_CALIBRATION_START_PSI",
@@ -185,6 +186,8 @@ class ObservationSelectionTests(unittest.TestCase):
             unavailable["values"]["pressure_psi"],
             self.logic["calibrated_psi_from_microvolts"](7000000),
         )
+        self.assertFalse(unavailable["status"]["pressure_sensor_commissioned"])
+        self.assertFalse(unavailable["status"]["pressure_valid"])
         previous = observation()
         self.assertIsNone(self.reason(unavailable, previous, 1000))
 
@@ -265,6 +268,8 @@ class ObservationSelectionTests(unittest.TestCase):
             (expected_count - self.logic["PRESSURE_CALIBRATION_COUNT_INTERCEPT"]) /
             self.logic["PRESSURE_CALIBRATION_COUNTS_PER_PSI"],
         )
+        self.assertFalse(built["status"]["pressure_sensor_commissioned"])
+        self.assertFalse(built["status"]["pressure_valid"])
 
     def test_transient_shelly_poll_failures_do_not_select_durable_records(self):
         confirmation = self.logic["new_shelly_availability_confirmation"](3)

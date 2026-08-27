@@ -1,4 +1,4 @@
-# Release: 2026-08-26 M6.17 — apply field pressure calibration and 10 s flow evidence.
+# Release: 2026-08-27 M6.18 — add the observational NOW/SYSTEM HMI foundation.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -29,6 +29,13 @@ SHELLY_1_STATUS_URL = 'http://192.168.50.201/rpc/Shelly.GetStatus'
 SAMPLE_PERIOD_MS = 1000
 SHELLY_TIMEOUT_S = 1  # requests has whole-second granularity; C++ used 750ms
 STALE_AFTER_MS = 3000
+PUMP_RUNNING_THRESHOLD_W = 1000.0
+# The transducer remains at the well while the Tab5 is being bench-developed.
+# ADS1110 communication alone must not turn a disconnected input into apparent
+# pressure. Field commissioning will replace this bounded release constant with
+# the reviewed parameter lifecycle.
+PRESSURE_SENSOR_COMMISSIONED = False
+SOFTWARE_RELEASE = 'M6.18'
 
 # M5 selection parameters live on CPU A. M6 supplies a validated rules
 # reference while CPU B remains a byte-preserving transport only.
@@ -446,8 +453,9 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
             'total': shelly.get('total'),
             'total_returned': shelly.get('total_returned'),
             'adc_microvolts': ads_microvolts,
-            # End-to-end calibrated estimate; retain the ADC source value as
-            # independent evidence rather than replacing it.
+            # Preserve the M6.17 end-to-end calculation as separate evidence.
+            # pressure_valid below prevents an uncommissioned input from being
+            # presented as an operational measurement.
             'pressure_psi': calibrated_psi_from_microvolts(ads_microvolts),
             'battery_voltage': battery_voltage,
             'battery_current': battery_current,
@@ -465,6 +473,9 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
                 observed_ticks_ms, shelly_last_valid_ticks_ms)
                 if shelly_last_valid_ticks_ms is not None else None),
             'adc_available': ads_microvolts is not None,
+            'pressure_sensor_commissioned': PRESSURE_SENSOR_COMMISSIONED,
+            'pressure_valid': (PRESSURE_SENSOR_COMMISSIONED and
+                               ads_microvolts is not None),
             'battery_available': battery_is_valid,
             'battery_sample_ticks_ms': battery_sample_ticks_ms,
             'shelly_failure_count': shelly_failures,
@@ -960,6 +971,151 @@ def adopt_rules_release(candidate, active_reference,
     return checked, 'adopted'
 
 
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def operational_pump_state(power_w, shelly_available, shelly_age_ms):
+    """Return an observational pump state derived only from fresh EM power."""
+    if not shelly_available:
+        return 'UNAVAILABLE'
+    if (_is_number(shelly_age_ms) and
+            shelly_age_ms > STALE_AFTER_MS):
+        return 'UNAVAILABLE'
+    if not _is_number(power_w):
+        return 'UNAVAILABLE'
+    return 'RUNNING' if power_w >= PUMP_RUNNING_THRESHOLD_W else 'STOPPED'
+
+
+def pressure_hmi_value(ads_microvolts, commissioned=PRESSURE_SENSOR_COMMISSIONED):
+    """Gate displayed PSI on explicit sensor commissioning, not ADC presence."""
+    if not commissioned:
+        return None, 'NOT COMMISSIONED'
+    if not _is_number(ads_microvolts):
+        return None, 'UNAVAILABLE'
+    pressure_psi = calibrated_psi_from_microvolts(ads_microvolts)
+    if (pressure_psi is None or pressure_psi < 0 or
+            pressure_psi > PRESSURE_SENSOR_SPAN_PSI):
+        return None, 'UNAVAILABLE'
+    return pressure_psi, 'VALID'
+
+
+def enabled_rule_count(rules_package):
+    """Count only explicit boolean-enabled rows in the adopted package."""
+    if not isinstance(rules_package, dict):
+        return 0
+    rules = rules_package.get('rules')
+    if not isinstance(rules, list):
+        return 0
+    return sum(1 for rule in rules
+               if isinstance(rule, dict) and rule.get('enabled') is True)
+
+
+def rules_alignment_status(adopted_reference, published_reference):
+    """Never report ACTIVE without matching version and complete SHA-256 hash."""
+    if not isinstance(adopted_reference, dict):
+        return 'ADOPTED UNKNOWN'
+    if not isinstance(published_reference, dict):
+        return 'PUBLISHED UNKNOWN'
+    adopted_hash = adopted_reference.get('contentHash')
+    published_hash = published_reference.get('contentHash')
+    if (adopted_reference.get('version') == published_reference.get('version') and
+            isinstance(adopted_hash, str) and len(adopted_hash) == 64 and
+            adopted_hash == published_hash):
+        return 'ACTIVE'
+    return 'MISMATCH'
+
+
+def shelly_local_lock_status(shelly1_available, reported_lock=None):
+    """Reserve the later Shelly flag contract without inventing lock state."""
+    if not shelly1_available:
+        return 'UNAVAILABLE'
+    if reported_lock in ('NORMAL', 'LOCKED'):
+        return reported_lock
+    return 'NOT REPORTED'
+
+
+def build_now_hmi_model(observation):
+    """Create the small current-state view without retaining mutable input."""
+    if not isinstance(observation, dict):
+        observation = {}
+    values = observation.get('values')
+    status = observation.get('status')
+    values = values if isinstance(values, dict) else {}
+    status = status if isinstance(status, dict) else {}
+    pressure_psi, pressure_status = pressure_hmi_value(
+        values.get('adc_microvolts'))
+    shelly1_available = status.get('shelly1_available') is True
+    sw0 = values.get('shelly1_sw0')
+    rly0 = values.get('shelly1_rly0')
+    if shelly1_available and isinstance(sw0, bool) and isinstance(rly0, bool):
+        shelly1_text = 'SW0 {}  RLY0 {}'.format(
+            'ON' if sw0 else 'OFF', 'ON' if rly0 else 'OFF')
+    else:
+        shelly1_text = 'UNAVAILABLE'
+    return {
+        'pump_state': operational_pump_state(
+            values.get('power'), status.get('shelly_available') is True,
+            status.get('shelly_age_ms')),
+        'power_w': values.get('power') if _is_number(values.get('power')) else None,
+        'voltage_v': values.get('voltage') if _is_number(values.get('voltage')) else None,
+        'pressure_psi': pressure_psi,
+        'pressure_status': pressure_status,
+        'shelly1': shelly1_text,
+        'shelly_lock': shelly_local_lock_status(shelly1_available),
+        'shelly_age_ms': (status.get('shelly_age_ms')
+                          if _is_number(status.get('shelly_age_ms')) else None),
+        'wifi_connected': status.get('wifi_connected') is True,
+        'network_ready': status.get('network_traffic_allowed') is True,
+    }
+
+
+def build_system_hmi_model(observation, adopted_reference, rules_package,
+                           published_reference=None):
+    """Create system status; override and rule processing remain unavailable."""
+    if not isinstance(observation, dict):
+        observation = {}
+    values = observation.get('values')
+    status = observation.get('status')
+    values = values if isinstance(values, dict) else {}
+    status = status if isinstance(status, dict) else {}
+    adopted_hash = (adopted_reference.get('contentHash')
+                    if isinstance(adopted_reference, dict) else None)
+    published_hash = (published_reference.get('contentHash')
+                      if isinstance(published_reference, dict) else None)
+    return {
+        'release': SOFTWARE_RELEASE,
+        'collection': 'ACTIVE',
+        'rule_engine': 'NOT IMPLEMENTED',
+        'system_override': 'NOT AVAILABLE',
+        'wifi': 'UP' if status.get('wifi_connected') is True else 'DOWN',
+        'network': ('READY' if status.get('network_traffic_allowed') is True
+                    else 'QUIET'),
+        'shelly_em': ('AVAILABLE' if status.get('shelly_available') is True
+                      else 'UNAVAILABLE'),
+        'shelly1': ('AVAILABLE' if status.get('shelly1_available') is True
+                    else 'UNAVAILABLE'),
+        'adc': ('AVAILABLE' if status.get('adc_available') is True
+                else 'UNAVAILABLE'),
+        'pressure': ('COMMISSIONED' if PRESSURE_SENSOR_COMMISSIONED
+                     else 'NOT COMMISSIONED'),
+        'battery_percent': (values.get('battery_percent')
+                            if _is_number(values.get('battery_percent')) else None),
+        'battery_charging': values.get('battery_charging') is True,
+        'adopted_version': (adopted_reference.get('version')
+                            if isinstance(adopted_reference, dict) else None),
+        'adopted_hash_prefix': (adopted_hash[:12]
+                                if isinstance(adopted_hash, str) else None),
+        'published_version': (published_reference.get('version')
+                              if isinstance(published_reference, dict) else None),
+        'published_hash_prefix': (published_hash[:12]
+                                  if isinstance(published_hash, str) else None),
+        'rules_status': rules_alignment_status(
+            adopted_reference, published_reference),
+        'enabled_rules': enabled_rule_count(rules_package),
+    }
+
+
 # --- display --- (main.py already ran M5.begin() before starting CPU A)
 M5.Lcd.setRotation(1)
 M5.Lcd.fillScreen(BG)
@@ -971,65 +1127,151 @@ def draw_label(text, x, y, font, color, bg=BG):
     M5.Lcd.drawString(text, x, y)
 
 
-TOUCH_BTN_X, TOUCH_BTN_Y, TOUCH_BTN_W, TOUCH_BTN_H = 250, 440, 780, 180
-BATTERY_LABEL_X, BATTERY_LABEL_Y = 780, 100  # clear of the DejaVu40 title above it
-CHARGE_SWITCH_LABEL_Y = 145
-
-# Static elements: drawn once, never redrawn - only the value fields below
-# them repaint each cycle, so there's no full-screen flash at poll rate.
-draw_label('TAB5 PLATFORM VALIDATION', 200, 30, M5.Lcd.FONTS.DejaVu40, WHITE)
-draw_label('SHELLY STATUS', 60, 120, M5.Lcd.FONTS.Montserrat18, CYAN)
-draw_label('ACTIVE POWER', 60, 220, M5.Lcd.FONTS.Montserrat18, CYAN)
-draw_label('LINE VOLTAGE', 460, 220, M5.Lcd.FONTS.Montserrat18, CYAN)
-draw_label('PORT A ADS1110', 60, 320, M5.Lcd.FONTS.Montserrat18, CYAN)
-
-_last_rendered_touch_count = None
+HMI_PAGE_NOW = 'now'
+HMI_PAGE_SYSTEM = 'system'
+NAV_Y, NAV_H = 630, 70
+NAV_NOW_X, NAV_SYSTEM_X, NAV_W = 35, 655, 590
+_last_rendered_page = None
 
 
-def render(status_text, power_w, voltage_v, ads_uv, touch_count,
-           battery_v, battery_level, battery_charging, battery_valid, charge_enable):
-    global _last_rendered_touch_count
-    # status gets its own full-width row - it's the longest string ("WAITING FOR DATA")
-    # and was overlapping the power column when shared a row with it.
-    draw_label(status_text + '          ', 60, 155, M5.Lcd.FONTS.DejaVu40, WHITE)
-    draw_label('{} W  '.format(power_w) if power_w is not None else '-- W  ', 60, 255, M5.Lcd.FONTS.DejaVu40, WHITE)
-    draw_label('{:.1f} V  '.format(voltage_v) if voltage_v is not None else '--.- V  ', 460, 255, M5.Lcd.FONTS.DejaVu40, WHITE)
+def navigation_page_at(x, y):
+    """Return the selected implemented page, or None outside navigation."""
+    if not (_is_number(x) and _is_number(y) and NAV_Y <= y <= NAV_Y + NAV_H):
+        return None
+    if NAV_NOW_X <= x <= NAV_NOW_X + NAV_W:
+        return HMI_PAGE_NOW
+    if NAV_SYSTEM_X <= x <= NAV_SYSTEM_X + NAV_W:
+        return HMI_PAGE_SYSTEM
+    return None
 
-    if battery_valid:
-        if battery_charging:
-            state_text, batt_color = 'CHARGING', GREEN
-        elif charge_enable:
-            state_text, batt_color = 'HOLDING', CYAN
-        else:
-            state_text, batt_color = 'CHG OFF', WHITE
-        batt_text = 'BAT {:.2f}V {}% {}   '.format(battery_v, battery_level, state_text)
+
+def _draw_field(text, x, y, width, height, font, color=WHITE):
+    M5.Lcd.fillRect(x, y, width, height, BG)
+    draw_label(text, x, y, font, color)
+
+
+def _draw_navigation(page):
+    now_color = GREEN if page == HMI_PAGE_NOW else BLUE
+    system_color = GREEN if page == HMI_PAGE_SYSTEM else BLUE
+    M5.Lcd.fillRoundRect(NAV_NOW_X, NAV_Y, NAV_W, NAV_H, 14, now_color)
+    M5.Lcd.fillRoundRect(NAV_SYSTEM_X, NAV_Y, NAV_W, NAV_H, 14, system_color)
+    draw_label('NOW', NAV_NOW_X + 245, NAV_Y + 20,
+               M5.Lcd.FONTS.Montserrat24, WHITE, bg=now_color)
+    draw_label('SYSTEM', NAV_SYSTEM_X + 220, NAV_Y + 20,
+               M5.Lcd.FONTS.Montserrat24, WHITE, bg=system_color)
+
+
+def _draw_page_frame(page):
+    M5.Lcd.fillScreen(BG)
+    title = 'WELL PUMP - NOW' if page == HMI_PAGE_NOW else 'WELL PUMP - SYSTEM'
+    draw_label(title, 40, 22, M5.Lcd.FONTS.DejaVu40, WHITE)
+    draw_label('{}  OBSERVE ONLY'.format(SOFTWARE_RELEASE), 965, 36,
+               M5.Lcd.FONTS.Montserrat18, CYAN)
+    _draw_navigation(page)
+
+
+def render_now(model):
+    pump_color = (GREEN if model['pump_state'] == 'RUNNING'
+                  else WHITE if model['pump_state'] == 'STOPPED' else YELLOW)
+    draw_label('PUMP', 45, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
+    _draw_field(model['pump_state'], 45, 128, 560, 55,
+                M5.Lcd.FONTS.DejaVu40, pump_color)
+
+    draw_label('PRESSURE', 665, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
+    pressure_text = ('{:.2f} PSI'.format(model['pressure_psi'])
+                     if model['pressure_psi'] is not None
+                     else model['pressure_status'])
+    pressure_color = WHITE if model['pressure_psi'] is not None else YELLOW
+    _draw_field(pressure_text, 665, 128, 570, 55,
+                M5.Lcd.FONTS.DejaVu40, pressure_color)
+
+    draw_label('POWER', 45, 215, M5.Lcd.FONTS.Montserrat18, CYAN)
+    power_text = ('{:.0f} W'.format(model['power_w'])
+                  if model['power_w'] is not None else 'UNAVAILABLE')
+    _draw_field(power_text, 45, 248, 560, 55, M5.Lcd.FONTS.DejaVu40)
+    draw_label('VOLTAGE', 665, 215, M5.Lcd.FONTS.Montserrat18, CYAN)
+    voltage_text = ('{:.1f} V'.format(model['voltage_v'])
+                    if model['voltage_v'] is not None else 'UNAVAILABLE')
+    _draw_field(voltage_text, 665, 248, 570, 55, M5.Lcd.FONTS.DejaVu40)
+
+    draw_label('SHELLY 1', 45, 340, M5.Lcd.FONTS.Montserrat18, CYAN)
+    _draw_field(model['shelly1'], 45, 373, 560, 42,
+                M5.Lcd.FONTS.Montserrat24)
+    draw_label('SHELLY LOCAL LOCK', 665, 340, M5.Lcd.FONTS.Montserrat18, CYAN)
+    lock_color = RED if model['shelly_lock'] == 'LOCKED' else YELLOW
+    _draw_field(model['shelly_lock'], 665, 373, 570, 42,
+                M5.Lcd.FONTS.Montserrat24, lock_color)
+
+    age_text = ('{} ms'.format(int(model['shelly_age_ms']))
+                if model['shelly_age_ms'] is not None else 'UNAVAILABLE')
+    draw_label('ELECTRICAL DATA AGE', 45, 465, M5.Lcd.FONTS.Montserrat18, CYAN)
+    _draw_field(age_text, 45, 498, 560, 42, M5.Lcd.FONTS.Montserrat24)
+    draw_label('COMMUNICATIONS', 665, 465, M5.Lcd.FONTS.Montserrat18, CYAN)
+    comms = 'WIFI {}  NETWORK {}'.format(
+        'UP' if model['wifi_connected'] else 'DOWN',
+        'READY' if model['network_ready'] else 'QUIET')
+    _draw_field(comms, 665, 498, 570, 42, M5.Lcd.FONTS.Montserrat24)
+    _draw_field('NO EVENT ENGINE - NO CONTROL AUTHORITY', 45, 575, 1190, 35,
+                M5.Lcd.FONTS.Montserrat18, CYAN)
+
+
+def render_system(model):
+    draw_label('RUNTIME', 45, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
+    _draw_field('COLLECTION: {}'.format(model['collection']), 45, 128, 570, 36,
+                M5.Lcd.FONTS.Montserrat24, GREEN)
+    _draw_field('RULE ENGINE: {}'.format(model['rule_engine']), 45, 173, 570, 36,
+                M5.Lcd.FONTS.Montserrat24, YELLOW)
+    _draw_field('SYSTEM OVERRIDE: {}'.format(model['system_override']),
+                45, 218, 570, 36, M5.Lcd.FONTS.Montserrat24, YELLOW)
+
+    draw_label('DEVICES', 665, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
+    device_text = 'WIFI {}  NET {}\nEM {}  S1 {}\nADC {}  PSI {}'.format(
+        model['wifi'], model['network'], model['shelly_em'], model['shelly1'],
+        model['adc'], model['pressure'])
+    device_lines = device_text.split('\n')
+    for index, line in enumerate(device_lines):
+        _draw_field(line, 665, 128 + (index * 45), 570, 36,
+                    M5.Lcd.FONTS.Montserrat24)
+
+    draw_label('RULES PACKAGE', 45, 315, M5.Lcd.FONTS.Montserrat18, CYAN)
+    adopted = 'ADOPTED v{} {}'.format(
+        model['adopted_version'] if model['adopted_version'] is not None else '?',
+        model['adopted_hash_prefix'] or 'UNKNOWN')
+    published = 'PUBLISHED v{} {}'.format(
+        model['published_version'] if model['published_version'] is not None else '?',
+        model['published_hash_prefix'] or 'UNKNOWN')
+    _draw_field(adopted, 45, 348, 570, 36, M5.Lcd.FONTS.Montserrat24)
+    _draw_field(published, 665, 348, 570, 36, M5.Lcd.FONTS.Montserrat24)
+    rules_color = GREEN if model['rules_status'] == 'ACTIVE' else YELLOW
+    _draw_field('STATUS: {}  |  ENABLED: {}'.format(
+        model['rules_status'], model['enabled_rules']),
+        45, 400, 1190, 40, M5.Lcd.FONTS.Montserrat24, rules_color)
+
+    draw_label('TAB5', 45, 475, M5.Lcd.FONTS.Montserrat18, CYAN)
+    battery = ('BATTERY {}% {}'.format(
+        int(model['battery_percent']),
+        'CHARGING' if model['battery_charging'] else 'NOT CHARGING')
+        if model['battery_percent'] is not None else 'BATTERY UNAVAILABLE')
+    _draw_field('{}  |  RELEASE {}'.format(battery, model['release']),
+                45, 508, 1190, 42, M5.Lcd.FONTS.Montserrat24)
+    _draw_field('PARAMETERS AND HISTORY ARE MANAGED ON THE WEB APP',
+                45, 575, 1190, 35, M5.Lcd.FONTS.Montserrat18, CYAN)
+
+
+def render_hmi(page, observation, adopted_reference, rules_package,
+               published_reference=None):
+    global _last_rendered_page
+    if page not in (HMI_PAGE_NOW, HMI_PAGE_SYSTEM):
+        page = HMI_PAGE_NOW
+    if page != _last_rendered_page:
+        _draw_page_frame(page)
+        _last_rendered_page = page
+    if page == HMI_PAGE_SYSTEM:
+        render_system(build_system_hmi_model(
+            observation, adopted_reference, rules_package,
+            published_reference))
     else:
-        batt_text, batt_color = 'BAT UNAVAILABLE   ', YELLOW
-    draw_label(batt_text, BATTERY_LABEL_X, BATTERY_LABEL_Y, M5.Lcd.FONTS.Montserrat24, batt_color)
-
-    # Separate from the line above on purpose: that one shows live current flow
-    # (isCharging()), this one shows the policy's own switch position
-    # (setBatteryCharge() target) - they can differ, e.g. switch ON but showing HOLDING
-    # because the pack is full and no current is actually moving.
-    switch_text = 'CHG SWITCH: {}   '.format('ON' if charge_enable else 'OFF')
-    switch_color = GREEN if charge_enable else RED
-    draw_label(switch_text, BATTERY_LABEL_X, CHARGE_SWITCH_LABEL_Y, M5.Lcd.FONTS.Montserrat24, switch_color)
-
-    if ads_uv is not None:
-        draw_label('{:.6f} V   '.format(ads_uv / 1000000), 60, 355, M5.Lcd.FONTS.DejaVu40, WHITE)
-    else:
-        draw_label('UNAVAILABLE   ', 60, 355, M5.Lcd.FONTS.DejaVu40, RED)
-
-    if touch_count != _last_rendered_touch_count:
-        btn_color = GREEN if (touch_count & 1) else BLUE
-        M5.Lcd.fillRoundRect(TOUCH_BTN_X, TOUCH_BTN_Y, TOUCH_BTN_W, TOUCH_BTN_H, 20, btn_color)
-        draw_label('TOUCH TEST {}'.format(touch_count), TOUCH_BTN_X + 260, TOUCH_BTN_Y + 65,
-                    M5.Lcd.FONTS.DejaVu40, WHITE, bg=btn_color)
-        _last_rendered_touch_count = touch_count
-
-    draw_label('wifi: {}  |  cloud: {}   '.format(
-        'up' if wifi_connected else 'DOWN',
-        'allowed' if network_traffic_allowed else 'quiet period'), 60, 640, M5.Lcd.FONTS.Montserrat24, CYAN)
+        render_now(build_now_hmi_model(observation))
 
 
 # --- touch: M5.Touch (M5Unified's own API) ---
@@ -1073,25 +1315,26 @@ def read_touch_point():
 _touch_was_down = False
 
 
-def check_touch_button(was_pressed):
-    """was_pressed tracks 'finger was inside the button last poll'.
+def check_navigation(was_pressed, current_page):
+    """Return a page change only on a fresh touch inside navigation.
 
-    Logging is keyed on a separate finger-down edge: was_pressed only goes
-    True inside the button, so keying the log off it floods one line per poll
-    for the whole time a finger rests anywhere outside it."""
+    was_pressed tracks whether the finger was inside either navigation button
+    on the previous poll. Logging remains keyed on the separate finger edge."""
     global _touch_was_down
     p = read_touch_point()
     if p is None:
         _touch_was_down = False
-        return False, False
+        return current_page, False
     tx, ty, x, y = p
-    inside = (TOUCH_BTN_X <= x <= TOUCH_BTN_X + TOUCH_BTN_W and
-              TOUCH_BTN_Y <= y <= TOUCH_BTN_Y + TOUCH_BTN_H)
+    selected_page = navigation_page_at(x, y)
+    inside = selected_page is not None
     if not _touch_was_down:
-        log('touch screen=({},{}) inside={}'.format(x, y, inside))
+        log('touch screen=({},{}) page={}'.format(
+            x, y, selected_page if selected_page is not None else 'none'))
     _touch_was_down = True
-    tapped = inside and not was_pressed
-    return tapped, inside
+    if inside and not was_pressed:
+        return selected_page, True
+    return current_page, inside
 
 
 # --- manually selected pressure qualification utility ---
@@ -1691,7 +1934,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.17: empirical pressure calibration and 10 s flow evidence')
+log('CPU A release M6.18: observational NOW/SYSTEM HMI foundation')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:
@@ -1717,8 +1960,9 @@ sample_failure_count = 0
 last_valid_shelly1 = None
 last_valid_shelly1_ms = None
 shelly1_failure_count = 0
-touch_count = 0
-touch_pressed = False
+hmi_page = HMI_PAGE_NOW
+navigation_pressed = False
+last_observation = None
 battery_v = None
 battery_a = None
 battery_level = None
@@ -1733,8 +1977,11 @@ shelly1_availability_confirmation = new_shelly_availability_confirmation()
 last_durable_observation = None
 last_durable_observation_ms = None
 next_rules_request_ms = 0
+published_rules_reference = None
 
-log('Platform validation harness initialized')
+log('Operational HMI foundation initialized; no event or control authority')
+render_hmi(hmi_page, {}, active_rules_reference, active_rules,
+           published_rules_reference)
 
 while True:
     now = time.ticks_ms()
@@ -1745,10 +1992,14 @@ while True:
     # constant bus rebuilding. Both are gone now: Port A is on SoftI2C (immune,
     # bit-banged GPIO) and touch is M5's own. Nothing is left for this to break.
     M5.update()
-    tapped, touch_pressed = check_touch_button(touch_pressed)
-    if tapped:
-        touch_count += 1
-        log('Touch test accepted #{}'.format(touch_count))
+    previous_page = hmi_page
+    hmi_page, navigation_pressed = check_navigation(
+        navigation_pressed, hmi_page)
+    if hmi_page != previous_page:
+        log('HMI page selected: {}'.format(hmi_page))
+        if last_observation is not None:
+            render_hmi(hmi_page, last_observation, active_rules_reference,
+                       active_rules, published_rules_reference)
 
     was_connected = wifi_connected
     (wifi_connected, network_traffic_allowed, clock_synced,
@@ -1767,6 +2018,11 @@ while True:
             log('Rules pointer ignored: {} [M6.7 keys={}]'.format(
                 rules_metadata_rejection_reason(rules_pointer),
                 rules_metadata_key_summary(rules_pointer)))
+        else:
+            published_rules_reference = {
+                'version': metadata['rulesVersion'],
+                'contentHash': metadata['contentHash'],
+            }
         if (metadata is not None and
                 metadata.get('contentHash') != active_rules_reference.get('contentHash') and
                 time.ticks_diff(now, next_rules_request_ms) >= 0):
@@ -1883,6 +2139,7 @@ while True:
         shelly1_sample, shelly1_sample is not None,
         shelly1_poll_attempted, last_valid_shelly1_ms,
         shelly1_failure_count)
+    last_observation = observation
     append_event_history(event_history, observation)
     shelly_availability_pending = shelly_availability_change_pending(
         shelly_availability_confirmation,
@@ -1928,18 +2185,8 @@ while True:
                 log('Durable observation selected: sequence={}, reason={}'.format(
                     observation_sequence, durable_reason))
 
-    stale = last_valid_sample_ms is not None and time.ticks_diff(now, last_valid_sample_ms) > STALE_AFTER_MS
-    if last_valid_sample is None:
-        status_text = 'WAITING FOR DATA'
-    elif stale:
-        status_text = 'SHELLY STALE'
-    else:
-        status_text = 'SHELLY ACTIVE'
-
-    power_w = round(last_valid_sample['power']) if last_valid_sample else None
-    voltage_v = last_valid_sample['voltage'] if last_valid_sample else None
-    render(status_text, power_w, voltage_v, ads_uv, touch_count,
-           battery_v, battery_level, battery_charging, battery_valid, charge_enable)
+    render_hmi(hmi_page, observation, active_rules_reference, active_rules,
+               published_rules_reference)
 
     # Sleep out the rest of the sample period, but poll touch every 50 ms so
     # taps are not missed. Sensor cadence stays at SAMPLE_PERIOD_MS.
@@ -1950,10 +2197,11 @@ while True:
         # stale snapshot, which is what made taps feel unresponsive. Safe to
         # call at this rate now: no machine.I2C handle exists for it to break.
         M5.update()
-        tapped, touch_pressed = check_touch_button(touch_pressed)
-        if tapped:
-            touch_count += 1
-            log('Touch test accepted #{}'.format(touch_count))
-            render(status_text, power_w, voltage_v, ads_uv, touch_count,
-                   battery_v, battery_level, battery_charging, battery_valid, charge_enable)
+        previous_page = hmi_page
+        hmi_page, navigation_pressed = check_navigation(
+            navigation_pressed, hmi_page)
+        if hmi_page != previous_page:
+            log('HMI page selected: {}'.format(hmi_page))
+            render_hmi(hmi_page, observation, active_rules_reference,
+                       active_rules, published_rules_reference)
         time.sleep_ms(50)
