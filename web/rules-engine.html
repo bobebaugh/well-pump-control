@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#09111f">
+  <title>Rules Engine — Well Pump Pilot</title>
+  <link rel="stylesheet" href="/styles.css?v=20260827-1">
+  <script src="/rules-engine.js?v=20260827-1" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">PRIVATE WELL · PARAMETER DESIGN PILOT</p>
+      <h1>Rules Engine</h1>
+    </div>
+    <div class="topbar-actions">
+      <a class="nav-link" href="/rules.html">Rules editor</a>
+      <a class="nav-link" href="/">Monitoring</a>
+      <div class="pilot-badge"><span></span>Firestore pilot</div>
+    </div>
+  </header>
+
+  <main class="engine-main">
+    <section class="editor-notice">
+      <strong>Executable design pilot.</strong>
+      <span>Builds and versions a validated MicroPython-friendly package. RTDB delivery and Tab5 adoption are disabled.</span>
+    </section>
+
+    <section class="panel engine-toolbar">
+      <div>
+        <p class="kicker">PUBLISHED PARAMETER PACKAGE</p>
+        <h2 id="engine-release">Not loaded</h2>
+        <small id="engine-hash">Load the Firestore draft to begin.</small>
+      </div>
+      <div class="engine-validation-summary">
+        <p class="kicker">DRAFT VALIDATION</p>
+        <h2 id="validation-state">Not checked</h2>
+        <small id="runtime-size">No runtime package generated.</small>
+      </div>
+      <div class="toolbar-actions">
+        <button class="secondary-button" id="engine-load" type="button">Load / seed defaults</button>
+        <button class="secondary-button" id="engine-save" type="button" disabled>Save draft</button>
+        <button class="secondary-button" id="engine-validate" type="button" disabled>Validate package</button>
+        <button class="secondary-button" id="engine-download" type="button" disabled>Download runtime JSON</button>
+        <button class="primary-button" id="engine-publish" type="button" disabled>Publish next version</button>
+      </div>
+    </section>
+
+    <section id="engine-status" class="editor-status" aria-live="polite">No draft loaded.</section>
+
+    <nav id="engine-tabs" class="engine-tiles" aria-label="Rules Engine sections" hidden>
+      <button class="engine-tile active" type="button" data-section="devices">
+        <span class="tile-step">1</span><strong>Devices</strong><small id="devices-count">0 configured</small>
+      </button>
+      <button class="engine-tile" type="button" data-section="calculatedFields">
+        <span class="tile-step">2</span><strong>Calculated Fields</strong><small id="calculations-count">0 configured</small>
+      </button>
+      <button class="engine-tile" type="button" data-section="events">
+        <span class="tile-step">3</span><strong>Events</strong><small id="events-count">0 configured</small>
+      </button>
+    </nav>
+
+    <section id="engine-workspace" class="engine-workspace" hidden>
+      <aside class="panel engine-browser">
+        <div class="engine-browser-heading">
+          <div><p class="kicker" id="browser-kicker">DEVICES</p><h2 id="browser-title">Configured devices</h2></div>
+          <button class="secondary-button compact-button" id="add-item" type="button">Add</button>
+        </div>
+        <div id="engine-list" class="engine-list" role="listbox"></div>
+      </aside>
+      <section class="panel engine-editor" id="engine-editor"></section>
+    </section>
+
+    <section id="validation-panel" class="panel validation-panel" hidden>
+      <div class="panel-heading"><div><p class="kicker">PACKAGE REVIEW</p><h2>Validation findings</h2></div></div>
+      <div id="validation-findings"></div>
+    </section>
+  </main>
+</body>
+</html>
