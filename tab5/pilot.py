@@ -1,4 +1,4 @@
-# Release: 2026-08-27 M6.18 — add the observational NOW/SYSTEM HMI foundation.
+# Release: 2026-08-27 M6.19 — service touch throughout the acquisition cycle.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -35,7 +35,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.18'
+SOFTWARE_RELEASE = 'M6.19'
 
 # M5 selection parameters live on CPU A. M6 supplies a validated rules
 # reference while CPU B remains a byte-preserving transport only.
@@ -312,9 +312,9 @@ def read_ads1110_fresh_raw_count(service=None):
     return None
 
 
-def _read_ads1110_microvolts_once():
+def _read_ads1110_microvolts_once(service=None):
     """Return one fresh ADS1110 terminal-voltage conversion in microvolts."""
-    raw = read_ads1110_fresh_raw_count()
+    raw = read_ads1110_fresh_raw_count(service)
     return None if raw is None else int(raw * ADC_UV_PER_COUNT)
 
 
@@ -332,11 +332,11 @@ def trimmed_mean_microvolts(samples):
     return sum(ordered[1:-1]) // (ADC_FILTER_SAMPLE_COUNT - 2)
 
 
-def read_ads1110_microvolts():
+def read_ads1110_microvolts(service=None):
     """Use five fresh 15-SPS conversions to reject one high and one low outlier."""
     samples = []
     for index in range(ADC_FILTER_SAMPLE_COUNT):
-        value = _read_ads1110_microvolts_once()
+        value = _read_ads1110_microvolts_once(service)
         if value is None:
             return None
         samples.append(value)
@@ -1337,6 +1337,19 @@ def check_navigation(was_pressed, current_page):
     return current_page, inside
 
 
+def service_navigation():
+    """Service touch independently of how much of the 1 s cycle remains."""
+    global hmi_page, navigation_pressed
+    M5.update()
+    previous_page = hmi_page
+    hmi_page, navigation_pressed = check_navigation(
+        navigation_pressed, hmi_page)
+    if hmi_page != previous_page:
+        log('HMI page selected: {}'.format(hmi_page))
+        return True
+    return False
+
+
 # --- manually selected pressure qualification utility ---
 QUAL_CAPTURE_SAMPLES = 5
 QUAL_PUMP_START_W = 1000.0
@@ -1934,7 +1947,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.18: observational NOW/SYSTEM HMI foundation')
+log('CPU A release M6.19: touch serviced throughout acquisition cycle')
 
 _installed_rules, _rules_error = load_packaged_rules()
 if _installed_rules is None:
@@ -1991,15 +2004,7 @@ while True:
     # machine.I2C handles for the ADC and the ST7123 - that is what caused the
     # constant bus rebuilding. Both are gone now: Port A is on SoftI2C (immune,
     # bit-banged GPIO) and touch is M5's own. Nothing is left for this to break.
-    M5.update()
-    previous_page = hmi_page
-    hmi_page, navigation_pressed = check_navigation(
-        navigation_pressed, hmi_page)
-    if hmi_page != previous_page:
-        log('HMI page selected: {}'.format(hmi_page))
-        if last_observation is not None:
-            render_hmi(hmi_page, last_observation, active_rules_reference,
-                       active_rules, published_rules_reference)
+    service_navigation()
 
     was_connected = wifi_connected
     (wifi_connected, network_traffic_allowed, clock_synced,
@@ -2076,7 +2081,10 @@ while True:
                         log('Rules rejection audit queue unavailable: sequence={}'.format(
                             observation_sequence))
 
-    ads_uv = read_ads1110_microvolts()
+    # The five fresh 15-SPS conversions occupy a material portion of every
+    # cycle. Service touch inside their DRDY waits instead of limiting touch
+    # detection to whatever sleep time happens to remain afterward.
+    ads_uv = read_ads1110_microvolts(service_navigation)
 
     if time.ticks_diff(now, last_battery_poll_ms) >= BATTERY_POLL_PERIOD_MS:
         last_battery_poll_ms = now
@@ -2098,6 +2106,7 @@ while True:
         else:
             log('battery-monitor YELLOW: M5.Power read unavailable; charge_enable left as-is ({})'.format(
                 charge_enable))
+    service_navigation()
 
     sample = None
     shelly1_sample = None
@@ -2105,7 +2114,9 @@ while True:
     shelly1_poll_attempted = False
     if wifi_connected and network_traffic_allowed:
         shelly_poll_attempted = True
+        service_navigation()
         sample = read_shelly()
+        service_navigation()
         if sample is None:
             sample_failure_count += 1
         else:
@@ -2117,6 +2128,7 @@ while True:
                 shelly_resume_confirmation_pending = False
         shelly1_poll_attempted = True
         shelly1_sample = read_shelly1()
+        service_navigation()
         if shelly1_sample is None:
             shelly1_failure_count += 1
         else:
@@ -2196,12 +2208,7 @@ while True:
         # second in the outer loop left 19 of every 20 touch polls reading a
         # stale snapshot, which is what made taps feel unresponsive. Safe to
         # call at this rate now: no machine.I2C handle exists for it to break.
-        M5.update()
-        previous_page = hmi_page
-        hmi_page, navigation_pressed = check_navigation(
-            navigation_pressed, hmi_page)
-        if hmi_page != previous_page:
-            log('HMI page selected: {}'.format(hmi_page))
+        if service_navigation():
             render_hmi(hmi_page, observation, active_rules_reference,
                        active_rules, published_rules_reference)
         time.sleep_ms(50)

@@ -165,6 +165,34 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertIsNone(select(640, 650))
         self.assertIsNone(select(100, 500))
 
+    def test_touch_service_is_not_limited_to_remaining_cycle_sleep(self):
+        source = PILOT_PATH.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        def function_source(name):
+            node = next(item for item in tree.body
+                        if isinstance(item, ast.FunctionDef) and
+                        item.name == name)
+            return ast.get_source_segment(source, node)
+
+        self.assertIn(
+            "read_ads1110_fresh_raw_count(service)",
+            function_source("_read_ads1110_microvolts_once"),
+        )
+        self.assertIn(
+            "_read_ads1110_microvolts_once(service)",
+            function_source("read_ads1110_microvolts"),
+        )
+        service_source = function_source("service_navigation")
+        self.assertIn("M5.update()", service_source)
+        self.assertIn("check_navigation", service_source)
+
+        boot_loop = source[source.index("while True:\n", source.index(
+            "Operational HMI foundation initialized")):]
+        self.assertIn(
+            "read_ads1110_microvolts(service_navigation)", boot_loop)
+        self.assertGreaterEqual(boot_loop.count("service_navigation()"), 5)
+
 
 if __name__ == "__main__":
     unittest.main()
