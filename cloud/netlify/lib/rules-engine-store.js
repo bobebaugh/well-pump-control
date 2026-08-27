@@ -17,14 +17,18 @@ function createRulesEngineStore(dependencies = {}) {
 
   return {
     async loadOrSeed(defaultDraft, nowMs) {
-      const result = { schemaVersion: 1, revisions: {} };
+      const result = { schemaVersion: defaultDraft.schemaVersion, revisions: {} };
       for (const section of SECTIONS) {
         const reference = drafts.doc(section);
         let snapshot = await reference.get();
-        if (!snapshot.exists) {
+        if (!snapshot.exists || snapshot.data().schemaVersion !== defaultDraft.schemaVersion) {
           const seeded = { schemaVersion: 1, draftRevision: 1, updatedAtMs: nowMs, items: defaultDraft[section] };
-          try { await reference.create(seeded); }
-          catch { /* Another request may have seeded the same document. */ }
+          seeded.schemaVersion = defaultDraft.schemaVersion;
+          if (snapshot.exists) await reference.set(seeded);
+          else {
+            try { await reference.create(seeded); }
+            catch { /* Another request may have seeded the same document. */ }
+          }
           snapshot = await reference.get();
         }
         if (!snapshot.exists) throw new Error("rules_engine_seed_failed");
@@ -43,7 +47,7 @@ function createRulesEngineStore(dependencies = {}) {
         const snapshot = await transaction.get(reference);
         if (!snapshot.exists || snapshot.data().draftRevision !== expectedRevision) throw new RulesEngineStoreConflictError();
         const nextRevision = expectedRevision + 1;
-        transaction.set(reference, { schemaVersion: 1, draftRevision: nextRevision, updatedAtMs: nowMs, items });
+        transaction.set(reference, { schemaVersion: 2, draftRevision: nextRevision, updatedAtMs: nowMs, items });
         return nextRevision;
       });
     },

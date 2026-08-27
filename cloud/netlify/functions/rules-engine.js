@@ -1,7 +1,7 @@
 "use strict";
 
 const { createHash, timingSafeEqual } = require("node:crypto");
-const { defaults, DEVICE_DRIVERS, EVENT_FUNCTIONS, FUNCTION_CATALOG, TYPE_OPERATORS } = require("../lib/rules-engine-defaults");
+const { defaults, DEVICE_DRIVERS, FUNCTION_CATALOG, SUMMARY_OPERATIONS, TYPE_OPERATORS } = require("../lib/rules-engine-defaults");
 const { validateAndCompile } = require("../lib/rules-engine-contract");
 const { SECTIONS } = require("../lib/rules-engine-store");
 
@@ -52,7 +52,7 @@ function createHandler(dependencies = {}) {
         const loaded = await store.loadOrSeed(defaults(), now().getTime());
         return response(200, {
           status: "ok", draft: loaded.draft, current: loaded.current,
-          capabilities: { functions: FUNCTION_CATALOG, operators: TYPE_OPERATORS, drivers: DEVICE_DRIVERS, eventFunctions: [...EVENT_FUNCTIONS] },
+          capabilities: { functions: FUNCTION_CATALOG, operators: TYPE_OPERATORS, drivers: DEVICE_DRIVERS, summaryOperations: SUMMARY_OPERATIONS },
           delivery: { enabled: false, description: "Firestore pilot only; no RTDB pointer or Tab5 delivery." }
         });
       }
@@ -84,7 +84,7 @@ function createHandler(dependencies = {}) {
       const runtimeBody = `${JSON.stringify(canonical(runtimePackage), null, 2)}\n`;
       const contentHash = createHash("sha256").update(runtimeBody, "utf8").digest("hex");
       const stateValue = {
-        schemaVersion: 1, packageVersion, releaseId, contentHash,
+        schemaVersion: 2, packageVersion, releaseId, contentHash,
         publishedAtMs: now().getTime(), deliveryEnabled: false
       };
       const release = {

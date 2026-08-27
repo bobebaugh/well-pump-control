@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { defaults } = require("../cloud/netlify/lib/rules-engine-defaults");
 const { createRulesEngineStore, RulesEngineStoreConflictError } = require("../cloud/netlify/lib/rules-engine-store");
 
 function fakeFirestore(initial) {
@@ -10,6 +11,8 @@ function fakeFirestore(initial) {
     constructor(path) { this.path = path; }
     collection(name) { return new Collection(`${this.path}/${name}`); }
     async get() { return snapshot(this.path); }
+    async set(value) { values.set(this.path, structuredClone(value)); }
+    async create(value) { if (values.has(this.path)) throw new Error("already_exists"); values.set(this.path, structuredClone(value)); }
   }
   class Collection {
     constructor(path) { this.path = path; }
@@ -36,6 +39,21 @@ function fakeFirestore(initial) {
   };
   return { db, values };
 }
+
+test("loading replaces first-iteration draft documents with schema-two defaults", async () => {
+  const base = "sites/well-main/rulesEngineDraft";
+  const { db, values } = fakeFirestore({
+    [`${base}/devices`]: { schemaVersion: 1, draftRevision: 9, items: [] },
+    [`${base}/calculatedFields`]: { schemaVersion: 1, draftRevision: 9, items: [] },
+    [`${base}/events`]: { schemaVersion: 1, draftRevision: 9, items: [] }
+  });
+  const store = createRulesEngineStore({ firebase: { getPilotFirestore: () => ({ db }) } });
+  const loaded = await store.loadOrSeed(defaults(), 123);
+  assert.equal(loaded.draft.schemaVersion, 2);
+  assert.deepEqual(loaded.draft.revisions, { devices: 1, calculatedFields: 1, events: 1 });
+  assert.equal(loaded.draft.calculatedFields.filter(calculation => calculation.kind === "function").length, 1);
+  assert.equal(values.get(`${base}/events`).schemaVersion, 2);
+});
 
 test("publication checks every draft revision in the same transaction", async () => {
   const base = "sites/well-main";

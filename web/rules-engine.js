@@ -2,7 +2,7 @@
 
 const sectionLabels = {
   devices: ["DEVICES", "Configured devices"],
-  calculatedFields: ["CALCULATED FIELDS", "Programmed calculations"],
+  calculatedFields: ["CALCULATED FIELDS", "Formulas and Boyle law"],
   events: ["EVENTS", "Event definitions"]
 };
 const state = {
@@ -42,10 +42,10 @@ async function api(method, payload) {
 function allFields() {
   if (!state.draft) return [];
   const fields = state.draft.devices.flatMap(device => device.fields || []);
-  return fields.concat(state.draft.calculatedFields.flatMap(calculation => calculation.outputs || []));
+  return fields.concat(state.draft.calculatedFields.flatMap(calculation => calculation.kind === "expression" ? [calculation.output] : (calculation.outputs || [])));
 }
 function directFields() { return state.draft.devices.flatMap(device => device.fields || []); }
-function calculatedFields() { return state.draft.calculatedFields.flatMap(calculation => calculation.outputs || []); }
+function calculatedFields() { return state.draft.calculatedFields.flatMap(calculation => calculation.kind === "expression" ? [calculation.output] : (calculation.outputs || [])); }
 function fieldByName(name) { return allFields().find(field => field.systemName === name); }
 function writableFields() { return state.draft.devices.flatMap(device => device.fields || []).filter(field => field.access === "readWrite"); }
 function optionHtml(field, selected) {
@@ -143,18 +143,27 @@ function renderDevice() {
 function captureCalculation() {
   const calculation = state.draft.calculatedFields[state.selected.calculatedFields];
   if (!calculation || !document.querySelector("#calculation-id")) return;
+  const displayedKind = calculation.kind;
   calculation.id = document.querySelector("#calculation-id").value.trim();
   calculation.label = document.querySelector("#calculation-label").value.trim();
-  calculation.functionId = document.querySelector("#calculation-function").value;
-  calculation.inputs = {};
-  editor.querySelectorAll("[data-calculation-input]").forEach(input => { calculation.inputs[input.dataset.calculationInput] = input.value; });
-  calculation.parameters = {};
-  editor.querySelectorAll("[data-calculation-parameter]").forEach(input => {
-    const raw = input.value.trim(); const numeric = Number(raw);
-    calculation.parameters[input.dataset.calculationParameter] = raw !== "" && Number.isFinite(numeric) ? numeric : raw;
-  });
-  calculation.outputs = [...editor.querySelectorAll(".calculation-output-row")].map((row, index) => {
-    const existing = calculation.outputs[index] || {};
+  if (displayedKind === "expression") {
+    calculation.expression = document.querySelector("#calculation-expression").value.trim();
+    calculation.output = captureOutputRow(editor.querySelector(".calculation-output-row"), calculation.output);
+  } else {
+    calculation.functionId = document.querySelector("#calculation-function").value;
+    calculation.inputs = {};
+    editor.querySelectorAll("[data-calculation-input]").forEach(input => { calculation.inputs[input.dataset.calculationInput] = input.value; });
+    calculation.parameters = {};
+    editor.querySelectorAll("[data-calculation-parameter]").forEach(input => {
+      const raw = input.value.trim(); const numeric = Number(raw);
+      calculation.parameters[input.dataset.calculationParameter] = raw !== "" && Number.isFinite(numeric) ? numeric : raw;
+    });
+    calculation.outputs = [...editor.querySelectorAll(".calculation-output-row")].map((row, index) => captureOutputRow(row, calculation.outputs[index]));
+  }
+  calculation.kind = document.querySelector("#calculation-kind").value;
+}
+
+function captureOutputRow(row, existing = {}) {
     const mode = row.querySelector("[data-key=logMode]").value;
     const output = {
       systemName: row.querySelector("[data-key=systemName]").value.trim(),
@@ -166,7 +175,6 @@ function captureCalculation() {
     if (existing.enumValues) output.enumValues = existing.enumValues;
     if (mode === "delta") output.logging.threshold = Number(row.querySelector("[data-key=threshold]").value);
     return output;
-  });
 }
 
 function normalizeCalculationFunction(calculation, functionId) {
@@ -182,25 +190,42 @@ function normalizeCalculationFunction(calculation, functionId) {
   });
 }
 
+function normalizeCalculationKind(calculation, kind) {
+  calculation.kind = kind;
+  if (kind === "expression") {
+    calculation.expression ||= "PumpWatts";
+    calculation.output ||= { systemName: "CalculatedValue", label: "Calculated value", type: "number", unit: null, logging: { mode: "delta", threshold: 1 } };
+    return;
+  }
+  normalizeCalculationFunction(calculation, calculation.functionId && state.capabilities.functions[calculation.functionId] ? calculation.functionId : Object.keys(state.capabilities.functions)[0]);
+}
+
+function outputRowsHtml(outputs, typeReadonly) {
+  return outputs.map((output, index) => `<div class="calculation-output-row data-grid-row" data-index="${index}">
+    <input data-key="systemName" value="${escapeHtml(output.systemName)}"><input data-key="label" value="${escapeHtml(output.label)}">
+    ${typeReadonly ? `<input data-key="type" value="${escapeHtml(output.type)}" readonly>` : `<select data-key="type"><option value="number"${output.type === "number" ? " selected" : ""}>number</option><option value="integer"${output.type === "integer" ? " selected" : ""}>integer</option></select>`}
+    <input data-key="unit" value="${escapeHtml(output.unit || "")}">
+    <select data-key="logMode">${logModeOptions(output.logging?.mode)}</select><input data-key="threshold" type="number" step="any" value="${escapeHtml(output.logging?.threshold ?? "")}">
+  </div>`).join("");
+}
+
 function renderCalculation() {
   const calculation = state.draft.calculatedFields[state.selected.calculatedFields];
   if (!calculation) { editor.innerHTML = "<p class='empty-editor'>Add a calculated field to begin.</p>"; return; }
-  const spec = state.capabilities.functions[calculation.functionId];
+  const spec = calculation.kind === "function" ? state.capabilities.functions[calculation.functionId] : null;
   const functionOptions = Object.entries(state.capabilities.functions).map(([id, definition]) => `<option value="${escapeHtml(id)}"${id === calculation.functionId ? " selected" : ""}>${escapeHtml(definition.label)}</option>`).join("");
   const inputRows = Object.keys(spec?.inputs || {}).map(name => `<label>${escapeHtml(name)}<select data-calculation-input="${escapeHtml(name)}">${fieldOptions(calculation.inputs?.[name])}</select></label>`).join("");
   const parameterRows = Object.keys(spec?.parameters || {}).map(name => `<label>${escapeHtml(name)}<input data-calculation-parameter="${escapeHtml(name)}" value="${escapeHtml(calculation.parameters?.[name] ?? "")}"></label>`).join("");
-  const outputs = calculation.outputs.map((output, index) => `<div class="calculation-output-row data-grid-row" data-index="${index}">
-    <input data-key="systemName" value="${escapeHtml(output.systemName)}"><input data-key="label" value="${escapeHtml(output.label)}">
-    <input data-key="type" value="${escapeHtml(output.type)}" readonly><input data-key="unit" value="${escapeHtml(output.unit || "")}">
-    <select data-key="logMode">${logModeOptions(output.logging?.mode)}</select><input data-key="threshold" type="number" step="any" value="${escapeHtml(output.logging?.threshold ?? "")}">
-  </div>`).join("");
+  const expressionEditor = `<section class="expression-card"><p class="kicker">ARITHMETIC EXPRESSION</p><textarea id="calculation-expression" rows="4" spellcheck="false">${escapeHtml(calculation.expression || "")}</textarea><p class="form-help">Use named numeric fields, constants, +, −, ×, ÷, and parentheses. The web compiler validates dependencies and prepares the Tab5 instructions.</p></section>`;
+  const functionEditor = `<div class="form-grid compact-form"><label class="wide">Programmed function<select id="calculation-function">${functionOptions}</select></label></div><div class="calculation-config-grid"><section><p class="kicker">INPUT FIELDS</p><div class="stacked-form">${inputRows || "<p class='form-help'>No inputs.</p>"}</div></section><section><p class="kicker">FUNCTION PARAMETERS</p><div class="stacked-form">${parameterRows || "<p class='form-help'>No parameters.</p>"}</div></section></div>`;
+  const outputs = calculation.kind === "expression" ? outputRowsHtml([calculation.output], false) : outputRowsHtml(calculation.outputs, true);
   editor.innerHTML = `
     <div class="engine-editor-heading"><div><p class="kicker">CALCULATED FIELD DEFINITION</p><h2>${escapeHtml(calculation.label)}</h2></div><button class="secondary-button compact-button danger-button" id="remove-item" type="button">Remove</button></div>
-    <div class="form-grid compact-form"><label>Calculation ID<input id="calculation-id" value="${escapeHtml(calculation.id)}"></label><label>Display name<input id="calculation-label" value="${escapeHtml(calculation.label)}"></label><label class="wide">Programmed function<select id="calculation-function">${functionOptions}</select></label></div>
-    <div class="calculation-config-grid"><section><p class="kicker">INPUT FIELDS</p><div class="stacked-form">${inputRows || "<p class='form-help'>No inputs.</p>"}</div></section><section><p class="kicker">FUNCTION PARAMETERS</p><div class="stacked-form">${parameterRows || "<p class='form-help'>No parameters.</p>"}</div></section></div>
+    <div class="form-grid compact-form"><label>Calculation ID<input id="calculation-id" value="${escapeHtml(calculation.id)}"></label><label>Display name<input id="calculation-label" value="${escapeHtml(calculation.label)}"></label><label>Calculation kind<select id="calculation-kind"><option value="expression"${calculation.kind === "expression" ? " selected" : ""}>Formula</option><option value="function"${calculation.kind === "function" ? " selected" : ""}>Programmed function</option></select></label></div>
+    ${calculation.kind === "expression" ? expressionEditor : functionEditor}
     <div class="subsection-heading"><div><p class="kicker">OUTPUTS</p><h2>Named calculated fields</h2></div></div>
     <div class="data-grid calculation-output-grid"><div class="data-grid-head"><span>System name</span><span>Label</span><span>Type</span><span>Unit</span><span>Log</span><span>Range</span></div>${outputs}</div>
-    <p class="form-help">The function implementation is programmed in Tab5. This definition supplies only supported inputs, parameters, output names, and logging ranges.</p>`;
+    <p class="form-help">Direct observations and calculated outputs may independently request one complete durable snapshot through their logging policy.</p>`;
 }
 
 function parseClauseValue(raw, field, operator) {
@@ -225,15 +250,43 @@ function captureCondition(prefix) {
 function captureEvent() {
   const event = state.draft.events[state.selected.events];
   if (!event || !document.querySelector("#event-id")) return;
+  const displayedCloseBasis = event.close.basis;
   event.id = document.querySelector("#event-id").value.trim();
   event.systemName = document.querySelector("#event-system-name").value.trim();
   event.displayName = document.querySelector("#event-display-name").value.trim();
   event.severity = document.querySelector("#event-severity").value;
   event.enabled = document.querySelector("#event-enabled").checked;
   event.latched = document.querySelector("#event-latched").checked;
-  event.open = captureCondition("open"); event.close = captureCondition("close");
-  event.openFunctions = document.querySelector("#event-open-functions").value ? [document.querySelector("#event-open-functions").value] : [];
-  event.closeFunctions = document.querySelector("#event-close-functions").value ? [document.querySelector("#event-close-functions").value] : [];
+  event.open = captureCondition("open");
+  const selectedCloseBasis = document.querySelector("#close-basis").value;
+  const displayedClose = displayedCloseBasis === "custom"
+    ? captureCondition("close")
+    : { observationCount: Number(document.querySelector("#close-count").value), minimumSeconds: Number(document.querySelector("#close-seconds").value) };
+  event.close = selectedCloseBasis === "openingFalse"
+    ? { basis: "openingFalse", observationCount: displayedClose.observationCount, minimumSeconds: displayedClose.minimumSeconds }
+    : { ...displayedClose, basis: "custom" };
+  if (selectedCloseBasis === "custom" && displayedCloseBasis !== "custom") {
+    const field = allFields()[0];
+    event.close = { basis: "custom", mode: "all", clauses: field ? [{ field: field.systemName, operator: state.capabilities.operators[field.type][0], value: field.type === "boolean" ? true : 0 }] : [], observationCount: event.close.observationCount, minimumSeconds: event.close.minimumSeconds };
+  }
+  const durationEnabled = document.querySelector("#summary-duration-enabled").checked;
+  event.summary = {
+    durationOutput: durationEnabled ? {
+      systemName: document.querySelector("#summary-duration-name").value.trim(),
+      label: document.querySelector("#summary-duration-label").value.trim(),
+      type: "number", unit: "s", logging: { mode: "none" }
+    } : null,
+    aggregates: [...editor.querySelectorAll(".summary-row")].map(row => ({
+      source: row.querySelector("[data-key=source]").value,
+      operation: row.querySelector("[data-key=operation]").value,
+      scale: Number(row.querySelector("[data-key=scale]").value),
+      output: {
+        systemName: row.querySelector("[data-key=systemName]").value.trim(),
+        label: row.querySelector("[data-key=label]").value.trim(),
+        type: "number", unit: row.querySelector("[data-key=unit]").value.trim() || null, logging: { mode: "none" }
+      }
+    }))
+  };
   event.actions = [...editor.querySelectorAll(".event-action-row")].map(row => {
     const target = row.querySelector("[data-key=target]").value;
     return { target, value: parseClauseValue(row.querySelector("[data-key=value]").value, fieldByName(target), "eq") };
@@ -253,18 +306,39 @@ function operatorOptions(fieldName, selected) {
 function valueText(clause) { return Array.isArray(clause.value) ? clause.value.join(", ") : clause.value === null ? "" : String(clause.value); }
 function conditionHtml(prefix, condition) {
   const rows = condition.clauses.map((clause, index) => `<div class="${prefix}-clause-row condition-row" data-index="${index}"><select data-key="field">${fieldOptions(clause.field)}</select><select data-key="operator">${operatorOptions(clause.field, clause.operator)}</select><input data-key="value" value="${escapeHtml(valueText(clause))}" placeholder="value or low, high"><button class="row-delete" type="button" data-remove-clause="${prefix}:${index}">×</button></div>`).join("");
-  return `<div class="condition-controls"><label>Combine<select id="${prefix}-mode"><option value="all"${condition.mode === "all" ? " selected" : ""}>ALL — AND</option><option value="any"${condition.mode === "any" ? " selected" : ""}>ANY — OR</option></select></label><label>Observations<input id="${prefix}-count" type="number" min="1" step="1" value="${condition.observationCount}"></label><label>Minimum seconds<input id="${prefix}-seconds" type="number" min="0" step="any" value="${condition.minimumSeconds}"></label></div><div class="condition-list">${rows}</div><button class="secondary-button compact-button add-clause" type="button" data-add-clause="${prefix}">Add condition</button>`;
+  const timeLabel = prefix === "open" ? "Warm-up seconds" : "Cool-off seconds";
+  return `<div class="condition-controls"><label>Combine<select id="${prefix}-mode"><option value="all"${condition.mode === "all" ? " selected" : ""}>ALL — AND</option><option value="any"${condition.mode === "any" ? " selected" : ""}>ANY — OR</option></select></label><label>Consecutive observations<input id="${prefix}-count" type="number" min="1" step="1" value="${condition.observationCount}"></label><label>${timeLabel}<input id="${prefix}-seconds" type="number" min="0" step="any" value="${condition.minimumSeconds}"></label></div><div class="condition-list">${rows}</div><button class="secondary-button compact-button add-clause" type="button" data-add-clause="${prefix}">Add condition</button>`;
 }
+
+function closeConditionHtml(close) {
+  const basis = `<label class="close-basis-label">Closing basis<select id="close-basis"><option value="openingFalse"${close.basis === "openingFalse" ? " selected" : ""}>Opening condition no longer true</option><option value="custom"${close.basis === "custom" ? " selected" : ""}>Custom closing condition</option></select></label>`;
+  if (close.basis === "custom") return `${basis}${conditionHtml("close", close)}`;
+  return `${basis}<div class="condition-controls inverse-close-controls"><label>Consecutive observations<input id="close-count" type="number" min="1" step="1" value="${close.observationCount}"></label><label>Cool-off seconds<input id="close-seconds" type="number" min="0" step="any" value="${close.minimumSeconds}"></label></div><p class="form-help">The complete opening expression is reevaluated and negated. Missing telemetry does not qualify a close.</p>`;
+}
+
+function summaryHtml(summary) {
+  const operations = selected => Object.entries(state.capabilities.summaryOperations).map(([id, label]) => `<option value="${id}"${id === selected ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
+  const rows = summary.aggregates.map((aggregate, index) => `<div class="summary-row data-grid-row" data-index="${index}">
+    <select data-key="source">${fieldOptions(aggregate.source)}</select><select data-key="operation">${operations(aggregate.operation)}</select>
+    <input data-key="systemName" value="${escapeHtml(aggregate.output.systemName)}"><input data-key="label" value="${escapeHtml(aggregate.output.label)}">
+    <input data-key="unit" value="${escapeHtml(aggregate.output.unit || "")}"><input data-key="scale" type="number" step="any" value="${escapeHtml(aggregate.scale)}">
+    <button class="row-delete" type="button" data-remove-summary="${index}">×</button>
+  </div>`).join("");
+  const duration = summary.durationOutput || { systemName: "EventDurationSeconds", label: "Event duration" };
+  return `<div class="summary-duration"><label class="switch-label"><input id="summary-duration-enabled" type="checkbox"${summary.durationOutput ? " checked" : ""}> Store event duration</label><input id="summary-duration-name" value="${escapeHtml(duration.systemName)}" placeholder="Output system name"><input id="summary-duration-label" value="${escapeHtml(duration.label)}" placeholder="Output label"></div>
+    <div class="data-grid summary-grid"><div class="data-grid-head"><span>Source</span><span>Operation</span><span>Output name</span><span>Label</span><span>Unit</span><span>Scale</span><span></span></div>${rows}</div>`;
+}
+
 function renderEvent() {
   const event = state.draft.events[state.selected.events];
   if (!event) { editor.innerHTML = "<p class='empty-editor'>Add an event to begin.</p>"; return; }
   const actions = event.actions.map((action, index) => `<div class="event-action-row condition-row" data-index="${index}"><select data-key="target">${writableFields().map(field => `<option value="${escapeHtml(field.systemName)}"${field.systemName === action.target ? " selected" : ""}>${escapeHtml(field.systemName)} · ${escapeHtml(field.write?.method || "unmapped")}</option>`).join("")}</select><span class="action-equals">=</span><input data-key="value" value="${escapeHtml(String(action.value))}"><button class="row-delete" type="button" data-remove-action="${index}">×</button></div>`).join("");
-  const eventFunctionOptions = selected => `<option value="">None</option>${state.capabilities.eventFunctions.map(name => `<option value="${escapeHtml(name)}"${name === selected ? " selected" : ""}>${escapeHtml(name)}</option>`).join("")}`;
   editor.innerHTML = `
     <div class="engine-editor-heading"><div><p class="kicker">EVENT DEFINITION</p><h2>${escapeHtml(event.displayName)}</h2></div><div class="inline-switches"><label class="switch-label"><input id="event-enabled" type="checkbox"${event.enabled ? " checked" : ""}> Enabled</label><label class="switch-label"><input id="event-latched" type="checkbox"${event.latched ? " checked" : ""}> Latched</label><button class="secondary-button compact-button danger-button" id="remove-item" type="button">Remove</button></div></div>
     <div class="form-grid compact-form"><label>Event ID<input id="event-id" value="${escapeHtml(event.id)}"></label><label>System name<input id="event-system-name" value="${escapeHtml(event.systemName)}"></label><label>Display name<input id="event-display-name" value="${escapeHtml(event.displayName)}"></label><label>Severity<select id="event-severity"><option${event.severity === "Info" ? " selected" : ""}>Info</option><option${event.severity === "Yellow" ? " selected" : ""}>Yellow</option><option${event.severity === "Red" ? " selected" : ""}>Red</option></select></label></div>
-    <div class="event-condition-grid"><section><div class="subsection-heading"><div><p class="kicker">EVENT OPEN</p><h2>Opening qualification</h2></div></div>${conditionHtml("open", event.open)}</section><section><div class="subsection-heading"><div><p class="kicker">EVENT CLOSE</p><h2>Closing qualification</h2></div></div>${conditionHtml("close", event.close)}</section></div>
-    <div class="event-lower-grid"><section><div class="subsection-heading"><div><p class="kicker">TAB5 PROCESSING</p><h2>Functions and active consequences</h2></div><button class="secondary-button compact-button" id="add-event-action" type="button">Add action</button></div><div class="stacked-form"><label>Function on open<select id="event-open-functions">${eventFunctionOptions(event.openFunctions?.[0])}</select></label><label>Function on close<select id="event-close-functions">${eventFunctionOptions(event.closeFunctions?.[0])}</select></label></div><div class="event-actions">${actions || "<p class='form-help'>No device action; event is logging only.</p>"}</div><p class="form-help">An action applies while the event is active. When no active event requires it, the writable field returns to its device-defined normal value. A latched event stays active until a user requests clear and its closing condition qualifies. System Override suppresses Tab5 actions but never event evaluation or logging.</p></section>
+    <div class="event-condition-grid"><section><div class="subsection-heading"><div><p class="kicker">EVENT OPEN</p><h2>Opening qualification</h2></div></div>${conditionHtml("open", event.open)}</section><section><div class="subsection-heading"><div><p class="kicker">EVENT CLOSE</p><h2>Closing qualification</h2></div></div>${closeConditionHtml(event.close)}</section></div>
+    <section class="event-summary-section"><div class="subsection-heading"><div><p class="kicker">STANDARD EVENT RECORDS</p><h2>Opening, closing, and summary values</h2></div><button class="secondary-button compact-button" id="add-summary-row" type="button">Add summary value</button></div><p class="form-help">Opening and closing observations are always queued as complete snapshots. Summary outputs are calculated at close and included in the closing record.</p>${summaryHtml(event.summary)}</section>
+    <div class="event-lower-grid"><section><div class="subsection-heading"><div><p class="kicker">TAB5 PROCESSING</p><h2>Active consequences</h2></div><button class="secondary-button compact-button" id="add-event-action" type="button">Add action</button></div><div class="event-actions">${actions || "<p class='form-help'>No device action; event is logging only.</p>"}</div><p class="form-help">An action applies while the event is active. When no active event requires it, the writable field returns to its device-defined normal value. A latched event stays active until a user requests clear and its closing condition qualifies. System Override suppresses Tab5 actions but never event evaluation or logging.</p></section>
       <section><div class="subsection-heading"><div><p class="kicker">WEB PROCESSING</p><h2>Notifications</h2></div></div><div class="inline-switches notification-switches"><label class="switch-label"><input id="notify-open" type="checkbox"${event.web?.notifyOnOpen ? " checked" : ""}> Notify on open</label><label class="switch-label"><input id="notify-close" type="checkbox"${event.web?.notifyOnClose ? " checked" : ""}> Notify on close</label></div><div class="stacked-form"><label>Open message<textarea id="open-message" rows="3">${escapeHtml(event.web?.openMessage || "")}</textarea></label><label>Close message<textarea id="close-message" rows="3">${escapeHtml(event.web?.closeMessage || "")}</textarea></label></div></section></div>`;
 }
 
@@ -358,10 +432,10 @@ function addItem() {
   captureCurrent();
   if (state.section === "devices") state.draft.devices.push({ id: `device-${state.draft.devices.length + 1}`, label: "New device", driver: "", address: "", enabled: false, fields: [{ systemName: "NewTelemetry", label: "New telemetry", object: "", type: "number", unit: null, access: "read", logging: { mode: "none" } }] });
   if (state.section === "calculatedFields") {
-    const calculation = { id: `calculation-${state.draft.calculatedFields.length + 1}`, label: "New calculation", functionId: "load_ratio", inputs: {}, parameters: {}, outputs: [] };
-    normalizeCalculationFunction(calculation, calculation.functionId); state.draft.calculatedFields.push(calculation);
+    const calculation = { id: `calculation-${state.draft.calculatedFields.length + 1}`, label: "New calculated value", kind: "expression", expression: "PumpWatts", output: { systemName: `CalculatedValue${state.draft.calculatedFields.length + 1}`, label: "Calculated value", type: "number", unit: null, logging: { mode: "delta", threshold: 1 } } };
+    state.draft.calculatedFields.push(calculation);
   }
-  if (state.section === "events") state.draft.events.push({ id: `EV-${state.draft.events.length + 1}`, systemName: `NewEvent${state.draft.events.length + 1}`, displayName: "New event", enabled: false, severity: "Info", open: { mode: "all", clauses: [{ field: allFields()[0]?.systemName || "", operator: "gt", value: 0 }], observationCount: 1, minimumSeconds: 0 }, close: { mode: "all", clauses: [{ field: allFields()[0]?.systemName || "", operator: "lte", value: 0 }], observationCount: 1, minimumSeconds: 0 }, latched: false, openFunctions: [], closeFunctions: [], actions: [], web: { notifyOnOpen: false, notifyOnClose: false, openMessage: "", closeMessage: "" } });
+  if (state.section === "events") state.draft.events.push({ id: `EV-${state.draft.events.length + 1}`, systemName: `NewEvent${state.draft.events.length + 1}`, displayName: "New event", enabled: false, severity: "Info", open: { mode: "all", clauses: [{ field: allFields()[0]?.systemName || "", operator: "gt", value: 0 }], observationCount: 1, minimumSeconds: 0 }, close: { basis: "openingFalse", observationCount: 1, minimumSeconds: 0 }, latched: false, summary: { durationOutput: null, aggregates: [] }, actions: [], web: { notifyOnOpen: false, notifyOnClose: false, openMessage: "", closeMessage: "" } });
   state.selected[state.section] = state.draft[state.section].length - 1; markDirty(); updateCounts(); renderEditor();
 }
 
@@ -393,8 +467,14 @@ list.addEventListener("click", event => {
 editor.addEventListener("input", markDirty);
 editor.addEventListener("change", event => {
   markDirty();
+  if (event.target.id === "calculation-kind") {
+    captureCalculation(); const calculation = state.draft.calculatedFields[state.selected.calculatedFields]; normalizeCalculationKind(calculation, event.target.value); renderEditor(); return;
+  }
   if (event.target.id === "calculation-function") {
-    captureCalculation(); const calculation = state.draft.calculatedFields[state.selected.calculatedFields]; normalizeCalculationFunction(calculation, event.target.value); renderEditor();
+    captureCalculation(); const calculation = state.draft.calculatedFields[state.selected.calculatedFields]; normalizeCalculationFunction(calculation, event.target.value); renderEditor(); return;
+  }
+  if (event.target.id === "close-basis") {
+    captureEvent(); renderEditor(); return;
   }
   if (event.target.dataset.key === "field") {
     const row = event.target.closest(".condition-row"); const operator = row.querySelector("[data-key=operator]"); operator.innerHTML = operatorOptions(event.target.value, null);
@@ -411,5 +491,8 @@ editor.addEventListener("click", event => {
   if (clauseAdd) { captureEvent(); const side = clauseAdd.dataset.addClause; const field = allFields()[0]; if (!field) { setStatus("Define at least one direct or calculated field first.", "warning"); return; } state.draft.events[state.selected.events][side].clauses.push({ field: field.systemName, operator: state.capabilities.operators[field.type][0], value: field.type === "boolean" ? true : 0 }); markDirty(); renderEditor(); return; }
   const actionRemove = event.target.closest("[data-remove-action]");
   if (actionRemove) { captureEvent(); state.draft.events[state.selected.events].actions.splice(Number(actionRemove.dataset.removeAction), 1); markDirty(); renderEditor(); return; }
+  const summaryRemove = event.target.closest("[data-remove-summary]");
+  if (summaryRemove) { captureEvent(); state.draft.events[state.selected.events].summary.aggregates.splice(Number(summaryRemove.dataset.removeSummary), 1); markDirty(); renderEditor(); return; }
+  if (event.target.id === "add-summary-row") { captureEvent(); const source = allFields().find(field => field.type === "number" || field.type === "integer"); if (!source) return setStatus("No numeric direct or calculated field is defined.", "warning"); state.draft.events[state.selected.events].summary.aggregates.push({ source: source.systemName, operation: "end", scale: 1, output: { systemName: "EventSummaryValue", label: "Event summary value", type: "number", unit: source.unit || null, logging: { mode: "none" } } }); markDirty(); renderEditor(); return; }
   if (event.target.id === "add-event-action") { captureEvent(); const target = writableFields()[0]; if (!target) return setStatus("No writable device field is defined.", "warning"); state.draft.events[state.selected.events].actions.push({ target: target.systemName, value: target.type === "boolean" ? false : 0 }); markDirty(); renderEditor(); }
 });

@@ -38,7 +38,9 @@ test("loads seeded sections and advertises only disabled delivery", async () => 
   assert.equal(result.statusCode, 200);
   const body = JSON.parse(result.body);
   assert.equal(body.draft.devices.length, 3);
+  assert.equal(body.draft.schemaVersion, 2);
   assert.equal(body.capabilities.functions.boyle_tank.label, "Boyle-law tank model");
+  assert.equal(body.capabilities.summaryOperations.average, "Average while active");
   assert.equal(body.delivery.enabled, false);
 });
 
