@@ -24,6 +24,7 @@ FUNCTIONS = {
     "cloud_detail_text",
     "build_now_hmi_model",
     "build_system_hmi_model",
+    "build_events_hmi_model",
     "navigation_page_at",
     "navigation_selection_allowed",
 }
@@ -37,10 +38,12 @@ CONSTANTS = {
     "SOFTWARE_RELEASE",
     "HMI_PAGE_NOW",
     "HMI_PAGE_SYSTEM",
+    "HMI_PAGE_EVENTS",
     "NAV_Y",
     "NAV_H",
     "NAV_NOW_X",
     "NAV_SYSTEM_X",
+    "NAV_EVENTS_X",
     "NAV_W",
     "ADC_DIVIDER",
     "ADC_LSB_UV_AT_PIN",
@@ -199,6 +202,15 @@ class HmiFoundationTests(unittest.TestCase):
             "CLOUD OK <1s  RTDB OK <1s  Q0/8",
         )
 
+    def test_events_model_is_truthful_and_has_no_override_authority(self):
+        model = self.logic["build_events_hmi_model"](observation())
+        self.assertEqual(model["event_engine"], "NOT IMPLEMENTED")
+        self.assertEqual(model["active_events"], "UNAVAILABLE")
+        self.assertEqual(model["event_override"], "NOT AVAILABLE")
+        self.assertEqual(model["system_override"], "NOT AVAILABLE")
+        self.assertEqual(model["shelly_lock"], "NOT REPORTED")
+        self.assertEqual(model["shelly_override"], "NOT AVAILABLE")
+
     def test_cloud_color_requires_confirmed_cpu_b_responses(self):
         state = self.logic["cloud_indicator_state"]
         self.assertEqual(state(transport(), 10000, True, True), "green")
@@ -213,16 +225,37 @@ class HmiFoundationTests(unittest.TestCase):
         allowed = self.logic["navigation_selection_allowed"]
         now = self.logic["HMI_PAGE_NOW"]
         system = self.logic["HMI_PAGE_SYSTEM"]
+        events = self.logic["HMI_PAGE_EVENTS"]
         self.assertTrue(allowed(False, now, system))
         self.assertTrue(allowed(True, now, system))
+        self.assertTrue(allowed(True, system, events))
         self.assertFalse(allowed(True, system, system))
 
-    def test_navigation_exposes_only_now_and_system(self):
+    def test_navigation_exposes_now_system_and_events(self):
         select = self.logic["navigation_page_at"]
         self.assertEqual(select(100, 650), self.logic["HMI_PAGE_NOW"])
-        self.assertEqual(select(700, 650), self.logic["HMI_PAGE_SYSTEM"])
-        self.assertIsNone(select(640, 650))
+        self.assertEqual(select(500, 650), self.logic["HMI_PAGE_SYSTEM"])
+        self.assertEqual(select(900, 650), self.logic["HMI_PAGE_EVENTS"])
+        self.assertIsNone(select(430, 650))
+        self.assertIsNone(select(850, 650))
         self.assertIsNone(select(100, 500))
+
+    def test_events_page_is_display_only_scaffolding(self):
+        source = PILOT_PATH.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        node = next(item for item in tree.body
+                    if isinstance(item, ast.FunctionDef) and
+                    item.name == "render_events")
+        events_source = ast.get_source_segment(source, node)
+        self.assertIn("NO EVENT OR OVERRIDE ACTION IS IMPLEMENTED",
+                      events_source)
+        self.assertNotIn("relay", events_source.lower())
+        self.assertNotIn("request", events_source.lower())
+        self.assertNotIn("submit", events_source.lower())
+        self.assertNotIn("cloud.", events_source)
+
+    def test_release_is_m621(self):
+        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.21")
 
     def test_touch_service_is_not_limited_to_remaining_cycle_sleep(self):
         source = PILOT_PATH.read_text(encoding="utf-8")

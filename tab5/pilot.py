@@ -1,4 +1,4 @@
-# Release: 2026-08-27 M6.20 — steady NOW display, source ages, and touch fallback.
+# Release: 2026-08-27 M6.21 — add the no-control EVENTS page foundation.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -38,7 +38,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.20'
+SOFTWARE_RELEASE = 'M6.21'
 
 # M5 selection parameters live on CPU A. M6 supplies a validated rules
 # reference while CPU B remains a byte-preserving transport only.
@@ -1257,6 +1257,23 @@ def build_system_hmi_model(observation, adopted_reference, rules_package,
     }
 
 
+def build_events_hmi_model(observation):
+    """Reserve event and override surfaces without inventing M7 state."""
+    if not isinstance(observation, dict):
+        observation = {}
+    status = observation.get('status')
+    status = status if isinstance(status, dict) else {}
+    shelly1_available = status.get('shelly1_available') is True
+    return {
+        'event_engine': 'NOT IMPLEMENTED',
+        'active_events': 'UNAVAILABLE',
+        'event_override': 'NOT AVAILABLE',
+        'system_override': 'NOT AVAILABLE',
+        'shelly_lock': shelly_local_lock_status(shelly1_available),
+        'shelly_override': 'NOT AVAILABLE',
+    }
+
+
 # --- display --- (main.py already ran M5.begin() before starting CPU A)
 M5.Lcd.setRotation(1)
 M5.Lcd.fillScreen(BG)
@@ -1270,8 +1287,9 @@ def draw_label(text, x, y, font, color, bg=BG):
 
 HMI_PAGE_NOW = 'now'
 HMI_PAGE_SYSTEM = 'system'
+HMI_PAGE_EVENTS = 'events'
 NAV_Y, NAV_H = 630, 70
-NAV_NOW_X, NAV_SYSTEM_X, NAV_W = 35, 655, 590
+NAV_NOW_X, NAV_SYSTEM_X, NAV_EVENTS_X, NAV_W = 35, 450, 865, 380
 _last_rendered_page = None
 _field_cache = {}
 
@@ -1284,6 +1302,8 @@ def navigation_page_at(x, y):
         return HMI_PAGE_NOW
     if NAV_SYSTEM_X <= x <= NAV_SYSTEM_X + NAV_W:
         return HMI_PAGE_SYSTEM
+    if NAV_EVENTS_X <= x <= NAV_EVENTS_X + NAV_W:
+        return HMI_PAGE_EVENTS
     return None
 
 
@@ -1326,18 +1346,24 @@ def _draw_communications(model):
 def _draw_navigation(page):
     now_color = GREEN if page == HMI_PAGE_NOW else BLUE
     system_color = GREEN if page == HMI_PAGE_SYSTEM else BLUE
+    events_color = GREEN if page == HMI_PAGE_EVENTS else BLUE
     M5.Lcd.fillRoundRect(NAV_NOW_X, NAV_Y, NAV_W, NAV_H, 14, now_color)
     M5.Lcd.fillRoundRect(NAV_SYSTEM_X, NAV_Y, NAV_W, NAV_H, 14, system_color)
-    draw_label('NOW', NAV_NOW_X + 245, NAV_Y + 20,
+    M5.Lcd.fillRoundRect(NAV_EVENTS_X, NAV_Y, NAV_W, NAV_H, 14, events_color)
+    draw_label('NOW', NAV_NOW_X + 145, NAV_Y + 20,
                M5.Lcd.FONTS.Montserrat24, WHITE, bg=now_color)
-    draw_label('SYSTEM', NAV_SYSTEM_X + 220, NAV_Y + 20,
+    draw_label('SYSTEM', NAV_SYSTEM_X + 125, NAV_Y + 20,
                M5.Lcd.FONTS.Montserrat24, WHITE, bg=system_color)
+    draw_label('EVENTS', NAV_EVENTS_X + 125, NAV_Y + 20,
+               M5.Lcd.FONTS.Montserrat24, WHITE, bg=events_color)
 
 
 def _draw_page_frame(page):
     _field_cache.clear()
     M5.Lcd.fillScreen(BG)
-    title = 'WELL PUMP - NOW' if page == HMI_PAGE_NOW else 'WELL PUMP - SYSTEM'
+    title = ('WELL PUMP - NOW' if page == HMI_PAGE_NOW else
+             'WELL PUMP - EVENTS' if page == HMI_PAGE_EVENTS else
+             'WELL PUMP - SYSTEM')
     draw_label(title, 40, 22, M5.Lcd.FONTS.DejaVu40, WHITE)
     draw_label('{}  OBSERVE ONLY'.format(SOFTWARE_RELEASE), 965, 36,
                M5.Lcd.FONTS.Montserrat18, CYAN)
@@ -1440,17 +1466,53 @@ def render_system(model):
                 'system.footer')
 
 
+def render_events(model):
+    draw_label('ACTIVE EVENTS', 45, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
+    _draw_field('ENGINE: {}'.format(model['event_engine']),
+                45, 128, 570, 42, M5.Lcd.FONTS.Montserrat24, YELLOW,
+                'events.engine')
+    _draw_field('ACTIVE LIST: {}'.format(model['active_events']),
+                45, 180, 570, 42, M5.Lcd.FONTS.Montserrat24, YELLOW,
+                'events.active')
+
+    draw_label('EVENT OVERRIDE', 45, 265, M5.Lcd.FONTS.Montserrat18, CYAN)
+    _draw_field(model['event_override'], 45, 298, 570, 55,
+                M5.Lcd.FONTS.DejaVu40, YELLOW, 'events.event_override')
+
+    draw_label('SYSTEM OVERRIDE', 665, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
+    _draw_field(model['system_override'], 665, 128, 570, 55,
+                M5.Lcd.FONTS.DejaVu40, YELLOW, 'events.system_override')
+
+    draw_label('SHELLY LOCAL LOCK', 665, 265,
+               M5.Lcd.FONTS.Montserrat18, CYAN)
+    lock_color = RED if model['shelly_lock'] == 'LOCKED' else YELLOW
+    _draw_field(model['shelly_lock'], 665, 298, 570, 55,
+                M5.Lcd.FONTS.DejaVu40, lock_color, 'events.shelly_lock')
+    _draw_field('REMOTE OVERRIDE: {}'.format(model['shelly_override']),
+                665, 370, 570, 42, M5.Lcd.FONTS.Montserrat24, YELLOW,
+                'events.shelly_override')
+
+    _draw_field('NO EVENT OR OVERRIDE ACTION IS IMPLEMENTED',
+                45, 480, 1190, 42, M5.Lcd.FONTS.Montserrat24, YELLOW,
+                'events.boundary')
+    _draw_field('HISTORY AND PARAMETERS ARE MANAGED ON THE WEB APP',
+                45, 575, 1190, 35, M5.Lcd.FONTS.Montserrat18, CYAN,
+                'events.footer')
+
+
 def render_hmi(page, observation, adopted_reference, rules_package,
                published_reference=None):
     global _last_rendered_page
-    if page not in (HMI_PAGE_NOW, HMI_PAGE_SYSTEM):
+    if page not in (HMI_PAGE_NOW, HMI_PAGE_SYSTEM, HMI_PAGE_EVENTS):
         page = HMI_PAGE_NOW
     if page != _last_rendered_page:
         _draw_page_frame(page)
         _last_rendered_page = page
     transport_status = cloud.transport_status_snapshot()
     rendered_ticks_ms = time.ticks_ms()
-    if page == HMI_PAGE_SYSTEM:
+    if page == HMI_PAGE_EVENTS:
+        render_events(build_events_hmi_model(observation))
+    elif page == HMI_PAGE_SYSTEM:
         render_system(build_system_hmi_model(
             observation, adopted_reference, rules_package,
             published_reference, transport_status, rendered_ticks_ms))
