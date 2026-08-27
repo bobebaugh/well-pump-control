@@ -1,4 +1,4 @@
-# Release: 2026-08-27 M6.21 — add the no-control EVENTS page foundation.
+# Release: 2026-08-27 M6.22 — add the no-control event lifecycle kernel.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -38,7 +38,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.21'
+SOFTWARE_RELEASE = 'M6.22'
 
 # M5 selection parameters live on CPU A. M6 supplies a validated rules
 # reference while CPU B remains a byte-preserving transport only.
@@ -535,6 +535,131 @@ def event_history_values(history):
     samples = history['samples']
     start = (history['nextIndex'] - count) % len(samples)
     return [samples[(start + offset) % len(samples)] for offset in range(count)]
+
+
+def new_rule_event_state(rule_id):
+    """Allocate one volatile CPU A lifecycle state; no consequence exists."""
+    if not isinstance(rule_id, str) or not rule_id:
+        raise ValueError('event rule id is required')
+    return {
+        'ruleId': rule_id,
+        'phase': 'inactive',
+        'active': False,
+        'conditionActive': False,
+        'confirmSinceMs': None,
+        'clearSinceMs': None,
+        'openedAtMs': None,
+    }
+
+
+def _event_rule_latched(rule):
+    return (isinstance(rule, dict) and
+            rule.get('response') == 'Trip—latched/manual reset')
+
+
+def _valid_event_rule_timing(rule):
+    if not isinstance(rule, dict):
+        return False
+    for name in ('confirmSeconds', 'clearSeconds'):
+        value = rule.get(name)
+        if (not isinstance(value, int) or isinstance(value, bool) or
+                value < 1):
+            return False
+    return (isinstance(rule.get('id'), str) and bool(rule.get('id')) and
+            isinstance(rule.get('enabled'), bool))
+
+
+def advance_rule_event(rule, state, condition_result, now_ms):
+    """Advance qualification/clear timing without evaluating or controlling.
+
+    ``condition_result`` is deliberately supplied by a later condition layer:
+    True and False are qualified evidence; None is unavailable evidence. The
+    function returns a copied state and at most one ``open`` or ``close``
+    transition. It never writes flash, submits cloud data, or drives a relay.
+    """
+    if (not _valid_event_rule_timing(rule) or not isinstance(state, dict) or
+            state.get('ruleId') != rule.get('id') or
+            not isinstance(now_ms, int) or isinstance(now_ms, bool) or
+            (condition_result is not True and condition_result is not False and
+             condition_result is not None)):
+        raise ValueError('invalid event lifecycle input')
+    next_state = dict(state)
+    transition = None
+
+    if rule.get('enabled') is not True:
+        if next_state.get('active') is True:
+            transition = {'type': 'close', 'reason': 'rules_updated'}
+        return new_rule_event_state(rule['id']), transition
+
+    phase = next_state.get('phase')
+    if phase not in ('inactive', 'confirming', 'active', 'clearing', 'latched'):
+        raise ValueError('invalid event lifecycle phase')
+
+    if condition_result is None:
+        next_state['conditionActive'] = None
+        if phase == 'confirming':
+            next_state.update({
+                'phase': 'inactive',
+                'confirmSinceMs': None,
+            })
+        elif phase == 'clearing':
+            next_state.update({
+                'phase': 'active',
+                'clearSinceMs': None,
+            })
+        return next_state, None
+
+    next_state['conditionActive'] = condition_result
+    if phase == 'inactive':
+        if condition_result:
+            next_state.update({
+                'phase': 'confirming',
+                'confirmSinceMs': now_ms,
+            })
+        return next_state, None
+
+    if phase == 'confirming':
+        if not condition_result:
+            return new_rule_event_state(rule['id']), None
+        if time.ticks_diff(now_ms, next_state.get('confirmSinceMs')) >= (
+                rule['confirmSeconds'] * 1000):
+            next_state.update({
+                'phase': 'active',
+                'active': True,
+                'confirmSinceMs': None,
+                'openedAtMs': now_ms,
+            })
+            transition = {'type': 'open', 'reason': 'condition_confirmed'}
+        return next_state, transition
+
+    if phase == 'active':
+        if condition_result:
+            return next_state, None
+        if _event_rule_latched(rule):
+            next_state['phase'] = 'latched'
+        else:
+            next_state.update({
+                'phase': 'clearing',
+                'clearSinceMs': now_ms,
+            })
+        return next_state, None
+
+    if phase == 'clearing':
+        if condition_result:
+            next_state.update({
+                'phase': 'active',
+                'clearSinceMs': None,
+            })
+            return next_state, None
+        if time.ticks_diff(now_ms, next_state.get('clearSinceMs')) >= (
+                rule['clearSeconds'] * 1000):
+            transition = {'type': 'close', 'reason': 'condition_cleared'}
+            return new_rule_event_state(rule['id']), transition
+        return next_state, None
+
+    if phase == 'latched' and condition_result:
+        next_state['phase'] = 'active'
+    return next_state, None
 
 
 def new_shelly_availability_confirmation(
