@@ -29,6 +29,17 @@ FUNCTIONS = {
     "new_event_history",
     "append_event_history",
     "event_history_values",
+    "runtime_observation_path_value",
+    "runtime_direct_field_values",
+    "_runtime_number",
+    "evaluate_runtime_program",
+    "evaluate_runtime_calculations",
+    "runtime_condition_value",
+    "new_runtime_event_state",
+    "_runtime_qualified",
+    "advance_runtime_event",
+    "evaluate_runtime_events",
+    "clear_runtime_event_board",
     "new_shelly_availability_confirmation",
     "shelly_availability_change_pending",
     "acknowledge_shelly_availability_change",
@@ -77,6 +88,7 @@ CONSTANTS = {
     "RUNTIME_POINTER_KIND",
     "RUNTIME_SCHEMA_VERSION",
     "RUNTIME_DIRECT_BINDINGS",
+    "RUNTIME_OBJECT_PATHS",
 }
 
 
@@ -501,6 +513,50 @@ class ObservationSelectionTests(unittest.TestCase):
         raw = self.runtime_body().replace("values.adc_raw", "values.unimplemented")
         pointer = self.runtime_pointer(raw)
         self.assertEqual(self.logic["validate_runtime_release"](raw, pointer)[1], "release-runtime-unsupported")
+
+    def test_runtime_resolves_filtered_adc_counts_and_compiles_pressure_locally(self):
+        package = json.loads(self.runtime_body())
+        package["calculations"] = [{
+            "kind": "expression", "program": [
+                ["field", "PressureADCCounts"], ["number", 3732.02],
+                ["operator", "-"], ["number", 211.492], ["operator", "/"]],
+            "output": {"systemName": "PressurePSI"},
+        }]
+        sample = observation()
+        sample["values"]["adc_raw"] = 3943
+        values = self.logic["runtime_direct_field_values"](package, sample)
+        self.logic["evaluate_runtime_calculations"](package, values)
+        self.assertEqual(values["PressureADCCounts"], 3943)
+        self.assertAlmostEqual(values["PressurePSI"], (3943 - 3732.02) / 211.492)
+
+    def test_runtime_condition_returns_unknown_for_missing_evidence(self):
+        condition = {"mode": "all", "clauses": [
+            {"field": "PressurePSI", "operator": "gte", "value": 60},
+        ]}
+        evaluate = self.logic["runtime_condition_value"]
+        self.assertIsNone(evaluate(condition, {}))
+        self.assertFalse(evaluate(condition, {"PressurePSI": 59.9}))
+        self.assertTrue(evaluate(condition, {"PressurePSI": 60.0}))
+
+    def test_runtime_events_qualify_but_never_emit_an_action(self):
+        event = {
+            "id": "EV-PRESSURE", "enabled": True, "latched": False,
+            "open": {"mode": "all", "clauses": [{"field": "PressurePSI", "operator": "gte", "value": 60}], "observationCount": 2, "minimumSeconds": 1},
+            "close": {"basis": "openingFalse", "observationCount": 1, "minimumSeconds": 0},
+            "actions": [{"target": "PumpEnable", "value": False}],
+        }
+        package = {"events": [event]}
+        board, transitions = self.logic["evaluate_runtime_events"](package, {}, {"PressurePSI": 61}, 0)
+        self.assertEqual(transitions, [])
+        board, transitions = self.logic["evaluate_runtime_events"](package, board, {"PressurePSI": 61}, 1000)
+        self.assertEqual(transitions, [{"type": "open", "reason": "condition_confirmed", "eventId": "EV-PRESSURE"}])
+        self.assertTrue(board["EV-PRESSURE"]["active"])
+
+    def test_runtime_package_sync_closes_open_events_with_rules_sync(self):
+        board = {"EV-OLD": dict(self.logic["new_runtime_event_state"]("EV-OLD"), active=True)}
+        cleared, transitions = self.logic["clear_runtime_event_board"](board)
+        self.assertEqual(cleared, {})
+        self.assertEqual(transitions, [{"type": "close", "reason": "rules_sync", "eventId": "EV-OLD"}])
 
     def test_invalid_runtime_never_replaces_last_valid_file(self):
         baseline = self.runtime_body()

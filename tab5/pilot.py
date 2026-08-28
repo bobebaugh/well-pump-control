@@ -1,4 +1,4 @@
-# Release: 2026-08-28 M6.23 — safely adopt the published v2 runtime package.
+# Release: 2026-08-28 M6.24 — evaluate v2 fields and events without control.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -38,7 +38,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.23'
+SOFTWARE_RELEASE = 'M6.24'
 
 # CPU A validates and adopts the v2 runtime package. CPU B carries only the
 # RTDB pointer and exact downloaded bytes; it never interprets package meaning.
@@ -565,6 +565,273 @@ def event_history_values(history):
     samples = history['samples']
     start = (history['nextIndex'] - count) % len(samples)
     return [samples[(start + offset) % len(samples)] for offset in range(count)]
+
+
+RUNTIME_OBJECT_PATHS = {
+    'shelly-gen1-em': {
+        'emeter/0.power': 'values.power', 'emeter/0.voltage': 'values.voltage',
+        'emeter/0.pf': 'values.pf', 'emeter/0.total': 'values.total',
+        '$availability': 'status.shelly_available',
+    },
+    'shelly-gen4-switch': {
+        'SW(0)': 'values.shelly1_sw0', 'RLY(0)': 'values.shelly1_rly0',
+        '$availability': 'status.shelly1_available',
+    },
+}
+
+
+def runtime_observation_path_value(observation, path):
+    value = observation
+    for part in path.split('.'):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def runtime_direct_field_values(package, observation):
+    """Resolve the fixed catalog into named values without device I/O."""
+    values = {}
+    if not isinstance(package, dict) or not isinstance(observation, dict):
+        return values
+    for device in package.get('devices', []):
+        if not isinstance(device, dict) or device.get('enabled') is not True:
+            continue
+        driver = device.get('driver')
+        for field in device.get('fields', []):
+            if not isinstance(field, dict):
+                continue
+            system_name = field.get('systemName')
+            object_name = field.get('object')
+            if not isinstance(system_name, str):
+                continue
+            if driver == 'tab5-runtime':
+                path = object_name
+            else:
+                path = RUNTIME_OBJECT_PATHS.get(driver, {}).get(object_name)
+            values[system_name] = (runtime_observation_path_value(observation, path)
+                                   if isinstance(path, str) else None)
+    return values
+
+
+def _runtime_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def evaluate_runtime_program(program, named_values):
+    """Evaluate the web-compiled postfix arithmetic subset with bounded RAM."""
+    if not isinstance(program, list) or len(program) > 128 or not isinstance(named_values, dict):
+        return None
+    stack = []
+    for instruction in program:
+        if not isinstance(instruction, list) or len(instruction) != 2:
+            return None
+        kind, value = instruction
+        if kind == 'number':
+            if not _runtime_number(value):
+                return None
+            stack.append(value)
+        elif kind == 'field':
+            value = named_values.get(value)
+            if not _runtime_number(value):
+                return None
+            stack.append(value)
+        elif kind == 'operator':
+            if value == 'neg':
+                if not stack:
+                    return None
+                stack[-1] = -stack[-1]
+                continue
+            if len(stack) < 2:
+                return None
+            right = stack.pop()
+            left = stack.pop()
+            if value == '+':
+                stack.append(left + right)
+            elif value == '-':
+                stack.append(left - right)
+            elif value == '*':
+                stack.append(left * right)
+            elif value == '/':
+                if right == 0:
+                    return None
+                stack.append(left / right)
+            else:
+                return None
+        else:
+            return None
+        if len(stack) > 64:
+            return None
+    return stack[0] if len(stack) == 1 and _runtime_number(stack[0]) else None
+
+
+def evaluate_runtime_calculations(package, named_values):
+    """Run only compiled expressions; function models remain explicit TBDs."""
+    if not isinstance(package, dict) or not isinstance(named_values, dict):
+        return named_values
+    for calculation in package.get('calculations', []):
+        if not isinstance(calculation, dict):
+            continue
+        if calculation.get('kind') == 'expression':
+            output = calculation.get('output')
+            if isinstance(output, dict) and isinstance(output.get('systemName'), str):
+                named_values[output['systemName']] = evaluate_runtime_program(
+                    calculation.get('program'), named_values)
+        elif calculation.get('kind') == 'function':
+            # The web compiler permits Boyle tank calculations, but its time
+            # window and quality semantics are a later bounded CPU-A unit.
+            for output in calculation.get('outputs', []):
+                if isinstance(output, dict) and isinstance(output.get('systemName'), str):
+                    named_values[output['systemName']] = None
+    return named_values
+
+
+def runtime_condition_value(condition, fields):
+    """Return True, False, or None when a required field is unavailable."""
+    if not isinstance(condition, dict) or not isinstance(fields, dict):
+        return None
+    clauses = condition.get('clauses')
+    if condition.get('mode') not in ('all', 'any') or not isinstance(clauses, list) or not clauses:
+        return None
+    results = []
+    for clause in clauses:
+        if not isinstance(clause, dict):
+            return None
+        current = fields.get(clause.get('field'))
+        expected = clause.get('value')
+        operator = clause.get('operator')
+        if current is None:
+            return None
+        if operator == 'eq':
+            result = current == expected
+        elif operator == 'neq':
+            result = current != expected
+        elif not (_runtime_number(current) and _runtime_number(expected)):
+            return None
+        elif operator == 'lt':
+            result = current < expected
+        elif operator == 'lte':
+            result = current <= expected
+        elif operator == 'gt':
+            result = current > expected
+        elif operator == 'gte':
+            result = current >= expected
+        elif operator in ('between', 'outside'):
+            if (not isinstance(expected, list) or len(expected) != 2 or
+                    not _runtime_number(expected[0]) or not _runtime_number(expected[1])):
+                return None
+            inside = expected[0] <= current <= expected[1]
+            result = inside if operator == 'between' else not inside
+        else:
+            # Transition and signal operators require a later history-aware
+            # evaluator. They are never fabricated into a true condition.
+            return None
+        results.append(result)
+    return all(results) if condition.get('mode') == 'all' else any(results)
+
+
+def new_runtime_event_state(event_id):
+    return {
+        'eventId': event_id, 'active': False, 'openCount': 0,
+        'openSinceMs': None, 'closeCount': 0, 'closeSinceMs': None,
+    }
+
+
+def _runtime_qualified(count, since_ms, condition, now_ms):
+    if not isinstance(condition, dict):
+        return False
+    observations = condition.get('observationCount')
+    seconds = condition.get('minimumSeconds')
+    if (not isinstance(observations, int) or observations < 1 or
+            not _runtime_number(seconds) or seconds < 0):
+        return False
+    return count >= observations and since_ms is not None and (
+        now_ms - since_ms >= int(seconds * 1000))
+
+
+def advance_runtime_event(event, state, open_result, close_result, now_ms):
+    """Advance one v2 event without generating a control request or I/O."""
+    if (not isinstance(event, dict) or not isinstance(state, dict) or
+            not isinstance(event.get('id'), str) or state.get('eventId') != event['id'] or
+            not isinstance(now_ms, int) or isinstance(now_ms, bool)):
+        raise ValueError('invalid runtime event input')
+    next_state = dict(state)
+    if event.get('enabled') is not True:
+        transition = ({'type': 'close', 'reason': 'rules_sync', 'eventId': event['id']}
+                      if next_state.get('active') is True else None)
+        return new_runtime_event_state(event['id']), transition
+    if open_result is None:
+        next_state['openCount'] = 0
+        next_state['openSinceMs'] = None
+    elif open_result:
+        if next_state['openCount'] == 0:
+            next_state['openSinceMs'] = now_ms
+        next_state['openCount'] += 1
+    else:
+        next_state['openCount'] = 0
+        next_state['openSinceMs'] = None
+    if not next_state.get('active'):
+        if open_result is True and _runtime_qualified(
+                next_state['openCount'], next_state['openSinceMs'], event.get('open'), now_ms):
+            next_state['active'] = True
+            next_state['closeCount'] = 0
+            next_state['closeSinceMs'] = None
+            return next_state, {'type': 'open', 'reason': 'condition_confirmed', 'eventId': event['id']}
+        return next_state, None
+    if event.get('latched') is True or close_result is None:
+        next_state['closeCount'] = 0
+        next_state['closeSinceMs'] = None
+        return next_state, None
+    if close_result:
+        if next_state['closeCount'] == 0:
+            next_state['closeSinceMs'] = now_ms
+        next_state['closeCount'] += 1
+        if _runtime_qualified(next_state['closeCount'], next_state['closeSinceMs'],
+                              event.get('close'), now_ms):
+            return new_runtime_event_state(event['id']), {
+                'type': 'close', 'reason': 'condition_cleared', 'eventId': event['id']}
+    else:
+        next_state['closeCount'] = 0
+        next_state['closeSinceMs'] = None
+    return next_state, None
+
+
+def evaluate_runtime_events(package, event_board, fields, now_ms):
+    """Evaluate v2 events locally; action lists are intentionally ignored."""
+    board = event_board if isinstance(event_board, dict) else {}
+    next_board = {}
+    transitions = []
+    events = package.get('events') if isinstance(package, dict) else []
+    for event in events if isinstance(events, list) else []:
+        if not isinstance(event, dict) or not isinstance(event.get('id'), str):
+            continue
+        previous = board.get(event['id'])
+        if not isinstance(previous, dict):
+            previous = new_runtime_event_state(event['id'])
+        open_result = runtime_condition_value(event.get('open'), fields)
+        if event.get('close', {}).get('basis') == 'openingFalse':
+            close_result = None if open_result is None else not open_result
+        else:
+            close_result = runtime_condition_value(event.get('close'), fields)
+        current, transition = advance_runtime_event(
+            event, previous, open_result, close_result, now_ms)
+        next_board[event['id']] = current
+        if transition is not None:
+            transitions.append(transition)
+    # A new package or deleted event cannot inherit an open event state.
+    for event_id, previous in board.items():
+        if event_id not in next_board and isinstance(previous, dict) and previous.get('active') is True:
+            transitions.append({'type': 'close', 'reason': 'rules_sync', 'eventId': event_id})
+    return next_board, transitions
+
+
+def clear_runtime_event_board(event_board):
+    transitions = []
+    if isinstance(event_board, dict):
+        for event_id, state in event_board.items():
+            if isinstance(state, dict) and state.get('active') is True:
+                transitions.append({'type': 'close', 'reason': 'rules_sync', 'eventId': event_id})
+    return {}, transitions
 
 
 def new_rule_event_state(rule_id):
@@ -2521,7 +2788,10 @@ while True:
             # A new package begins with no inherited events.  The evaluator is
             # deliberately not enabled in this acceptance release, so there
             # are no events to migrate or consequences to issue.
-            event_board = {}
+            event_board, closed_by_sync = clear_runtime_event_board(event_board)
+            for transition in closed_by_sync:
+                log('Runtime event closed on package sync: {}'.format(
+                    transition['eventId']))
             if not cloud.set_applied_rules(active_rules_reference):
                 raise RuntimeError('adopted runtime reference handoff failed')
             log('Runtime release adopted: release={}, hash={}'.format(
@@ -2614,6 +2884,20 @@ while True:
         shelly1_failure_count, ads_raw_count=ads_raw_count)
     observation['status']['rules_runtime_state'] = rules_runtime_state
     observation['status']['rules_runtime_reason'] = rules_runtime_reason
+    if active_rules is not None:
+        runtime_values = runtime_direct_field_values(active_rules, observation)
+        evaluate_runtime_calculations(active_rules, runtime_values)
+        # Named values are additive to the complete observation envelope. This
+        # is how the published package's ADC-count pressure expression becomes
+        # visible without a second voltage conversion or a cloud calculation.
+        observation['values'].update(runtime_values)
+        event_board, runtime_transitions = evaluate_runtime_events(
+            active_rules, event_board, runtime_values, observation_ticks_ms)
+        # The acceptance release evaluates only; it does not send event
+        # records or act on package actions. All published events are disabled.
+        for transition in runtime_transitions:
+            log('Runtime event {}: {}'.format(
+                transition['type'], transition['eventId']))
     last_observation = observation
     append_event_history(event_history, observation)
     shelly_availability_pending = shelly_availability_change_pending(
