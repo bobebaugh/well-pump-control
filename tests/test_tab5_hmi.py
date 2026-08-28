@@ -160,7 +160,7 @@ class HmiFoundationTests(unittest.TestCase):
 
     def test_enabled_count_accepts_only_explicit_true(self):
         count = self.logic["enabled_rule_count"]
-        self.assertEqual(count({"rules": [
+        self.assertEqual(count({"events": [
             {"enabled": True},
             {"enabled": False},
             {"enabled": 1},
@@ -185,13 +185,13 @@ class HmiFoundationTests(unittest.TestCase):
         adopted = {"version": 2, "contentHash": adopted_hash}
         model = self.logic["build_system_hmi_model"](
             observation(), adopted,
-            {"rules": [{"enabled": False}]},
+            {"events": [{"enabled": False}]},
             dict(adopted),
             transport(),
             10000,
         )
         self.assertEqual(model["collection"], "ACTIVE")
-        self.assertEqual(model["rule_engine"], "NOT IMPLEMENTED")
+        self.assertEqual(model["rule_engine"], "PACKAGE ADOPTION ONLY")
         self.assertEqual(model["system_override"], "NOT AVAILABLE")
         self.assertEqual(model["pressure"], "NOT COMMISSIONED")
         self.assertEqual(model["rules_status"], "ACTIVE")
@@ -254,8 +254,8 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertNotIn("submit", events_source.lower())
         self.assertNotIn("cloud.", events_source)
 
-    def test_release_is_m622(self):
-        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.22")
+    def test_release_is_m623(self):
+        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.23")
 
     def test_touch_service_is_not_limited_to_remaining_cycle_sleep(self):
         source = PILOT_PATH.read_text(encoding="utf-8")
@@ -282,7 +282,7 @@ class HmiFoundationTests(unittest.TestCase):
         boot_loop = source[source.index("while True:\n", source.index(
             "Operational HMI foundation initialized")):]
         self.assertIn(
-            "read_ads1110_microvolts(service_navigation)", boot_loop)
+            "read_ads1110_filtered_raw_count(service_navigation)", boot_loop)
         self.assertGreaterEqual(boot_loop.count("service_navigation()"), 5)
 
     def test_now_page_uses_large_bottom_rows_and_dirty_field_cache(self):

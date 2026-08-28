@@ -1,4 +1,4 @@
-# Release: 2026-08-27 M6.22 — add the no-control event lifecycle kernel.
+# Release: 2026-08-28 M6.23 — safely adopt the published v2 runtime package.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -38,10 +38,10 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.22'
+SOFTWARE_RELEASE = 'M6.23'
 
-# M5 selection parameters live on CPU A. M6 supplies a validated rules
-# reference while CPU B remains a byte-preserving transport only.
+# CPU A validates and adopts the v2 runtime package. CPU B carries only the
+# RTDB pointer and exact downloaded bytes; it never interprets package meaning.
 SITE_ID = 'well-main'
 DEVICE_ID = 'tab5-well-main'
 MAX_DURABLE_OBSERVATION_INTERVAL_MS = 600000
@@ -82,24 +82,39 @@ MATERIAL_CHANGE_LABELS = {
     'status.shelly_available': 'Shelly EM',
     'status.shelly1_available': 'Shelly 1',
 }
-RULES_FILE = 'rules.json'
-RULES_TEMP_FILE = '.rules.json.download'
+RULES_RUNTIME_FILE = 'rules-runtime-v2.json'
+RULES_RUNTIME_TEMP_FILE = '.rules-runtime-v2.download'
 RULES_FETCH_RETRY_MS = 60000
 MAX_RULES_RELEASE_BYTES = 65536
-PACKAGED_RULES_REFERENCE = {
-    'version': 1,
-    'contentHash': 'ee0220eebdd0fa9b3b9751435180c17a16d3c93cb5f7325f1ab74d8d132e410a',
+RUNTIME_PACKAGE_KIND = 'well-pump-parameter-runtime'
+RUNTIME_POINTER_KIND = 'well-pump-runtime-release-pointer'
+RUNTIME_SCHEMA_VERSION = 2
+RUNTIME_DIRECT_BINDINGS = {
+    'shelly-gen1-em': {
+        'emeter/0.power': ('number', 'W', 'read'),
+        'emeter/0.voltage': ('number', 'V', 'read'),
+        'emeter/0.pf': ('number', None, 'read'),
+        'emeter/0.total': ('number', 'Wh', 'read'),
+        '$availability': ('boolean', None, 'read'),
+    },
+    'shelly-gen4-switch': {
+        'SW(0)': ('boolean', None, 'read'),
+        'RLY(0)': ('boolean', None, 'readWrite'),
+        'UDF(IsLocked)': ('integer', 's', 'read'),
+        '$availability': ('boolean', None, 'read'),
+    },
+    'tab5-runtime': {
+        'values.adc_raw': ('integer', 'count', 'read'),
+        'status.pressure_sensor_commissioned': ('boolean', None, 'read'),
+        'status.adc_available': ('boolean', None, 'read'),
+        'status.clock_synced': ('boolean', None, 'read'),
+        'status.wifi_connected': ('boolean', None, 'read'),
+        'status.cloud_available': ('boolean', None, 'read'),
+        'values.battery_percent': ('number', '%', 'read'),
+        'status.buffer_used_pct': ('number', '%', 'read'),
+        'status.records_lost': ('integer', 'count', 'read'),
+    },
 }
-EXPECTED_RULE_IDS = (
-    'P001', 'P002', 'P003', 'P004', 'P005', 'P006', 'P007', 'P008',
-    'P009', 'P010', 'P011', 'P012', 'P013', 'P014', 'P015', 'P016',
-    'E001', 'E002', 'E003', 'E004', 'E005', 'E006', 'E007', 'E008',
-    'E009', 'T001', 'T002', 'T003', 'T004', 'T005', 'T006', 'T007',
-    'T008', 'T009', 'T010', 'T011', 'T012', 'T013', 'H001', 'H002',
-    'H003', 'H004', 'H005', 'H006', 'H007', 'H008', 'H009', 'H010',
-    'H011', 'H012', 'H013', 'H014', 'H015', 'H016', 'H017', 'H018',
-    'H019', 'H020', 'H021',
-)
 
 I2C_ANTENNA_ADDR = 0x43
 REG_IO_DIR = 0x03
@@ -346,6 +361,18 @@ def read_ads1110_microvolts(service=None):
     return trimmed_mean_microvolts(samples)
 
 
+def read_ads1110_filtered_raw_count(service=None):
+    """Return the trimmed five-conversion mean in native ADC counts."""
+    samples = []
+    for _index in range(ADC_FILTER_SAMPLE_COUNT):
+        value = read_ads1110_fresh_raw_count(service)
+        if value is None:
+            return None
+        samples.append(value)
+    samples.sort()
+    return sum(samples[1:-1]) // (ADC_FILTER_SAMPLE_COUNT - 2)
+
+
 def read_battery():
     """Returns (voltage_v, current_a, level_pct, charging) from M5.Power - None for every
     field if the read failed. See the battery section above for why this doesn't talk to
@@ -444,7 +471,7 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
                       shelly1=None, shelly1_is_available=False,
                       shelly1_poll_was_attempted=False,
                       shelly1_last_valid_ticks_ms=None,
-                      shelly1_failures=0):
+                      shelly1_failures=0, ads_raw_count=None):
     """Build the variable-sized record whose ownership transfers to CPU B."""
     return {
         'schemaVersion': 1,
@@ -463,6 +490,9 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
             'is_valid': shelly.get('is_valid'),
             'total': shelly.get('total'),
             'total_returned': shelly.get('total_returned'),
+            # The runtime contract uses native filtered ADC counts.  The
+            # microvolt field is retained only as pilot diagnostic evidence.
+            'adc_raw': ads_raw_count,
             'adc_microvolts': ads_microvolts,
             # Preserve the M6.17 end-to-end calculation as separate evidence.
             # pressure_valid below prevents an uncommissioned input from being
@@ -830,8 +860,16 @@ def build_durable_observation(observation, session_id, publish_reason,
         return None
     if publish_reason not in ('material-change', 'maximum-interval'):
         return None
-    if rules_reference is None:
-        rules_reference = PACKAGED_RULES_REFERENCE
+    if not isinstance(rules_reference, dict):
+        return None
+    legacy_rules_reference = {
+        'version': rules_reference.get('version'),
+        'contentHash': rules_reference.get('contentHash'),
+    }
+    if (not isinstance(legacy_rules_reference['version'], int) or
+            legacy_rules_reference['version'] < 1 or
+            not _valid_rules_hash(legacy_rules_reference['contentHash'])):
+        return None
     record = dict(observation)
     record.update({
         'schemaVersion': 1,
@@ -843,7 +881,10 @@ def build_durable_observation(observation, session_id, publish_reason,
         'sessionId': session_id,
         'source': 'tab5',
         'publishReason': publish_reason,
-        'rulesRelease': dict(rules_reference),
+        # M4 durable-observation ingestion has a two-field rulesRelease
+        # contract.  The full v2 adoption reference remains local/RTDB state
+        # until the separate durable-record contract upgrade.
+        'rulesRelease': legacy_rules_reference,
     })
     return record
 
@@ -909,187 +950,221 @@ def _valid_rules_hash(value):
     return True
 
 
-def _valid_rules_release_id(value, version):
+def _valid_runtime_release_id(value, version):
+    prefix = '-parameters-v'
     if (not isinstance(value, str) or not isinstance(version, int) or
             isinstance(version, bool) or version < 1):
         return False
-    prefix = value[:14]
-    suffix = '-rules-v{}'.format(version)
-    return prefix.isdigit() and value.endswith(suffix) and len(value) == 14 + len(suffix)
+    suffix = '{}{}'.format(prefix, version)
+    return value[:14].isdigit() and value.endswith(suffix) and len(value) == 14 + len(suffix)
 
 
-def _check_rules_metadata(metadata):
-    """Return normalized metadata plus a nonsecret rejection reason when invalid."""
-    if not isinstance(metadata, dict):
-        return None, 'not-an-object'
-    required = (
-        'schemaVersion', 'siteId', 'releaseId', 'rulesVersion',
-        'rulesSchemaVersion', 'contentHash', 'hashAlgorithm',
-        'publishedAtMs', 'downloadPath',
-    )
+def _valid_integral_nonnegative(value):
+    return (isinstance(value, int) and not isinstance(value, bool) and value >= 0) or (
+        isinstance(value, float) and value >= 0 and value == int(value))
+
+
+def _check_runtime_pointer(pointer):
+    """Validate only the RTDB v2 delivery pointer on CPU A."""
+    if not isinstance(pointer, dict):
+        return None, 'pointer-not-an-object'
+    required = ('schemaVersion', 'kind', 'siteId', 'releaseId', 'packageVersion',
+                'runtimeSchemaVersion', 'contentHash', 'hashAlgorithm',
+                'byteLength', 'publishedAtMs', 'downloadPath')
     for field in required:
-        if field not in metadata:
-            return None, 'missing-{}'.format(field)
-    if metadata.get('schemaVersion') != 1 or metadata.get('siteId') != SITE_ID:
-        return None, 'schema-or-site'
-    if metadata.get('rulesSchemaVersion') != 1 or metadata.get('hashAlgorithm') != 'sha256':
-        return None, 'schema-or-hash-algorithm'
-    published_at_ms = metadata.get('publishedAtMs')
-    published_at_is_integral = (
-        isinstance(published_at_ms, int) and not isinstance(published_at_ms, bool) or
-        isinstance(published_at_ms, float) and published_at_ms >= 0 and
-        published_at_ms == int(published_at_ms)
-    )
-    if (not isinstance(metadata.get('rulesVersion'), int) or
-            isinstance(metadata.get('rulesVersion'), bool) or
-            metadata.get('rulesVersion') < 1):
-        return None, 'rulesVersion'
-    if not published_at_is_integral or published_at_ms < 0:
-        return None, 'publishedAtMs'
-    if not _valid_rules_hash(metadata.get('contentHash')):
-        return None, 'contentHash'
-    if not _valid_rules_release_id(metadata.get('releaseId'), metadata.get('rulesVersion')):
-        return None, 'releaseId'
-    path = metadata.get('downloadPath')
-    prefix = '/.netlify/functions/rules-release/'
-    if not isinstance(path, str) or not path.startswith(prefix) or not path.endswith('.json'):
-        return None, 'downloadPath-shape'
-    suffix = path[len(prefix):-5]
-    if not suffix or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-' for char in suffix):
-        return None, 'downloadPath-characters'
+        if field not in pointer:
+            return None, 'pointer-missing-{}'.format(field)
+    if (pointer.get('schemaVersion') != RUNTIME_SCHEMA_VERSION or
+            pointer.get('kind') != RUNTIME_POINTER_KIND or pointer.get('siteId') != SITE_ID or
+            pointer.get('runtimeSchemaVersion') != RUNTIME_SCHEMA_VERSION or
+            pointer.get('hashAlgorithm') != 'sha256'):
+        return None, 'pointer-schema'
+    version = pointer.get('packageVersion')
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        return None, 'pointer-packageVersion'
+    if not _valid_runtime_release_id(pointer.get('releaseId'), version):
+        return None, 'pointer-releaseId'
+    if not _valid_rules_hash(pointer.get('contentHash')):
+        return None, 'pointer-contentHash'
+    if (not _valid_integral_nonnegative(pointer.get('publishedAtMs')) or
+            not _valid_integral_nonnegative(pointer.get('byteLength')) or
+            pointer.get('byteLength') < 1 or pointer.get('byteLength') > MAX_RULES_RELEASE_BYTES):
+        return None, 'pointer-size-or-time'
+    expected_path = '/.netlify/functions/rules-engine-release?releaseId={}'.format(pointer['releaseId'])
+    if pointer.get('downloadPath') != expected_path:
+        return None, 'pointer-downloadPath'
     return {
-        'schemaVersion': 1,
-        'siteId': SITE_ID,
-        'releaseId': metadata['releaseId'],
-        'rulesVersion': metadata['rulesVersion'],
-        'rulesSchemaVersion': 1,
-        'contentHash': metadata['contentHash'],
-        'hashAlgorithm': 'sha256',
-        'publishedAtMs': metadata['publishedAtMs'],
-        'downloadPath': path,
+        'schemaVersion': RUNTIME_SCHEMA_VERSION, 'kind': RUNTIME_POINTER_KIND,
+        'siteId': SITE_ID, 'releaseId': pointer['releaseId'],
+        'packageVersion': version, 'runtimeSchemaVersion': RUNTIME_SCHEMA_VERSION,
+        'contentHash': pointer['contentHash'], 'hashAlgorithm': 'sha256',
+        'byteLength': int(pointer['byteLength']), 'publishedAtMs': int(pointer['publishedAtMs']),
+        'downloadPath': expected_path,
     }, None
 
 
-def validate_rules_metadata(metadata):
-    """Validate the M2 rules pointer without interpreting rule conditions."""
-    normalized, _reason = _check_rules_metadata(metadata)
+def validate_runtime_pointer(pointer):
+    normalized, _reason = _check_runtime_pointer(pointer)
     return normalized
 
 
-def rules_metadata_rejection_reason(metadata):
-    """Return only a field-level validation reason; never return pointer data."""
-    _normalized, reason = _check_rules_metadata(metadata)
+def runtime_pointer_rejection_reason(pointer):
+    _normalized, reason = _check_runtime_pointer(pointer)
     return reason
 
 
-def rules_metadata_key_summary(metadata):
-    """Return a short field-name-only description for a rejected pointer."""
-    if not isinstance(metadata, dict):
+def runtime_pointer_key_summary(pointer):
+    if not isinstance(pointer, dict):
         return 'not-an-object'
-    keys = list(metadata.keys())
+    keys = list(pointer.keys())
     keys.sort()
-    if not keys:
-        return 'empty-object'
-    # RTDB field names identify the record shape but reveal no pointer values.
-    return ','.join(keys[:12])
+    return ','.join(keys[:12]) if keys else 'empty-object'
 
-def validate_rules_release(raw_release, metadata=None):
-    """Check release bytes, supported schema, and all workbook rule rows.
 
-    This deliberately validates package shape only. M7 will interpret the
-    conditions and create event state; M6 never evaluates a rule.
-    """
-    if (not isinstance(raw_release, str) or not raw_release or
-            len(raw_release.encode('utf-8')) > MAX_RULES_RELEASE_BYTES):
+def _runtime_field_valid(field, driver, names):
+    if not isinstance(field, dict) or not isinstance(field.get('systemName'), str):
+        return False
+    name = field['systemName']
+    if not name or name in names or not isinstance(field.get('logging'), dict):
+        return False
+    binding = RUNTIME_DIRECT_BINDINGS.get(driver, {}).get(field.get('object'))
+    if binding is None:
+        return False
+    if (field.get('type'), field.get('unit'), field.get('access')) != binding:
+        return False
+    if field.get('access') == 'readWrite':
+        write = field.get('write')
+        if (not isinstance(write, dict) or write.get('method') != 'Switch.Set' or
+                write.get('parameters') != {'id': 0, 'valueParameter': 'on'} or
+                write.get('normalValue') is not True):
+            return False
+    names.add(name)
+    return True
+
+
+def _runtime_package_valid(package):
+    if not isinstance(package, dict):
+        return False
+    required = ('schemaVersion', 'kind', 'releaseId', 'packageVersion', 'deliveryEnabled',
+                'devices', 'calculations', 'events')
+    if any(field not in package for field in required):
+        return False
+    if (package.get('schemaVersion') != RUNTIME_SCHEMA_VERSION or
+            package.get('kind') != RUNTIME_PACKAGE_KIND or
+            not isinstance(package.get('packageVersion'), int) or
+            isinstance(package.get('packageVersion'), bool) or package.get('packageVersion') < 1 or
+            not _valid_runtime_release_id(package.get('releaseId'), package.get('packageVersion')) or
+            package.get('deliveryEnabled') is not False):
+        return False
+    devices = package.get('devices')
+    calculations = package.get('calculations')
+    events = package.get('events')
+    if (not isinstance(devices, list) or not devices or len(devices) > 8 or
+            not isinstance(calculations, list) or len(calculations) > 32 or
+            not isinstance(events, list) or len(events) > 64):
+        return False
+    names = set()
+    device_ids = set()
+    for device in devices:
+        if (not isinstance(device, dict) or not isinstance(device.get('id'), str) or
+                not device['id'] or device['id'] in device_ids or
+                device.get('driver') not in RUNTIME_DIRECT_BINDINGS or
+                not isinstance(device.get('address'), str) or not device['address'] or
+                not isinstance(device.get('enabled'), bool) or
+                not isinstance(device.get('fields'), list) or not device['fields'] or
+                len(device['fields']) > 32):
+            return False
+        device_ids.add(device['id'])
+        for field in device['fields']:
+            if not _runtime_field_valid(field, device['driver'], names):
+                return False
+    for calculation in calculations:
+        if not isinstance(calculation, dict) or calculation.get('kind') not in ('expression', 'function'):
+            return False
+        if calculation.get('kind') == 'expression':
+            program = calculation.get('program')
+            output = calculation.get('output')
+            if (not isinstance(program, list) or not program or len(program) > 128 or
+                    not isinstance(output, dict) or not isinstance(output.get('systemName'), str)):
+                return False
+            for instruction in program:
+                if (not isinstance(instruction, list) or len(instruction) != 2 or
+                        instruction[0] not in ('number', 'field', 'operator')):
+                    return False
+            names.add(output['systemName'])
+        elif calculation.get('functionId') != 'boyle_tank':
+            return False
+    event_ids = set()
+    for event in events:
+        if (not isinstance(event, dict) or not isinstance(event.get('id'), str) or
+                not event['id'] or event['id'] in event_ids or
+                not isinstance(event.get('enabled'), bool) or not isinstance(event.get('actions'), list) or
+                not isinstance(event.get('open'), dict) or not isinstance(event.get('close'), dict)):
+            return False
+        event_ids.add(event['id'])
+    return True
+
+
+def validate_runtime_release(raw_release, pointer=None):
+    """Verify v2 bytes and the bounded runtime shape before any flash write."""
+    if not isinstance(raw_release, str) or not raw_release:
+        return None, 'release-empty'
+    try:
+        byte_length = len(raw_release.encode('utf-8'))
+    except Exception:
+        return None, 'release-encoding'
+    if byte_length > MAX_RULES_RELEASE_BYTES:
         return None, 'release-size'
     content_hash = _sha256_hex(raw_release)
     if content_hash is None:
         return None, 'release-hash-unavailable'
-    if metadata is not None:
-        metadata = validate_rules_metadata(metadata)
-        if metadata is None:
-            return None, 'metadata-invalid'
-        if content_hash != metadata.get('contentHash'):
-            return None, 'release-hash-mismatch'
+    normalized_pointer = None
+    if pointer is not None:
+        normalized_pointer = validate_runtime_pointer(pointer)
+        if normalized_pointer is None:
+            return None, 'pointer-invalid'
+        if (content_hash != normalized_pointer['contentHash'] or
+                byte_length != normalized_pointer['byteLength']):
+            return None, 'release-integrity-mismatch'
     try:
         package = ujson.loads(raw_release)
     except Exception:
         return None, 'release-json-invalid'
-    required = (
-        'schemaVersion', 'kind', 'releaseId', 'rulesVersion',
-        'rulesSchemaVersion', 'sourceWorkbook', 'rules',
-    )
-    if not isinstance(package, dict) or any(field not in package for field in required):
-        return None, 'release-incomplete'
-    if (package.get('schemaVersion') != 1 or
-            package.get('kind') != 'well-pump-rules-release' or
-            package.get('rulesSchemaVersion') != 1 or
-            package.get('sourceWorkbook') != 'well_pump_operational_rules_1.xlsx' or
-            not isinstance(package.get('rulesVersion'), int) or
-            isinstance(package.get('rulesVersion'), bool) or
-            package.get('rulesVersion') < 1):
-        return None, 'release-schema-unsupported'
-    if not _valid_rules_release_id(package.get('releaseId'), package.get('rulesVersion')):
-        return None, 'release-schema-unsupported'
-    if metadata is not None and (
-            package.get('releaseId') != metadata.get('releaseId') or
-            package.get('rulesVersion') != metadata.get('rulesVersion')):
-        return None, 'release-metadata-mismatch'
-    rules = package.get('rules')
-    if not isinstance(rules, list) or len(rules) != len(EXPECTED_RULE_IDS):
-        return None, 'release-rule-count'
-    ids = []
-    for rule in rules:
-        if not isinstance(rule, dict):
-            return None, 'release-rule-shape'
-        if (not isinstance(rule.get('id'), str) or
-                not isinstance(rule.get('event'), str) or not rule.get('event') or
-                not isinstance(rule.get('enabled'), bool) or
-                rule.get('level') not in (None, 'Yellow', 'Red') or
-                rule.get('response') not in ('Observe', 'Alert', 'Trip—while active',
-                                             'Trip—recovery policy', 'Trip—latched/manual reset') or
-                not isinstance(rule.get('confirmSeconds'), int) or
-                isinstance(rule.get('confirmSeconds'), bool) or rule.get('confirmSeconds') < 1 or
-                not isinstance(rule.get('clearSeconds'), int) or
-                isinstance(rule.get('clearSeconds'), bool) or rule.get('clearSeconds') < 1 or
-                not isinstance(rule.get('conditions'), dict) or not rule.get('conditions') or
-                not isinstance(rule.get('notify'), bool) or
-                not isinstance(rule.get('commissioningStatus'), str) or not rule.get('commissioningStatus')):
-            return None, 'release-rule-invalid'
-        ids.append(rule['id'])
-    if tuple(ids) != EXPECTED_RULE_IDS:
-        return None, 'release-completeness'
-    return {
-        'package': package,
-        'reference': {
-            'version': package['rulesVersion'],
-            'contentHash': content_hash,
-        },
-        'metadata': metadata,
-    }, None
+    if not _runtime_package_valid(package):
+        return None, 'release-runtime-unsupported'
+    if normalized_pointer is not None and (
+            package.get('releaseId') != normalized_pointer['releaseId'] or
+            package.get('packageVersion') != normalized_pointer['packageVersion']):
+        return None, 'release-pointer-mismatch'
+    reference = {
+        'releaseId': package['releaseId'], 'packageVersion': package['packageVersion'],
+        'runtimeSchemaVersion': RUNTIME_SCHEMA_VERSION, 'contentHash': content_hash,
+    }
+    # device-sync v1 still carries version/hash only. CPU B derives that small
+    # compatibility view from this CPU-A-created reference.
+    reference['version'] = package['packageVersion']
+    return {'package': package, 'reference': reference, 'pointer': normalized_pointer}, None
 
 
-def load_packaged_rules(path=RULES_FILE):
-    """Load the installed baseline. It must be valid before CPU A starts."""
+def load_runtime_package(path=RULES_RUNTIME_FILE):
     try:
         with open(path, 'r') as handle:
             raw_release = handle.read()
     except Exception:
-        return None, 'baseline-unavailable'
-    return validate_rules_release(raw_release)
+        return None, 'runtime-unavailable'
+    return validate_runtime_release(raw_release)
 
 
-def adopt_rules_release(candidate, active_reference,
-                        path=RULES_FILE, temporary_path=RULES_TEMP_FILE):
-    """Validate in RAM, then use one atomic rename to replace last-known-good."""
+def adopt_runtime_release(candidate, active_reference,
+                          path=RULES_RUNTIME_FILE,
+                          temporary_path=RULES_RUNTIME_TEMP_FILE):
     if not isinstance(candidate, dict):
         return None, 'candidate-invalid'
     raw_release = candidate.get('release')
-    checked, reason = validate_rules_release(raw_release, candidate.get('metadata'))
+    checked, reason = validate_runtime_release(raw_release, candidate.get('metadata'))
     if checked is None:
         return None, reason
-    reference = checked['reference']
-    if active_reference == reference:
+    if active_reference == checked['reference']:
         return checked, 'already-active'
     try:
         with open(temporary_path, 'w') as handle:
@@ -1138,25 +1213,26 @@ def pressure_hmi_value(ads_microvolts, commissioned=PRESSURE_SENSOR_COMMISSIONED
 
 
 def enabled_rule_count(rules_package):
-    """Count only explicit boolean-enabled rows in the adopted package."""
+    """Count only explicit enabled events in an adopted v2 package."""
     if not isinstance(rules_package, dict):
         return 0
-    rules = rules_package.get('rules')
-    if not isinstance(rules, list):
+    events = rules_package.get('events')
+    if not isinstance(events, list):
         return 0
-    return sum(1 for rule in rules
-               if isinstance(rule, dict) and rule.get('enabled') is True)
+    return sum(1 for event in events
+               if isinstance(event, dict) and event.get('enabled') is True)
 
 
 def rules_alignment_status(adopted_reference, published_reference):
     """Never report ACTIVE without matching version and complete SHA-256 hash."""
     if not isinstance(adopted_reference, dict):
-        return 'ADOPTED UNKNOWN'
+        return 'UNAVAILABLE'
     if not isinstance(published_reference, dict):
         return 'PUBLISHED UNKNOWN'
     adopted_hash = adopted_reference.get('contentHash')
     published_hash = published_reference.get('contentHash')
-    if (adopted_reference.get('version') == published_reference.get('version') and
+    if (adopted_reference.get('packageVersion', adopted_reference.get('version')) ==
+            published_reference.get('packageVersion', published_reference.get('version')) and
             isinstance(adopted_hash, str) and len(adopted_hash) == 64 and
             adopted_hash == published_hash):
         return 'ACTIVE'
@@ -1346,7 +1422,8 @@ def build_system_hmi_model(observation, adopted_reference, rules_package,
     return {
         'release': SOFTWARE_RELEASE,
         'collection': 'ACTIVE',
-        'rule_engine': 'NOT IMPLEMENTED',
+        'rule_engine': ('PACKAGE ADOPTION ONLY' if isinstance(adopted_reference, dict)
+                        else 'RULES UNAVAILABLE'),
         'system_override': 'NOT AVAILABLE',
         'wifi': 'UP' if status.get('wifi_connected') is True else 'DOWN',
         'network': ('READY' if status.get('network_traffic_allowed') is True
@@ -2329,17 +2406,25 @@ internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
 log('CPU A release M6.19: touch serviced throughout acquisition cycle')
 
-_installed_rules, _rules_error = load_packaged_rules()
-if _installed_rules is None:
-    # A corrupt or missing shipped baseline is a release-build error. Do not
-    # pretend a rule package exists; M7 must never receive an unknown policy.
-    raise RuntimeError('validated rules baseline unavailable: {}'.format(_rules_error))
-active_rules = _installed_rules['package']
-active_rules_reference = _installed_rules['reference']
-if not cloud.set_applied_rules(active_rules_reference):
-    raise RuntimeError('validated rules baseline handoff failed')
-log('Rules baseline loaded: version={}, hash={}'.format(
-    active_rules_reference['version'], active_rules_reference['contentHash'][:12]))
+_installed_runtime, _runtime_error = load_runtime_package()
+active_rules = None
+active_rules_reference = None
+rules_runtime_state = 'UNAVAILABLE'
+rules_runtime_reason = _runtime_error
+if _installed_runtime is not None:
+    active_rules = _installed_runtime['package']
+    active_rules_reference = _installed_runtime['reference']
+    rules_runtime_state = 'ADOPTED'
+    rules_runtime_reason = None
+    if not cloud.set_applied_rules(active_rules_reference):
+        raise RuntimeError('validated runtime reference handoff failed')
+    log('Rules runtime loaded: release={}, hash={}'.format(
+        active_rules_reference['releaseId'], active_rules_reference['contentHash'][:12]))
+else:
+    # v1 rules.json is intentionally not a fallback.  CPU A remains
+    # observational and cannot evaluate or request consequences until an
+    # intact v2 runtime package has been adopted.
+    log('Rules runtime unavailable: {}'.format(_runtime_error))
 
 # Assume charging is permitted until the first battery poll below says otherwise -
 # M5.Power has no getter for the enable pin itself (only isCharging(), which reflects
@@ -2372,6 +2457,7 @@ last_durable_observation = None
 last_durable_observation_ms = None
 next_rules_request_ms = 0
 published_rules_reference = None
+event_board = {}
 
 log('Operational HMI foundation initialized; no event or control authority')
 render_hmi(hmi_page, {}, active_rules_reference, active_rules,
@@ -2399,73 +2485,61 @@ while True:
     # it never waits for either network operation.
     rules_pointer = cloud.take_rules_pointer()
     if rules_pointer is not None:
-        metadata = validate_rules_metadata(rules_pointer)
+        metadata = validate_runtime_pointer(rules_pointer)
         if metadata is None:
-            log('Rules pointer ignored: {} [M6.7 keys={}]'.format(
-                rules_metadata_rejection_reason(rules_pointer),
-                rules_metadata_key_summary(rules_pointer)))
+            rules_runtime_state = 'REJECTED'
+            rules_runtime_reason = runtime_pointer_rejection_reason(rules_pointer)
+            log('Runtime pointer ignored: {} [keys={}]'.format(
+                rules_runtime_reason, runtime_pointer_key_summary(rules_pointer)))
         else:
             published_rules_reference = {
-                'version': metadata['rulesVersion'],
+                'releaseId': metadata['releaseId'],
+                'packageVersion': metadata['packageVersion'],
+                'runtimeSchemaVersion': metadata['runtimeSchemaVersion'],
+                'version': metadata['packageVersion'],
                 'contentHash': metadata['contentHash'],
             }
         if (metadata is not None and
-                metadata.get('contentHash') != active_rules_reference.get('contentHash') and
+                (active_rules_reference is None or
+                 metadata.get('contentHash') != active_rules_reference.get('contentHash')) and
                 time.ticks_diff(now, next_rules_request_ms) >= 0):
-            log('Rules pointer accepted: release={}'.format(metadata['releaseId']))
+            log('Runtime pointer accepted: release={}'.format(metadata['releaseId']))
             if cloud.request_rules_release(metadata):
                 next_rules_request_ms = time.ticks_add(now, RULES_FETCH_RETRY_MS)
-                log('Rules release request queued for CPU B')
+                log('Runtime release request queued for CPU B')
     release_candidate = cloud.take_rules_release()
     if release_candidate is not None:
-        candidate_metadata = validate_rules_metadata(
+        candidate_metadata = validate_runtime_pointer(
             release_candidate.get('metadata') if isinstance(release_candidate, dict) else None)
-        adopted, outcome = adopt_rules_release(
+        adopted, outcome = adopt_runtime_release(
             release_candidate, active_rules_reference)
         if adopted is not None and outcome == 'adopted':
             active_rules = adopted['package']
             active_rules_reference = adopted['reference']
+            rules_runtime_state = 'ADOPTED'
+            rules_runtime_reason = None
+            # A new package begins with no inherited events.  The evaluator is
+            # deliberately not enabled in this acceptance release, so there
+            # are no events to migrate or consequences to issue.
+            event_board = {}
             if not cloud.set_applied_rules(active_rules_reference):
-                raise RuntimeError('adopted rules reference handoff failed')
-            log('Rules release adopted: version={}, hash={}'.format(
-                active_rules_reference['version'],
+                raise RuntimeError('adopted runtime reference handoff failed')
+            log('Runtime release adopted: release={}, hash={}'.format(
+                active_rules_reference['releaseId'],
                 active_rules_reference['contentHash'][:12]))
-            rules_audit = build_rules_audit_record(
-                'rule-adoption', format_observed_at(clock_synced),
-                device_session_id, observation_sequence, active_rules_reference,
-                candidate_metadata['releaseId'] if candidate_metadata is not None else None)
-            if rules_audit is not None:
-                if cloud.submit_durable_record(rules_audit):
-                    log('Rules adoption audit queued: sequence={}'.format(
-                        observation_sequence))
-                else:
-                    log('Rules adoption audit queue unavailable: sequence={}'.format(
-                        observation_sequence))
         elif outcome != 'already-active':
-            # The previous validated flash file remains active. The next
-            # coordination snapshot retries after the bounded fetch interval.
-            log('Rules release rejected: {}'.format(outcome))
-            if candidate_metadata is not None:
-                rejected_reference = {
-                    'version': candidate_metadata['rulesVersion'],
-                    'contentHash': candidate_metadata['contentHash'],
-                }
-                rules_audit = build_rules_audit_record(
-                    'rule-rejection', format_observed_at(clock_synced),
-                    device_session_id, observation_sequence, rejected_reference,
-                    candidate_metadata['releaseId'], outcome)
-                if rules_audit is not None:
-                    if cloud.submit_durable_record(rules_audit):
-                        log('Rules rejection audit queued: sequence={}'.format(
-                            observation_sequence))
-                    else:
-                        log('Rules rejection audit queue unavailable: sequence={}'.format(
-                            observation_sequence))
+            # The last validated v2 file remains active. A later coordination
+            # pass may retry; this field-level reason is visible on the HMI.
+            rules_runtime_state = 'REJECTED'
+            rules_runtime_reason = outcome
+            log('Runtime release rejected: {}'.format(outcome))
 
     # The five fresh 15-SPS conversions occupy a material portion of every
     # cycle. Service touch inside their DRDY waits instead of limiting touch
     # detection to whatever sleep time happens to remain afterward.
-    ads_uv = read_ads1110_microvolts(service_navigation)
+    ads_raw_count = read_ads1110_filtered_raw_count(service_navigation)
+    ads_uv = (None if ads_raw_count is None
+              else int(ads_raw_count * ADC_UV_PER_COUNT))
     adc_completed_ms = time.ticks_ms()
     if ads_uv is not None:
         last_valid_adc_ms = adc_completed_ms
@@ -2537,7 +2611,9 @@ while True:
         wifi_ip, wifi_disconnect_events, sample_failure_count,
         shelly1_sample, shelly1_sample is not None,
         shelly1_poll_attempted, last_valid_shelly1_ms,
-        shelly1_failure_count)
+        shelly1_failure_count, ads_raw_count=ads_raw_count)
+    observation['status']['rules_runtime_state'] = rules_runtime_state
+    observation['status']['rules_runtime_reason'] = rules_runtime_reason
     last_observation = observation
     append_event_history(event_history, observation)
     shelly_availability_pending = shelly_availability_change_pending(
@@ -2556,7 +2632,7 @@ while True:
         elapsed_since_durable_ms,
         confirmed_shelly_availability_change=shelly_availability_pending,
         confirmed_shelly1_availability_change=shelly1_availability_pending)
-    if durable_reason is not None:
+    if durable_reason is not None and active_rules_reference is not None:
         material_changes = (material_change_details(
             observation, last_durable_observation,
             confirmed_shelly_availability_change=shelly_availability_pending,

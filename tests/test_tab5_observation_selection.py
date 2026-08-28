@@ -35,17 +35,19 @@ FUNCTIONS = {
     "durable_observation_reason",
     "_record_timestamp_prefix",
     "build_durable_observation",
-    "build_rules_audit_record",
     "_sha256_hex",
     "_valid_rules_hash",
-    "_valid_rules_release_id",
-    "_check_rules_metadata",
-    "rules_metadata_rejection_reason",
-    "rules_metadata_key_summary",
-    "validate_rules_metadata",
-    "validate_rules_release",
-    "load_packaged_rules",
-    "adopt_rules_release",
+    "_valid_runtime_release_id",
+    "_valid_integral_nonnegative",
+    "_check_runtime_pointer",
+    "validate_runtime_pointer",
+    "runtime_pointer_rejection_reason",
+    "runtime_pointer_key_summary",
+    "_runtime_field_valid",
+    "_runtime_package_valid",
+    "validate_runtime_release",
+    "load_runtime_package",
+    "adopt_runtime_release",
 }
 CONSTANTS = {
     "SITE_ID",
@@ -67,12 +69,14 @@ CONSTANTS = {
     "MATERIAL_NUMERIC_THRESHOLDS",
     "MATERIAL_EXACT_CHANGE_PATHS",
     "MATERIAL_CHANGE_LABELS",
-    "RULES_FILE",
-    "RULES_TEMP_FILE",
+    "RULES_RUNTIME_FILE",
+    "RULES_RUNTIME_TEMP_FILE",
     "RULES_FETCH_RETRY_MS",
     "MAX_RULES_RELEASE_BYTES",
-    "PACKAGED_RULES_REFERENCE",
-    "EXPECTED_RULE_IDS",
+    "RUNTIME_PACKAGE_KIND",
+    "RUNTIME_POINTER_KIND",
+    "RUNTIME_SCHEMA_VERSION",
+    "RUNTIME_DIRECT_BINDINGS",
 }
 
 
@@ -264,7 +268,9 @@ class ObservationSelectionTests(unittest.TestCase):
             wifi_address="192.0.2.10",
             wifi_disconnect_count=0,
             shelly_failures=0,
+            ads_raw_count=16390,
         )
+        self.assertEqual(built["values"]["adc_raw"], 16390)
         self.assertEqual(built["values"]["adc_microvolts"], 3073125)
         self.assertEqual(built["status"]["adc_last_valid_ticks_ms"], 8950)
         self.assertEqual(built["status"]["adc_age_ms"], 50)
@@ -444,8 +450,9 @@ class ObservationSelectionTests(unittest.TestCase):
 
     def test_durable_record_has_deterministic_id_and_preserves_unknown_fields(self):
         source = observation(sequence=42)
+        reference = {"version": 1, "contentHash": "a" * 64}
         record = self.logic["build_durable_observation"](
-            source, "boot_A7f93k2Q", "material-change"
+            source, "boot_A7f93k2Q", "material-change", reference
         )
         self.assertEqual(
             record["recordId"],
@@ -456,112 +463,73 @@ class ObservationSelectionTests(unittest.TestCase):
         self.assertEqual(record["futureEnvelope"], ["preserved"])
         self.assertEqual(record["values"]["futureSensor"], {"value": 12})
         self.assertEqual(
-            record["rulesRelease"], self.logic["PACKAGED_RULES_REFERENCE"])
+            record["rulesRelease"], reference)
         self.assertNotIn("recordType", source)
         self.assert_m4_durable_observation_contract(record)
 
-    def test_packaged_rules_are_complete_and_match_the_reviewed_hash(self):
-        raw = (PILOT_PATH.parent / "rules.json").read_text(encoding="utf-8")
-        checked, reason = self.logic["validate_rules_release"](raw)
+    def runtime_body(self, release_id="20260828163309-parameters-v1", version=1):
+        return json.dumps({
+            "schemaVersion": 2, "kind": "well-pump-parameter-runtime",
+            "releaseId": release_id, "packageVersion": version,
+            "deliveryEnabled": False,
+            "devices": [{"id": "tab5-main", "driver": "tab5-runtime", "address": "local", "enabled": True,
+                         "fields": [{"systemName": "PressureADCCounts", "type": "integer", "unit": "count", "logging": {"mode": "none"}, "object": "values.adc_raw", "access": "read"}]}],
+            "calculations": [],
+            "events": [{"id": "EV-TEST", "enabled": False, "actions": [], "open": {}, "close": {}}],
+        }, separators=(",", ":"))
+
+    def runtime_pointer(self, raw, release_id="20260828163309-parameters-v1", version=1):
+        return {
+            "schemaVersion": 2, "kind": "well-pump-runtime-release-pointer", "siteId": "well-main",
+            "releaseId": release_id, "packageVersion": version, "runtimeSchemaVersion": 2,
+            "contentHash": self.logic["_sha256_hex"](raw), "hashAlgorithm": "sha256",
+            "byteLength": len(raw.encode("utf-8")), "publishedAtMs": 1787982789000,
+            "downloadPath": "/.netlify/functions/rules-engine-release?releaseId=" + release_id,
+        }
+
+    def test_v2_runtime_requires_matching_pointer_hash_size_and_identity(self):
+        raw = self.runtime_body()
+        pointer = self.runtime_pointer(raw)
+        checked, reason = self.logic["validate_runtime_release"](raw, pointer)
         self.assertIsNone(reason)
-        self.assertEqual(checked["reference"], self.logic["PACKAGED_RULES_REFERENCE"])
-        self.assertEqual(
-            tuple(rule["id"] for rule in checked["package"]["rules"]),
-            self.logic["EXPECTED_RULE_IDS"],
-        )
+        self.assertEqual(checked["reference"]["releaseId"], pointer["releaseId"])
+        self.assertEqual(checked["reference"]["packageVersion"], 1)
+        pointer["byteLength"] += 1
+        self.assertEqual(self.logic["validate_runtime_release"](raw, pointer)[1], "release-integrity-mismatch")
 
-    def test_remote_release_requires_matching_pointer_hash_and_identity(self):
-        raw = (PILOT_PATH.parent / "rules.json").read_text(encoding="utf-8")
-        content_hash = self.logic["_sha256_hex"](raw)
-        metadata = {
-            "schemaVersion": 1,
-            "siteId": "well-main",
-            "releaseId": "20260825000000-rules-v1",
-            "rulesVersion": 1,
-            "rulesSchemaVersion": 1,
-            "contentHash": content_hash,
-            "hashAlgorithm": "sha256",
-            "publishedAtMs": 1787616000000,
-            "downloadPath": "/.netlify/functions/rules-release/20260825000000-rules-v1.json",
-        }
-        checked, reason = self.logic["validate_rules_release"](raw, metadata)
-        self.assertIsNone(reason)
-        self.assertEqual(checked["metadata"], metadata)
-        metadata["contentHash"] = "0" * 64
-        self.assertEqual(
-            self.logic["validate_rules_release"](raw, metadata)[1],
-            "release-hash-mismatch",
-        )
+    def test_unsupported_runtime_binding_is_rejected_before_flash_write(self):
+        raw = self.runtime_body().replace("values.adc_raw", "values.unimplemented")
+        pointer = self.runtime_pointer(raw)
+        self.assertEqual(self.logic["validate_runtime_release"](raw, pointer)[1], "release-runtime-unsupported")
 
-    def test_invalid_release_never_replaces_last_valid_rules_file(self):
-        raw = (PILOT_PATH.parent / "rules.json").read_text(encoding="utf-8")
-        content_hash = self.logic["_sha256_hex"](raw)
-        metadata = {
-            "schemaVersion": 1,
-            "siteId": "well-main",
-            "releaseId": "20260825000000-rules-v1",
-            "rulesVersion": 1,
-            "rulesSchemaVersion": 1,
-            "contentHash": content_hash,
-            "hashAlgorithm": "sha256",
-            "publishedAtMs": 1787616000000,
-            "downloadPath": "/.netlify/functions/rules-release/20260825000000-rules-v1.json",
-        }
+    def test_invalid_runtime_never_replaces_last_valid_file(self):
+        baseline = self.runtime_body()
         with tempfile.TemporaryDirectory() as directory:
-            active_path = pathlib.Path(directory) / "rules.json"
-            temporary_path = pathlib.Path(directory) / ".rules.json.download"
-            active_path.write_text(raw, encoding="utf-8")
-            rejected, outcome = self.logic["adopt_rules_release"](
-                {"metadata": metadata, "release": raw + " "},
-                self.logic["PACKAGED_RULES_REFERENCE"],
-                str(active_path), str(temporary_path),
-            )
-            self.assertIsNone(rejected)
-            self.assertEqual(outcome, "release-hash-mismatch")
-            self.assertEqual(active_path.read_text(encoding="utf-8"), raw)
-
-    def test_changed_valid_release_atomically_replaces_active_rules_file(self):
-        baseline = (PILOT_PATH.parent / "rules.json").read_text(encoding="utf-8")
-        changed = baseline.replace(
-            '"releaseId": "20260825000000-rules-v1"',
-            '"releaseId": "20260825010000-rules-v1"',
-            1,
-        )
-        content_hash = self.logic["_sha256_hex"](changed)
-        metadata = {
-            "schemaVersion": 1,
-            "siteId": "well-main",
-            "releaseId": "20260825010000-rules-v1",
-            "rulesVersion": 1,
-            "rulesSchemaVersion": 1,
-            "contentHash": content_hash,
-            "hashAlgorithm": "sha256",
-            "publishedAtMs": 1787619600000,
-            "downloadPath": "/.netlify/functions/rules-release/20260825010000-rules-v1.json",
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            active_path = pathlib.Path(directory) / "rules.json"
-            temporary_path = pathlib.Path(directory) / ".rules.json.download"
+            active_path = pathlib.Path(directory) / "rules-runtime-v2.json"
+            temporary_path = pathlib.Path(directory) / ".rules-runtime-v2.download"
             active_path.write_text(baseline, encoding="utf-8")
-            adopted, outcome = self.logic["adopt_rules_release"](
-                {"metadata": metadata, "release": changed},
-                self.logic["PACKAGED_RULES_REFERENCE"],
-                str(active_path), str(temporary_path),
-            )
-            self.assertEqual(outcome, "adopted")
-            self.assertEqual(adopted["reference"], {
-                "version": 1,
-                "contentHash": content_hash,
-            })
-            self.assertEqual(active_path.read_text(encoding="utf-8"), changed)
-            self.assertFalse(temporary_path.exists())
+            rejected, outcome = self.logic["adopt_runtime_release"](
+                {"metadata": self.runtime_pointer(baseline), "release": baseline + " "},
+                None, str(active_path), str(temporary_path))
+            self.assertIsNone(rejected)
+            self.assertEqual(outcome, "release-integrity-mismatch")
+            self.assertEqual(active_path.read_text(encoding="utf-8"), baseline)
 
-            # Exercise the same load-and-validate path used by a fresh CPU A
-            # process after restart, rather than proving only the rename.
-            reloaded, reason = self.logic["load_packaged_rules"](str(active_path))
+    def test_valid_runtime_atomically_replaces_and_reloads_active_file(self):
+        raw = self.runtime_body("20260828163400-parameters-v2", 2)
+        pointer = self.runtime_pointer(raw, "20260828163400-parameters-v2", 2)
+        with tempfile.TemporaryDirectory() as directory:
+            active_path = pathlib.Path(directory) / "rules-runtime-v2.json"
+            temporary_path = pathlib.Path(directory) / ".rules-runtime-v2.download"
+            adopted, outcome = self.logic["adopt_runtime_release"](
+                {"metadata": pointer, "release": raw}, None,
+                str(active_path), str(temporary_path))
+            self.assertEqual(outcome, "adopted")
+            self.assertEqual(active_path.read_text(encoding="utf-8"), raw)
+            self.assertFalse(temporary_path.exists())
+            reloaded, reason = self.logic["load_runtime_package"](str(active_path))
             self.assertIsNone(reason)
             self.assertEqual(reloaded["reference"], adopted["reference"])
-            self.assertEqual(reloaded["package"]["releaseId"], metadata["releaseId"])
 
     def test_rules_adoption_is_the_only_runtime_flash_write(self):
         pilot_source = PILOT_PATH.read_text(encoding="utf-8")
@@ -572,61 +540,16 @@ class ObservationSelectionTests(unittest.TestCase):
         self.assertNotIn("open('/flash/", launcher_source)
         self.assertNotRegex(cloud_source, r"\bopen\s*\([^\n]*['\"](?:w|a|x)[+b]?['\"]")
 
-    def test_rules_metadata_accepts_the_exact_v1_release_identifier_shape(self):
-        metadata = {
-            "schemaVersion": 1,
-            "siteId": "well-main",
-            "releaseId": "20260825010000-rules-v1",
-            "rulesVersion": 1,
-            "rulesSchemaVersion": 1,
-            "contentHash": "93eca75b9fbf774c10350580a8e0c116a733af6f6cd5274bdd7b29a698e05a08",
-            "hashAlgorithm": "sha256",
-            "publishedAtMs": 1787619600000,
-            "downloadPath": "/.netlify/functions/rules-release/20260825010000-rules-v1.json",
-        }
+    def test_runtime_pointer_is_exact_v2_shape_and_summary_hides_values(self):
+        raw = self.runtime_body()
+        metadata = self.runtime_pointer(raw)
         self.assertEqual(
-            self.logic["validate_rules_metadata"](metadata)["releaseId"],
-            metadata["releaseId"],
-        )
-        metadata["publishedAtMs"] = float(metadata["publishedAtMs"])
+            self.logic["validate_runtime_pointer"](metadata)["releaseId"], metadata["releaseId"])
+        self.assertIn("schemaVersion", self.logic["runtime_pointer_key_summary"](metadata))
         self.assertEqual(
-            self.logic["validate_rules_metadata"](metadata)["releaseId"],
-            metadata["releaseId"],
-        )
-        del metadata["downloadPath"]
-        self.assertEqual(
-            self.logic["rules_metadata_rejection_reason"](metadata),
-            "missing-downloadPath",
-        )
-
-    def test_rules_pointer_summary_reports_field_names_not_values(self):
-        metadata = {"siteId": "well-main", "schemaVersion": 1}
-        self.assertEqual(
-            self.logic["rules_metadata_key_summary"](metadata),
-            "schemaVersion,siteId",
-        )
-        self.assertEqual(
-            self.logic["rules_metadata_key_summary"](None),
+            self.logic["runtime_pointer_key_summary"](None),
             "not-an-object",
         )
-
-    def test_rules_adoption_and_rejection_audits_have_deterministic_records(self):
-        reference = self.logic["PACKAGED_RULES_REFERENCE"]
-        adopted = self.logic["build_rules_audit_record"](
-            "rule-adoption", "2026-08-25T00:00:42Z", "boot_A7f93k2Q", 42,
-            reference, "20260825000000-rules-v1",
-        )
-        self.assertEqual(
-            adopted["recordId"],
-            "20260825000042-rule-adoption-boot_A7f93k2Q-0000000042",
-        )
-        self.assertEqual(adopted["activeRules"], reference)
-        rejected = self.logic["build_rules_audit_record"](
-            "rule-rejection", "2026-08-25T00:00:43Z", "boot_A7f93k2Q", 43,
-            reference, "20260825000000-rules-v1", "release-hash-mismatch",
-        )
-        self.assertEqual(rejected["rejectionReason"], "release-hash-mismatch")
-        self.assertNotIn("activeRules", rejected)
 
     def assert_m4_durable_observation_contract(self, record):
         """Check the deployed M4 validator invariants used by Tab5."""

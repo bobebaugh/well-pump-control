@@ -1,4 +1,4 @@
-# Release: 2026-08-27 M6.20 — expose immutable cloud response and queue status.
+# Release: 2026-08-28 M6.23 — transport the v2 runtime pointer and exact body.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -165,24 +165,27 @@ def _http_json(method, url, body=None, headers=None, timeout=RTDB_TIMEOUT_S,
                 pass
 
 
+def _valid_runtime_release_id(value):
+    prefix = '-parameters-v'
+    if not isinstance(value, str) or len(value) <= 14 + len(prefix):
+        return False
+    return (value[:14].isdigit() and value[14:14 + len(prefix)] == prefix and
+            value[14 + len(prefix):].isdigit() and
+            int(value[14 + len(prefix):]) >= 1)
+
+
 def _download_rules_release(metadata):
     """Fetch an opaque release body from the approved Netlify origin only."""
     path = metadata.get('downloadPath') if isinstance(metadata, dict) else None
-    prefix = '/.netlify/functions/rules-release/'
-    if (not isinstance(path, str) or not path.startswith(prefix) or
-            not path.endswith('.json')):
+    prefix = '/.netlify/functions/rules-engine-release?releaseId='
+    if not isinstance(path, str) or not path.startswith(prefix):
         raise TransportError('rules release path is not approved')
-    release_name = path[len(prefix):]
-    if (not release_name or
-            any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-'
-                for char in release_name)):
+    release_id = path[len(prefix):]
+    if not _valid_runtime_release_id(release_id):
         raise TransportError('rules release name is not approved')
-    # The published pointer remains a stable relative path, but the deployed
-    # Netlify function receives the immutable filename through releaseId.
-    # Direct function paths are handled before the redirect rule, so a suffix
-    # request reaches the handler without queryStringParameters and returns 404.
-    request_url = '{}{}?releaseId={}'.format(
-        RULES_RELEASE_ORIGIN, prefix[:-1], release_name)
+    # CPU B accepts only the known relative endpoint.  It neither parses nor
+    # validates the runtime package; that belongs exclusively to CPU A.
+    request_url = RULES_RELEASE_ORIGIN + path
     response = None
     try:
         response = requests.get(request_url, headers={
@@ -1312,8 +1315,8 @@ def _run():
                         try:
                             _queue_rules_release(metadata,
                                                  _download_rules_release(metadata))
-                            log('Rules release downloaded for CPU A: version={}'.format(
-                                metadata.get('rulesVersion')))
+                            log('Runtime release downloaded for CPU A: release={}'.format(
+                                metadata.get('releaseId')))
                         except Exception as e:
                             log('Rules release transport error: {}'.format(e))
 

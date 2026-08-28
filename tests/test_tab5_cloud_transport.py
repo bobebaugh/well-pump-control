@@ -469,17 +469,19 @@ class CloudTransportTests(unittest.TestCase):
 
     def test_rules_release_transport_preserves_exact_body_for_cpu_a(self):
         metadata = {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
+            "kind": "well-pump-runtime-release-pointer",
             "siteId": "well-main",
-            "releaseId": "20260825000000-rules-v1",
-            "rulesVersion": 1,
-            "rulesSchemaVersion": 1,
+            "releaseId": "20260828163309-parameters-v1",
+            "packageVersion": 1,
+            "runtimeSchemaVersion": 2,
             "contentHash": "a" * 64,
             "hashAlgorithm": "sha256",
+            "byteLength": 57,
             "publishedAtMs": 1787616000000,
-            "downloadPath": "/.netlify/functions/rules-release/20260825000000-rules-v1.json",
+            "downloadPath": "/.netlify/functions/rules-engine-release?releaseId=20260828163309-parameters-v1",
         }
-        raw_release = '{"schemaVersion":1,"kind":"well-pump-rules-release"}'
+        raw_release = '{"schemaVersion":2,"kind":"well-pump-parameter-runtime"}'
         self.requests.queue({}, text=raw_release)
         self.assertTrue(self.cloud.request_rules_release(metadata))
         queued_request = self.cloud._take_rules_request()
@@ -495,8 +497,8 @@ class CloudTransportTests(unittest.TestCase):
         self.assertEqual(
             url,
             self.cloud.RULES_RELEASE_ORIGIN +
-            "/.netlify/functions/rules-release?releaseId=" +
-            "20260825000000-rules-v1.json",
+            "/.netlify/functions/rules-engine-release?releaseId=" +
+            "20260828163309-parameters-v1",
         )
         self.assertEqual(kwargs["headers"]["X-Pilot-Key"], "EXAMPLE_ONLY_INGEST_TOKEN")
 
