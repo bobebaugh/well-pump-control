@@ -1,4 +1,4 @@
-# Release: 2026-08-28 M6.26 — allow one reviewed STOP-only rules consequence.
+# Release: 2026-08-28 M6.27 — use verified Shelly RPC transport for STOP-only rules.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -39,7 +39,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.26'
+SOFTWARE_RELEASE = 'M6.27'
 
 # CPU A validates and adopts the v2 runtime package. CPU B carries only the
 # RTDB pointer and exact downloaded bytes; it never interprets package meaning.
@@ -760,12 +760,15 @@ def issue_runtime_stop(observation):
     if values.get('shelly1_rly0') is not True:
         return 'already-off'
     try:
-        reply = requests.post(SHELLY_1_STOP_URL, timeout=SHELLY_TIMEOUT_S)
+        # The installed UIFlow requests client has been proven with GET-only
+        # Shelly RPC/status calls. Shelly RPC accepts this idempotent command
+        # as a query URL, avoiding an unproven requests.post code path.
+        reply = requests.get(SHELLY_1_STOP_URL, timeout=SHELLY_TIMEOUT_S)
         data = reply.json()
         reply.close()
         return 'requested' if isinstance(data, dict) else 'invalid-response'
-    except Exception:
-        return 'request-failed'
+    except Exception as error:
+        return 'request-failed:{}'.format(error)
 
 
 def runtime_condition_value(condition, fields):

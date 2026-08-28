@@ -255,7 +255,7 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertNotIn("cloud.", events_source)
 
     def test_release_is_m624(self):
-        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.26")
+        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.27")
 
     def test_touch_service_is_not_limited_to_remaining_cycle_sleep(self):
         source = PILOT_PATH.read_text(encoding="utf-8")
