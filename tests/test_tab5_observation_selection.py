@@ -34,6 +34,8 @@ FUNCTIONS = {
     "_runtime_number",
     "evaluate_runtime_program",
     "evaluate_runtime_calculations",
+    "runtime_logging_policies",
+    "runtime_logging_change_details",
     "runtime_condition_value",
     "new_runtime_event_state",
     "_runtime_qualified",
@@ -528,6 +530,25 @@ class ObservationSelectionTests(unittest.TestCase):
         self.logic["evaluate_runtime_calculations"](package, values)
         self.assertEqual(values["PressureADCCounts"], 3943)
         self.assertAlmostEqual(values["PressurePSI"], (3943 - 3732.02) / 211.492)
+
+    def test_runtime_logging_policy_selects_named_voltage_delta_only(self):
+        package = {"devices": [{"enabled": True, "fields": [{
+            "systemName": "SupplyVoltage",
+            "logging": {"mode": "delta", "threshold": 0.2},
+        }, {"systemName": "PumpEnable", "logging": {"mode": "change"}}]}]}
+        policies = self.logic["runtime_logging_policies"](package)
+        changes = self.logic["runtime_logging_change_details"](
+            {"SupplyVoltage": 250.25, "PumpEnable": True},
+            {"SupplyVoltage": 250.0, "PumpEnable": True}, policies)
+        self.assertEqual(changes, ["SupplyVoltage: 250.0 -> 250.25"])
+
+    def test_runtime_logging_ignores_none_and_mode_none(self):
+        policies = {"SupplyVoltage": {"mode": "delta", "threshold": 0.2},
+                    "PressureADCCounts": {"mode": "none"}}
+        changes = self.logic["runtime_logging_change_details"](
+            {"SupplyVoltage": None, "PressureADCCounts": 37},
+            {"SupplyVoltage": 250.0, "PressureADCCounts": 35}, policies)
+        self.assertEqual(changes, [])
 
     def test_runtime_condition_returns_unknown_for_missing_evidence(self):
         condition = {"mode": "all", "clauses": [

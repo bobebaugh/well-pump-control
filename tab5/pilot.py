@@ -1,4 +1,4 @@
-# Release: 2026-08-28 M6.24 — evaluate v2 fields and events without control.
+# Release: 2026-08-28 M6.25 — select durable snapshots from v2 logging policy.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -684,6 +684,56 @@ def evaluate_runtime_calculations(package, named_values):
                 if isinstance(output, dict) and isinstance(output.get('systemName'), str):
                     named_values[output['systemName']] = None
     return named_values
+
+
+def runtime_logging_policies(package):
+    """Return the enabled v2 field logging policies keyed by system name."""
+    policies = {}
+    if not isinstance(package, dict):
+        return policies
+    for device in package.get('devices', []):
+        if not isinstance(device, dict) or device.get('enabled') is not True:
+            continue
+        for field in device.get('fields', []):
+            if isinstance(field, dict) and isinstance(field.get('systemName'), str):
+                logging = field.get('logging')
+                if isinstance(logging, dict):
+                    policies[field['systemName']] = dict(logging)
+    for calculation in package.get('calculations', []):
+        if not isinstance(calculation, dict):
+            continue
+        outputs = ([calculation.get('output')] if isinstance(calculation.get('output'), dict)
+                   else calculation.get('outputs', []))
+        for output in outputs:
+            if isinstance(output, dict) and isinstance(output.get('systemName'), str):
+                logging = output.get('logging')
+                if isinstance(logging, dict):
+                    policies[output['systemName']] = dict(logging)
+    return policies
+
+
+def runtime_logging_change_details(values, previous_values, policies):
+    """Name v2 logging-policy changes; unavailable samples never fabricate edges."""
+    if not isinstance(values, dict) or not isinstance(previous_values, dict) or not isinstance(policies, dict):
+        return []
+    details = []
+    for name, logging in policies.items():
+        if not isinstance(name, str) or not isinstance(logging, dict):
+            continue
+        current = values.get(name)
+        previous = previous_values.get(name)
+        if current is None or previous is None:
+            continue
+        mode = logging.get('mode')
+        changed = (mode == 'change' and current != previous)
+        if mode == 'delta':
+            threshold = logging.get('threshold')
+            changed = (_runtime_number(current) and _runtime_number(previous) and
+                       _runtime_number(threshold) and threshold >= 0 and
+                       abs(current - previous) >= threshold)
+        if changed:
+            details.append('{}: {} -> {}'.format(name, previous, current))
+    return details
 
 
 def runtime_condition_value(condition, fields):
@@ -2884,6 +2934,7 @@ while True:
         shelly1_failure_count, ads_raw_count=ads_raw_count)
     observation['status']['rules_runtime_state'] = rules_runtime_state
     observation['status']['rules_runtime_reason'] = rules_runtime_reason
+    runtime_logging_changes = []
     if active_rules is not None:
         runtime_values = runtime_direct_field_values(active_rules, observation)
         evaluate_runtime_calculations(active_rules, runtime_values)
@@ -2898,6 +2949,10 @@ while True:
         for transition in runtime_transitions:
             log('Runtime event {}: {}'.format(
                 transition['type'], transition['eventId']))
+        if last_durable_observation is not None:
+            runtime_logging_changes = runtime_logging_change_details(
+                runtime_values, last_durable_observation.get('values', {}),
+                runtime_logging_policies(active_rules))
     last_observation = observation
     append_event_history(event_history, observation)
     shelly_availability_pending = shelly_availability_change_pending(
@@ -2916,12 +2971,16 @@ while True:
         elapsed_since_durable_ms,
         confirmed_shelly_availability_change=shelly_availability_pending,
         confirmed_shelly1_availability_change=shelly1_availability_pending)
+    if runtime_logging_changes:
+        durable_reason = 'material-change'
     if durable_reason is not None and active_rules_reference is not None:
         material_changes = (material_change_details(
             observation, last_durable_observation,
             confirmed_shelly_availability_change=shelly_availability_pending,
             confirmed_shelly1_availability_change=shelly1_availability_pending)
             if durable_reason == 'material-change' else None)
+        if material_changes is not None and runtime_logging_changes:
+            material_changes.extend(runtime_logging_changes)
         durable_record = build_durable_observation(
             observation, device_session_id, durable_reason,
             active_rules_reference)
