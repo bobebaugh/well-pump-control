@@ -11,7 +11,7 @@
     "commandSequence": { "type": "integer", "minimum": 1 },
     "siteId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
     "targetDeviceId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
-    "commandType": { "type": "string", "enum": ["close-event", "set-event-override", "set-global-enable", "reset-shelly-lockout"] },
+    "commandType": { "type": "string", "enum": ["clear-events", "system-override"] },
     "requestedAt": { "type": "string", "format": "date-time" },
     "requestedBy": { "$ref": "#/$defs/actor" },
     "status": { "type": "string", "enum": ["pending", "cancelled", "completed", "rejected"] },

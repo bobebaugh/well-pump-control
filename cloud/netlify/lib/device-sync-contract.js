@@ -14,7 +14,7 @@ const SESSION_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 const EXCHANGE_PATTERN = /^[0-9]{14}-sync-[A-Za-z0-9_-]{8,64}-[0-9]{10}$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const COMMAND_PATTERN = /^[0-9]{14}-command-[A-Za-z0-9_-]{8,64}-[0-9]{10}$/;
-const COMMAND_TYPES = new Set(["close-event", "set-event-override", "set-global-enable", "reset-shelly-lockout"]);
+const COMMAND_TYPES = new Set(["clear-events", "system-override"]);
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);

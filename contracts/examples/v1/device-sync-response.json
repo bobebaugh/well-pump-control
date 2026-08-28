@@ -22,7 +22,7 @@
       "commandSequence": 12,
       "siteId": "well-main",
       "targetDeviceId": "tab5-well-main",
-      "commandType": "close-event",
+      "commandType": "clear-events",
       "requestedAt": "2026-08-24T17:34:58.000Z",
       "requestedBy": {
         "type": "user",
