@@ -155,10 +155,12 @@ function createHandler(dependencies = {}) {
       // non-sensitive information in the Netlify log to diagnose a Firestore
       // failure without logging release contents or credentials.
       const errorCode = typeof error?.code === "string" || typeof error?.code === "number" ? String(error.code) : undefined;
+      const errorMessage = typeof error?.message === "string" ? error.message.replace(/[\r\n]+/g, " ").slice(0, 500) : undefined;
       console.error("Rules Engine pilot failed", {
         category: configurationError ? "configuration" : "storage",
         errorName: error?.name || "Error",
-        ...(errorCode ? { errorCode } : {})
+        ...(errorCode ? { errorCode } : {}),
+        ...(errorMessage ? { errorMessage } : {})
       });
       return response(503, { status: "error", code: configurationError ? "configuration_missing" : "rules_engine_unavailable" });
     }
