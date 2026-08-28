@@ -13,6 +13,7 @@ These instructions apply to work under `tab5/`.
 ## Branch and delivery boundary
 
 - All interpreted Tab5 development belongs on the `Tab5` branch.
+- `Tab5/tab5/` is the complete GitHub recovery copy of the upload set. Do not publish a partial tree: preserve `main.py`, `pilot.py`, `cloud.py`, `webrepl.py`, committed support files, and the test suite unless a reviewed work unit intentionally changes that set. After promotion, verify the live GitHub directory listing. The owner's deployment mirror is a backup, never the sole version-managed copy.
 - `main` and `pilot` are deployment branches and are off limits during Tab5-only work unless the owner explicitly opens that scope.
 - `C:\Tab5\pilot-micropython` is a device-upload mirror, never a Git checkout. Populate it only when the owner says a candidate is ready for installation.
 - Keep the runtime intentionally small: `main.py`, `pilot.py`, `cloud.py`, `webrepl.py`, the validated rules file when implemented, and uncommitted device secrets. Do not create more MicroPython modules without a reviewed need.
