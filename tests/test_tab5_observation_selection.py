@@ -36,6 +36,7 @@ FUNCTIONS = {
     "evaluate_runtime_calculations",
     "runtime_logging_policies",
     "runtime_logging_change_details",
+    "runtime_stop_only_action",
     "runtime_condition_value",
     "new_runtime_event_state",
     "_runtime_qualified",
@@ -549,6 +550,17 @@ class ObservationSelectionTests(unittest.TestCase):
             {"SupplyVoltage": None, "PressureADCCounts": 37},
             {"SupplyVoltage": 250.0, "PressureADCCounts": 35}, policies)
         self.assertEqual(changes, [])
+
+    def test_runtime_consequence_permits_only_exact_stop_action(self):
+        permits = self.logic["runtime_stop_only_action"]
+        self.assertTrue(permits({"enabled": True, "actions": [
+            {"target": "PumpEnable", "value": False}]}))
+        self.assertFalse(permits({"enabled": True, "actions": [
+            {"target": "PumpEnable", "value": True}]}))
+        self.assertFalse(permits({"enabled": True, "actions": [
+            {"target": "Other", "value": False}]}))
+        self.assertFalse(permits({"enabled": False, "actions": [
+            {"target": "PumpEnable", "value": False}]}))
 
     def test_runtime_condition_returns_unknown_for_missing_evidence(self):
         condition = {"mode": "all", "clauses": [

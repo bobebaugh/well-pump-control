@@ -1,4 +1,4 @@
-# Release: 2026-08-28 M6.25 — select durable snapshots from v2 logging policy.
+# Release: 2026-08-28 M6.26 — allow one reviewed STOP-only rules consequence.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -7,9 +7,9 @@
 # Shelly EM + ADS1110 at 1 Hz,
 # publish to Netlify on change or heartbeat, show live status on screen.
 #
-# Observational only. No pump start/stop/inhibit/relay authority - matches
-# the compiled pilot's AGENTS.md safety boundary. Battery charge control is
-# the one exception: an automatic hysteresis policy keeps the pack between
+# Observational except for the reviewed STOP-only `PumpEnable: false` rules
+# consequence. Rules can never command Output 0 ON. Battery charge control is
+# the separate exception: an automatic hysteresis policy keeps the pack between
 # BATTERY_LOW_PCT and BATTERY_HIGH_PCT - see the battery section below.
 
 import M5
@@ -26,6 +26,7 @@ import cloud
 # --- config (values from firmware/tab5/main/pilot_config.h) ---
 SHELLY_EM_URL = 'http://192.168.50.141/emeter/0'
 SHELLY_1_STATUS_URL = 'http://192.168.50.201/rpc/Shelly.GetStatus'
+SHELLY_1_STOP_URL = 'http://192.168.50.201/rpc/Switch.Set?id=0&on=false'
 SAMPLE_PERIOD_MS = 1000
 SHELLY_TIMEOUT_S = 1  # requests has whole-second granularity; C++ used 750ms
 STALE_AFTER_MS = 3000
@@ -38,7 +39,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.25'
+SOFTWARE_RELEASE = 'M6.26'
 
 # CPU A validates and adopts the v2 runtime package. CPU B carries only the
 # RTDB pointer and exact downloaded bytes; it never interprets package meaning.
@@ -734,6 +735,37 @@ def runtime_logging_change_details(values, previous_values, policies):
         if changed:
             details.append('{}: {} -> {}'.format(name, previous, current))
     return details
+
+
+def runtime_stop_only_action(event):
+    """Accept exactly one reviewed rules consequence; never accept an ON write."""
+    if not isinstance(event, dict) or event.get('enabled') is not True:
+        return False
+    actions = event.get('actions')
+    if not isinstance(actions, list) or len(actions) != 1:
+        return False
+    action = actions[0]
+    return (isinstance(action, dict) and action.get('target') == 'PumpEnable' and
+            action.get('value') is False and len(action) == 2)
+
+
+def issue_runtime_stop(observation):
+    """Request the installed Shelly STOP state; a later poll confirms it."""
+    if not isinstance(observation, dict):
+        return 'invalid-observation'
+    status = observation.get('status', {})
+    values = observation.get('values', {})
+    if status.get('shelly1_available') is not True:
+        return 'shelly-unavailable'
+    if values.get('shelly1_rly0') is not True:
+        return 'already-off'
+    try:
+        reply = requests.post(SHELLY_1_STOP_URL, timeout=SHELLY_TIMEOUT_S)
+        data = reply.json()
+        reply.close()
+        return 'requested' if isinstance(data, dict) else 'invalid-response'
+    except Exception:
+        return 'request-failed'
 
 
 def runtime_condition_value(condition, fields):
@@ -2944,11 +2976,17 @@ while True:
         observation['values'].update(runtime_values)
         event_board, runtime_transitions = evaluate_runtime_events(
             active_rules, event_board, runtime_values, observation_ticks_ms)
-        # The acceptance release evaluates only; it does not send event
-        # records or act on package actions. All published events are disabled.
+        events_by_id = {event.get('id'): event for event in active_rules.get('events', [])
+                        if isinstance(event, dict) and isinstance(event.get('id'), str)}
+        # Event records remain a later work unit. The only permitted device
+        # consequence is one reviewed STOP request on an opening transition.
         for transition in runtime_transitions:
             log('Runtime event {}: {}'.format(
                 transition['type'], transition['eventId']))
+            event = events_by_id.get(transition['eventId'])
+            if transition['type'] == 'open' and runtime_stop_only_action(event):
+                outcome = issue_runtime_stop(observation)
+                log('Runtime STOP {}: {}'.format(transition['eventId'], outcome))
         if last_durable_observation is not None:
             runtime_logging_changes = runtime_logging_change_details(
                 runtime_values, last_durable_observation.get('values', {}),
