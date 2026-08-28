@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { defaults } = require("../cloud/netlify/lib/rules-engine-defaults");
-const { createRulesEngineStore, RulesEngineStoreConflictError } = require("../cloud/netlify/lib/rules-engine-store");
+const { _hydrateRuntimePackage, createRulesEngineStore, RulesEngineStoreConflictError } = require("../cloud/netlify/lib/rules-engine-store");
 
 function fakeFirestore(initial) {
   const values = new Map(Object.entries(initial));
@@ -64,6 +64,13 @@ test("loading replaces first-iteration draft documents with schema-two defaults"
   assert.deepEqual(loaded.draft.revisions, { devices: 1, calculatedFields: 1, events: 1 });
   assert.equal(loaded.draft.calculatedFields.filter(calculation => calculation.kind === "function").length, 1);
   assert.equal(values.get(`${base}/events`).schemaVersion, 2);
+});
+
+test("release reads reconstruct the runtime view from opaque stored bytes", () => {
+  const stored = { releaseId: "release-1", runtimeBody: '{"kind":"well-pump-parameter-runtime"}' };
+  const hydrated = _hydrateRuntimePackage(stored);
+  assert.equal(Object.hasOwn(stored, "runtimePackage"), false);
+  assert.deepEqual(hydrated.runtimePackage, { kind: "well-pump-parameter-runtime" });
 });
 
 test("publication checks every draft revision in the same transaction", async () => {

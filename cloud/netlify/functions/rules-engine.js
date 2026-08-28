@@ -137,7 +137,6 @@ function createHandler(dependencies = {}) {
       const release = {
         ...stateValue,
         authoringPackage: loaded.draft,
-        runtimePackage,
         runtimeBody,
         requestedBy: "netlify-rules-engine-pilot"
       };

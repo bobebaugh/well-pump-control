@@ -87,7 +87,8 @@ test("validates then publishes one immutable cross-section version", async () =>
   assert.equal(body.current.packageVersion, 1);
   assert.equal(body.current.deliveryEnabled, false);
   assert.equal(published[0].releaseId, "20260827163045-parameters-v1");
-  assert.equal(published[0].release.runtimePackage.events[0].web, undefined);
+  assert.equal(Object.hasOwn(published[0].release, "runtimePackage"), false);
+  assert.equal(JSON.parse(published[0].release.runtimeBody).events[0].web, undefined);
   assert.equal(published[0].stateValue.contentHash, createHash("sha256").update(published[0].release.runtimeBody).digest("hex"));
 });
 

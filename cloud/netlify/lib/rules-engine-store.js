@@ -28,6 +28,12 @@ function releaseSummary(snapshot) {
   };
 }
 
+function hydrateRuntimePackage(value) {
+  if (!value || typeof value.runtimeBody !== "string") return value;
+  try { return { ...value, runtimePackage: JSON.parse(value.runtimeBody) }; }
+  catch { return value; }
+}
+
 function createRulesEngineStore(dependencies = {}) {
   const firebase = dependencies.firebase || require("./firebase");
   const { db } = firebase.getPilotFirestore();
@@ -44,7 +50,7 @@ function createRulesEngineStore(dependencies = {}) {
 
     async getRelease(releaseId) {
       const snapshot = await releases.doc(releaseId).get();
-      return snapshot.exists ? snapshot.data() : null;
+      return snapshot.exists ? hydrateRuntimePackage(snapshot.data()) : null;
     },
 
     async loadOrSeed(defaultDraft, nowMs) {
@@ -153,5 +159,6 @@ module.exports = {
   RulesEngineStoreConflictError,
   RulesEngineReleaseNotFoundError,
   RulesEngineIncompatibleReleaseError,
-  SECTIONS
+  SECTIONS,
+  _hydrateRuntimePackage: hydrateRuntimePackage
 };
