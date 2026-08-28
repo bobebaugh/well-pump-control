@@ -87,6 +87,9 @@ function createHandler(dependencies = {}) {
       }
       const collectionName = record.recordType === "observation" ? "observations" : "eventRecords";
       const document = db.collection("sites").doc(SITE_ID).collection(collectionName).doc(record.recordId);
+      const instance = (record.recordType === "event-open" || record.recordType === "event-close")
+        ? db.collection("sites").doc(SITE_ID).collection("eventInstances").doc(record.eventId)
+        : null;
       const canonical = canonicalRecord(record);
 
       const outcome = await db.runTransaction(async transaction => {
@@ -97,11 +100,31 @@ function createHandler(dependencies = {}) {
           }
           return { duplicate: true };
         }
+        const priorInstance = instance ? await transaction.get(instance) : null;
         transaction.create(document, {
           ...canonical,
           observedAt: toTimestamp(new Date(record.observedAt)),
           receivedAt: serverTimestamp()
         });
+        if (record.recordType === "event-open") {
+          // A delayed retry of the opening record must never reopen an instance
+          // that already has an independently delivered close record.
+          if (!priorInstance.exists || priorInstance.data().status !== "closed") {
+            transaction.set(instance, {
+              eventId: record.eventId, ruleId: record.ruleId, deviceId: record.deviceId,
+              sessionId: record.sessionId, rulesRelease: record.rulesRelease,
+              status: "open", openRecordId: record.recordId,
+              openedAt: toTimestamp(new Date(record.observedAt)), updatedAt: serverTimestamp()
+            }, { merge: true });
+          }
+        } else if (record.recordType === "event-close") {
+          transaction.set(instance, {
+            eventId: record.eventId, ruleId: record.ruleId, deviceId: record.deviceId,
+            status: "closed", closeRecordId: record.recordId,
+            closeReason: record.closeReason, commandId: record.commandId || null,
+            closedAt: toTimestamp(new Date(record.observedAt)), updatedAt: serverTimestamp()
+          }, { merge: true });
+        }
         return { duplicate: false };
       });
 

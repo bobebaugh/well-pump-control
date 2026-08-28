@@ -57,6 +57,10 @@ function fakeFirestore() {
         create(ref, value) {
           if (records.has(ref.path)) throw new Error("already exists");
           records.set(ref.path, value);
+        },
+        set(ref, value, options) {
+          const previous = records.get(ref.path) || {};
+          records.set(ref.path, options?.merge ? { ...previous, ...value } : value);
         }
       };
       return callback(transaction);
@@ -111,6 +115,9 @@ test("stores event openings and closings as separate records sharing eventId", a
   assert.equal(records.get(opened.document).eventId, eventOpen.eventId);
   assert.equal(records.get(closed.document).eventId, eventOpen.eventId);
   assert.notEqual(opened.recordId, closed.recordId);
+  const instance = records.get(`sites/well-main/eventInstances/${eventOpen.eventId}`);
+  assert.equal(instance.status, "closed");
+  assert.equal(instance.closeReason, eventClose.closeReason);
 });
 
 test("stores rules adoption and rejection audit records without creating event lifecycle state", async () => {
@@ -131,11 +138,12 @@ test("stores rules adoption and rejection audit records without creating event l
   assert.equal(records.size, 2);
 });
 
-test("accepts a close before its independently retried opening without creating lifecycle state", async () => {
+test("accepts a close before its independently retried opening and preserves a closed instance", async () => {
   const { handler, records } = makeHandler();
   const result = await handler(request(eventClose));
   assert.equal(result.statusCode, 201);
-  assert.equal(records.size, 1);
+  assert.equal(records.size, 2);
+  assert.equal(records.get(`sites/well-main/eventInstances/${eventClose.eventId}`).status, "closed");
 });
 
 test("an identical retry is accepted without a second document", async () => {
