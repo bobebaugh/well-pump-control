@@ -24,6 +24,35 @@ const DEVICE_DRIVERS = {
   "shelly-gen4-switch": "Shelly Gen4 RPC switch/input/script",
   "tab5-runtime": "Tab5 local runtime"
 };
+// This is the Tab5-facing binding catalog.  It deliberately makes the web
+// verifier reject a field that the device runtime has not explicitly agreed to
+// implement, rather than allowing a published package to fail at adoption.
+const DRIVER_BINDINGS = {
+  "shelly-gen1-em": {
+    "emeter/0.power": { type: "number", unit: "W", access: "read" },
+    "emeter/0.voltage": { type: "number", unit: "V", access: "read" },
+    "emeter/0.pf": { type: "number", unit: null, access: "read" },
+    "emeter/0.total": { type: "number", unit: "Wh", access: "read" },
+    "$availability": { type: "boolean", unit: null, access: "read" }
+  },
+  "shelly-gen4-switch": {
+    "SW(0)": { type: "boolean", unit: null, access: "read" },
+    "RLY(0)": { type: "boolean", unit: null, access: "readWrite", write: { method: "Switch.Set", parameters: { id: 0, valueParameter: "on" }, normalValue: true } },
+    "UDF(IsLocked)": { type: "integer", unit: "s", access: "read" },
+    "$availability": { type: "boolean", unit: null, access: "read" }
+  },
+  "tab5-runtime": {
+    "values.adc_raw": { type: "integer", unit: "count", access: "read" },
+    "status.pressure_sensor_commissioned": { type: "boolean", unit: null, access: "read" },
+    "status.adc_available": { type: "boolean", unit: null, access: "read" },
+    "status.clock_synced": { type: "boolean", unit: null, access: "read" },
+    "status.wifi_connected": { type: "boolean", unit: null, access: "read" },
+    "status.cloud_available": { type: "boolean", unit: null, access: "read" },
+    "values.battery_percent": { type: "number", unit: "%", access: "read" },
+    "status.buffer_used_pct": { type: "number", unit: "%", access: "read" },
+    "status.records_lost": { type: "integer", unit: "count", access: "read" }
+  }
+};
 const SUMMARY_OPERATIONS = { start: "Opening value", end: "Closing value", delta: "Closing minus opening", average: "Average while active", minimum: "Minimum while active", maximum: "Maximum while active" };
 const noLog = { mode: "none" };
 const deltaLog = threshold => ({ mode: "delta", threshold });
@@ -45,8 +74,8 @@ const DEFAULT_DRAFT = {
     {
       id: "shelly-1-main", label: "Shelly 1 Gen4", driver: "shelly-gen4-switch", address: "192.168.50.201", enabled: true,
       fields: [
-        { systemName: "PumpEnable", label: "Pump enable", object: "SW(0)", type: "boolean", unit: null, access: "readWrite", logging: changeLog, write: { method: "Switch.Set", parameters: { id: 0, valueParameter: "on" }, normalValue: true } },
-        { systemName: "ContactorFlag", label: "Contactor flag", object: "IN(0)", type: "boolean", unit: null, access: "read", logging: changeLog },
+        { systemName: "PumpEnable", label: "Pump enable", object: "RLY(0)", type: "boolean", unit: null, access: "readWrite", logging: changeLog, write: { method: "Switch.Set", parameters: { id: 0, valueParameter: "on" }, normalValue: true } },
+        { systemName: "ContactorFlag", label: "Contactor flag", object: "SW(0)", type: "boolean", unit: null, access: "read", logging: changeLog },
         { systemName: "IsLocked", label: "Shelly script lock remaining", object: "UDF(IsLocked)", type: "integer", unit: "s", access: "read", logging: deltaLog(10) },
         { systemName: "Shelly1Available", label: "Shelly 1 available", object: "$availability", type: "boolean", unit: null, access: "read", logging: changeLog }
       ]
@@ -67,7 +96,7 @@ const DEFAULT_DRAFT = {
     }
   ],
   calculatedFields: [
-    { id: "calc-pressure", label: "Calibrated pressure", kind: "expression", expression: "(PressureADCCounts - 3812.27) / 209.97", output: { systemName: "PressurePSI", label: "Calibrated pressure", type: "number", unit: "psi", logging: deltaLog(2) } },
+    { id: "calc-pressure", label: "Calibrated pressure", kind: "expression", expression: "(PressureADCCounts - 3732.02) / 211.492", output: { systemName: "PressurePSI", label: "Calibrated pressure", type: "number", unit: "psi", logging: deltaLog(2) } },
     { id: "calc-load-ratio", label: "Pump load ratio", kind: "expression", expression: "(PumpWatts / 2900) * 100", output: { systemName: "LoadRatioPercent", label: "Pump load ratio", type: "number", unit: "%", logging: deltaLog(5) } },
     {
       id: "calc-tank", label: "Main tank Boyle-law model", kind: "function", functionId: "boyle_tank", inputs: { pressure: "PressurePSI" },
@@ -121,4 +150,4 @@ const DEFAULT_DRAFT = {
 };
 
 function defaults() { return structuredClone(DEFAULT_DRAFT); }
-module.exports = { DEFAULT_DRAFT, DEVICE_DRIVERS, FUNCTION_CATALOG, SUMMARY_OPERATIONS, TYPE_OPERATORS, defaults };
+module.exports = { DEFAULT_DRAFT, DEVICE_DRIVERS, DRIVER_BINDINGS, FUNCTION_CATALOG, SUMMARY_OPERATIONS, TYPE_OPERATORS, defaults };

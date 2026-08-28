@@ -56,11 +56,17 @@ unit. With no valid v2 flash package, Tab5 presents a visible rules-unavailable
 state while fixed safe behavior continues. A later adopted package starts with
 a clear rule board; it does not migrate old event state.
 
-## Deferred semantic bindings
+## Runtime binding contract
 
-Before the named-field and evaluator unit, the package defaults must be aligned
-with actual Tab5 observation names and the reviewed Shelly-1 action mapping.
-In particular, the present web `PressureADCCounts` and `PumpEnable` authoring
-objects are not yet evidence that they bind to the current Tab5 observation or
-the installed relay semantics. That reconciliation is deliberately separate
-from the transport-only acceptance unit.
+The web verifier now accepts only named objects in the Tab5 runtime binding
+catalog. For this installation, `PressureADCCounts` is the filtered raw ADC
+count at `values.adc_raw`; pressure is calculated as
+`(PressureADCCounts - 3732.02) / 211.492`. No voltage conversion is part of
+the pressure contract.
+
+The installed Shelly-1 bindings are `ContactorFlag = SW(0)` and
+`PumpEnable = RLY(0)`. The sole writable mapping is
+`Switch.Set(id=0, on=<value>)`, whose normal value is `true`. The later Tab5
+named-field/evaluator unit must implement this catalog exactly; an intact
+published package rejected for a catalog mismatch is a defect, not a normal
+runtime outcome.

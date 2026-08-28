@@ -22,7 +22,9 @@ test("default authoring model compiles into a bounded Tab5-facing package", () =
   const order = result.runtimePackage.calculations.map(calculation => calculation.id);
   assert.ok(order.indexOf("calc-pressure") < order.indexOf("calc-tank"));
   assert.equal(result.runtimePackage.calculations.filter(calculation => calculation.kind === "function").length, 1);
-  assert.equal(result.runtimePackage.calculations.find(calculation => calculation.id === "calc-pressure").expression, "(PressureADCCounts - 3812.27) / 209.97");
+  assert.equal(result.runtimePackage.calculations.find(calculation => calculation.id === "calc-pressure").expression, "(PressureADCCounts - 3732.02) / 211.492");
+  assert.equal(result.runtimePackage.devices[1].fields.find(field => field.systemName === "PumpEnable").object, "RLY(0)");
+  assert.equal(result.runtimePackage.devices[1].fields.find(field => field.systemName === "ContactorFlag").object, "SW(0)");
   assert.equal(result.runtimePackage.events[0].close.basis, "openingFalse");
   assert.equal(result.runtimePackage.events[0].summary.aggregates.length, 4);
   assert.ok(Buffer.byteLength(JSON.stringify(result.runtimePackage), "utf8") < 65536);
@@ -123,4 +125,16 @@ test("writable fields require a complete device command and normal value", () =>
   assert.equal(result.valid, false);
   assert.ok(result.errors.some(error => error.code === "invalid_write_parameters"));
   assert.ok(result.errors.some(error => error.code === "invalid_normal_value"));
+});
+
+test("verification rejects bindings the Tab5 runtime has not implemented", () => {
+  const draft = defaults();
+  const pumpEnable = draft.devices[1].fields[0];
+  pumpEnable.object = "SW(0)";
+  pumpEnable.write = { method: "Switch.Set", parameters: { id: 1, valueParameter: "on" }, normalValue: true };
+  draft.devices[2].fields[0].object = "values.adc_microvolts";
+  const result = validateAndCompile(draft);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some(error => error.code === "driver_field_contract_mismatch"));
+  assert.ok(result.errors.some(error => error.code === "unsupported_device_object"));
 });

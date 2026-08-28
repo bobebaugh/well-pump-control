@@ -1,6 +1,6 @@
 "use strict";
 
-const { DEVICE_DRIVERS, FUNCTION_CATALOG, SUMMARY_OPERATIONS, TYPE_OPERATORS } = require("./rules-engine-defaults");
+const { DEVICE_DRIVERS, DRIVER_BINDINGS, FUNCTION_CATALOG, SUMMARY_OPERATIONS, TYPE_OPERATORS } = require("./rules-engine-defaults");
 
 const NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{1,63}$/;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$/;
@@ -61,6 +61,27 @@ function validateField(field, path, errors, names, writable = new Map()) {
   }
 }
 
+function sameJson(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
+
+function validateDriverBinding(driver, field, path, errors) {
+  if (!Object.hasOwn(DRIVER_BINDINGS, driver) || !isObject(field)) return;
+  if (typeof field.object !== "string" || !field.object) {
+    errors.push(issue(`${path}.object`, "missing_device_object", "A device object is required."));
+    return;
+  }
+  const binding = DRIVER_BINDINGS[driver][field.object];
+  if (!binding) {
+    errors.push(issue(`${path}.object`, "unsupported_device_object", `${field.object} is not implemented for ${driver}.`));
+    return;
+  }
+  if (field.type !== binding.type || (field.unit ?? null) !== binding.unit || field.access !== binding.access) {
+    errors.push(issue(path, "driver_field_contract_mismatch", `This ${driver} object requires ${binding.type}${binding.unit ? ` (${binding.unit})` : ""} ${binding.access} access.`));
+  }
+  if (binding.write && (!isObject(field.write) || field.write.method !== binding.write.method || !sameJson(field.write.parameters, binding.write.parameters) || field.write.normalValue !== binding.write.normalValue)) {
+    errors.push(issue(`${path}.write`, "driver_write_mapping_mismatch", `${field.object} must use its implemented ${binding.write.method} mapping.`));
+  }
+}
+
 function validateDevices(devices, errors, names, writable) {
   if (!Array.isArray(devices) || !devices.length) { errors.push(issue("devices", "missing_devices", "At least one device is required.")); return; }
   const ids = new Set();
@@ -73,7 +94,11 @@ function validateDevices(devices, errors, names, writable) {
     if (typeof device.address !== "string" || !device.address.trim()) errors.push(issue(`${path}.address`, "missing_address", "Device address is required."));
     if (typeof device.enabled !== "boolean") errors.push(issue(`${path}.enabled`, "invalid_enabled", "Enabled must be true or false."));
     if (!Array.isArray(device.fields) || !device.fields.length) errors.push(issue(`${path}.fields`, "missing_fields", "Device must expose at least one field."));
-    else device.fields.forEach((field, fieldIndex) => validateField(field, `${path}.fields[${fieldIndex}]`, errors, names, writable));
+    else device.fields.forEach((field, fieldIndex) => {
+      const fieldPath = `${path}.fields[${fieldIndex}]`;
+      validateField(field, fieldPath, errors, names, writable);
+      validateDriverBinding(device.driver, field, fieldPath, errors);
+    });
   });
 }
 
