@@ -69,6 +69,10 @@ Each release contains:
 
 The runtime body is rejected if it exceeds the current 65,536-byte Tab5 pilot limit.
 
+The editor lists every immutable published release in descending package-version order. A release can be inspected and its runtime package downloaded. A schema-compatible release can be restored into the three draft documents in one transaction. Restoration checks all current draft revisions, advances each draft revision, and leaves `rulesEngineState/current` unchanged. The restored draft must be validated and published as the next monotonically increasing version; an earlier release is never modified or reactivated in place. Releases from an incompatible authoring schema remain viewable and downloadable until an explicit migration is implemented.
+
+Direct device fields display their logging policy and change threshold with the observation identity. Device write method, arguments, and normal value are kept in a subordinate action-mapping panel so read-only telemetry does not force logging controls off screen.
+
 ## Validation boundary
 
 Publication requires all of the following:

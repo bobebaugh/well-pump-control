@@ -17,6 +17,8 @@ function harness(customize) {
   const published = [];
   const store = {
     async loadOrSeed() { return { draft: { ...structuredClone(draft), revisions: { ...revisions } }, current }; },
+    async listReleases() { return published.map(item => ({ releaseId: item.releaseId, packageVersion: item.release.packageVersion })).reverse(); },
+    async getRelease(releaseId) { return published.find(item => item.releaseId === releaseId)?.release || null; },
     async saveSection(section, expectedRevision, items) {
       assert.equal(expectedRevision, revisions[section]);
       draft[section] = structuredClone(items); revisions[section] += 1; return revisions[section];
@@ -25,6 +27,13 @@ function harness(customize) {
       assert.equal(expectedVersion, current?.packageVersion || 0);
       assert.deepEqual(expectedRevisions, revisions);
       published.push({ releaseId, release, stateValue }); current = stateValue;
+    },
+    async restoreRelease(releaseId, expectedRevisions) {
+      assert.deepEqual(expectedRevisions, revisions);
+      const release = published.find(item => item.releaseId === releaseId)?.release;
+      if (!release) { const error = new Error(); error.name = "RulesEngineReleaseNotFoundError"; throw error; }
+      for (const section of Object.keys(revisions)) { draft[section] = structuredClone(release.authoringPackage[section]); revisions[section] += 1; }
+      return { ...structuredClone(draft), schemaVersion: 2, revisions: { ...revisions } };
     }
   };
   if (customize) customize(draft, store);
@@ -39,6 +48,7 @@ test("loads seeded sections and advertises only disabled delivery", async () => 
   const body = JSON.parse(result.body);
   assert.equal(body.draft.devices.length, 3);
   assert.equal(body.draft.schemaVersion, 2);
+  assert.deepEqual(body.releases, []);
   assert.equal(body.capabilities.functions.boyle_tank.label, "Boyle-law tank model");
   assert.equal(body.capabilities.summaryOperations.average, "Average while active");
   assert.equal(body.delivery.enabled, false);
@@ -68,6 +78,24 @@ test("validates then publishes one immutable cross-section version", async () =>
   assert.equal(published[0].releaseId, "20260827163045-parameters-v1");
   assert.equal(published[0].release.runtimePackage.events[0].web, undefined);
   assert.equal(published[0].stateValue.contentHash, createHash("sha256").update(published[0].release.runtimeBody).digest("hex"));
+});
+
+test("lists, reads, and restores any published package without moving the current pointer", async () => {
+  const { handler } = harness();
+  await handler(request("POST", { action: "publish", basePackageVersion: 0 }));
+  const loaded = JSON.parse((await handler(request("GET"))).body);
+  assert.equal(loaded.releases.length, 1);
+  const releaseId = loaded.releases[0].releaseId;
+  const detail = await handler({ ...request("GET"), queryStringParameters: { releaseId } });
+  assert.equal(detail.statusCode, 200);
+  assert.equal(JSON.parse(detail.body).release.authoringPackage.schemaVersion, 2);
+
+  const restored = await handler(request("POST", { action: "restore", releaseId, baseRevisions: { devices: 1, calculatedFields: 1, events: 1 } }));
+  assert.equal(restored.statusCode, 200);
+  const body = JSON.parse(restored.body);
+  assert.deepEqual(body.draft.revisions, { devices: 2, calculatedFields: 2, events: 2 });
+  const after = JSON.parse((await handler(request("GET"))).body);
+  assert.equal(after.current.packageVersion, 1);
 });
 
 test("rejects invalid drafts, stale publication, and unauthorized access", async () => {

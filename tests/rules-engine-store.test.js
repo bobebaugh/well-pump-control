@@ -17,9 +17,20 @@ function fakeFirestore(initial) {
   class Collection {
     constructor(path) { this.path = path; }
     doc(id) { return new Reference(`${this.path}/${id}`); }
+    orderBy(field, direction) {
+      return {
+        get: async () => {
+          const prefix = `${this.path}/`;
+          const docs = [...values.entries()].filter(([path]) => path.startsWith(prefix) && !path.slice(prefix.length).includes("/"))
+            .map(([path]) => snapshot(path))
+            .sort((left, right) => (left.data()[field] - right.data()[field]) * (direction === "desc" ? -1 : 1));
+          return { docs };
+        }
+      };
+    }
   }
   function snapshot(path) {
-    return { exists: values.has(path), data: () => structuredClone(values.get(path)) };
+    return { id: path.split("/").pop(), exists: values.has(path), data: () => structuredClone(values.get(path)) };
   }
   const db = {
     collection(name) { return new Collection(name); },
@@ -74,4 +85,28 @@ test("publication checks every draft revision in the same transaction", async ()
     RulesEngineStoreConflictError
   );
   assert.equal(values.has(`${base}/rulesEngineReleases/release-9`), false);
+});
+
+test("release history is ordered and restoration atomically replaces all draft sections", async () => {
+  const base = "sites/well-main";
+  const releaseDraft = defaults();
+  releaseDraft.devices[0].address = "restored-address";
+  const { db, values } = fakeFirestore({
+    [`${base}/rulesEngineDraft/devices`]: { schemaVersion: 2, draftRevision: 2, items: [] },
+    [`${base}/rulesEngineDraft/calculatedFields`]: { schemaVersion: 2, draftRevision: 3, items: [] },
+    [`${base}/rulesEngineDraft/events`]: { schemaVersion: 2, draftRevision: 4, items: [] },
+    [`${base}/rulesEngineReleases/release-1`]: { releaseId: "release-1", schemaVersion: 2, packageVersion: 1, publishedAtMs: 100, contentHash: "one", runtimeBody: "{}", authoringPackage: releaseDraft },
+    [`${base}/rulesEngineReleases/release-2`]: { releaseId: "release-2", schemaVersion: 2, packageVersion: 2, publishedAtMs: 200, contentHash: "two", runtimeBody: "{}", authoringPackage: releaseDraft },
+    [`${base}/rulesEngineState/current`]: { packageVersion: 2, releaseId: "release-2" }
+  });
+  const store = createRulesEngineStore({ firebase: { getPilotFirestore: () => ({ db }) } });
+  const history = await store.listReleases();
+  assert.deepEqual(history.map(item => item.releaseId), ["release-2", "release-1"]);
+  assert.equal((await store.getRelease("release-1")).packageVersion, 1);
+
+  const restored = await store.restoreRelease("release-1", { devices: 2, calculatedFields: 3, events: 4 }, 300);
+  assert.deepEqual(restored.revisions, { devices: 3, calculatedFields: 4, events: 5 });
+  assert.equal(values.get(`${base}/rulesEngineDraft/devices`).items[0].address, "restored-address");
+  assert.equal(values.get(`${base}/rulesEngineDraft/events`).restoredFromReleaseId, "release-1");
+  assert.equal(values.get(`${base}/rulesEngineState/current`).releaseId, "release-2");
 });

@@ -35,6 +35,10 @@ function canonical(value) {
 function releaseIdAt(date, version) {
   return `${date.toISOString().replace(/[-:T]/g, "").slice(0, 14)}-parameters-v${version}`;
 }
+function requestedReleaseId(event) {
+  const value = event.queryStringParameters?.releaseId;
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(value) ? value : null;
+}
 
 function createHandler(dependencies = {}) {
   const env = dependencies.env || process.env;
@@ -49,9 +53,17 @@ function createHandler(dependencies = {}) {
     try {
       const store = storeFactory();
       if (event.httpMethod === "GET") {
+        if (event.queryStringParameters?.releaseId) {
+          const releaseId = requestedReleaseId(event);
+          if (!releaseId) return response(400, { status: "error", code: "invalid_release_id" });
+          const release = await store.getRelease(releaseId);
+          if (!release) return response(404, { status: "error", code: "release_not_found" });
+          return response(200, { status: "ok", release });
+        }
         const loaded = await store.loadOrSeed(defaults(), now().getTime());
+        const releases = await store.listReleases();
         return response(200, {
-          status: "ok", draft: loaded.draft, current: loaded.current,
+          status: "ok", draft: loaded.draft, current: loaded.current, releases,
           capabilities: { functions: FUNCTION_CATALOG, operators: TYPE_OPERATORS, drivers: DEVICE_DRIVERS, summaryOperations: SUMMARY_OPERATIONS },
           delivery: { enabled: false, description: "Firestore pilot only; no RTDB pointer or Tab5 delivery." }
         });
@@ -66,7 +78,14 @@ function createHandler(dependencies = {}) {
         return response(200, { status: "saved", section: request.section, revision });
       }
 
-      if (!request || !["validate", "publish"].includes(request.action)) return response(400, { status: "error", code: "invalid_action" });
+      if (!request || !["validate", "publish", "restore"].includes(request.action)) return response(400, { status: "error", code: "invalid_action" });
+      if (request.action === "restore") {
+        if (!requestedReleaseId({ queryStringParameters: { releaseId: request.releaseId } }) || !request.baseRevisions || SECTIONS.some(section => !Number.isInteger(request.baseRevisions[section]))) {
+          return response(400, { status: "error", code: "invalid_restore_request" });
+        }
+        const draft = await store.restoreRelease(request.releaseId, request.baseRevisions, now().getTime());
+        return response(200, { status: "restored", releaseId: request.releaseId, draft });
+      }
       const loaded = await store.loadOrSeed(defaults(), now().getTime());
       const result = validateAndCompile(loaded.draft);
       if (!result.valid) return response(400, { status: "invalid", errors: result.errors, warnings: result.warnings });
@@ -98,6 +117,8 @@ function createHandler(dependencies = {}) {
       return response(201, { status: "published", current: stateValue, warnings: result.warnings, runtimePackage, runtimeBytes: Buffer.byteLength(runtimeBody, "utf8") });
     } catch (error) {
       if (error?.name === "RulesEngineStoreConflictError") return response(409, { status: "error", code: "stale_draft" });
+      if (error?.name === "RulesEngineReleaseNotFoundError") return response(404, { status: "error", code: "release_not_found" });
+      if (error?.name === "RulesEngineIncompatibleReleaseError") return response(409, { status: "error", code: "incompatible_release_schema" });
       if (error?.code === "invalid_json" || error?.code === "payload_too_large") return response(400, { status: "error", code: error.code });
       const configurationError = error?.name === "ConfigurationError";
       console.error("Rules Engine pilot failed", { category: configurationError ? "configuration" : "storage" });

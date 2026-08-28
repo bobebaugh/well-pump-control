@@ -8,7 +8,7 @@ const sectionLabels = {
 const state = {
   draft: null, revisions: {}, current: null, capabilities: null,
   section: "devices", selected: { devices: 0, calculatedFields: 0, events: 0 },
-  dirty: new Set(), runtimePackage: null
+  dirty: new Set(), runtimePackage: null, releases: [], selectedRelease: null
 };
 
 const editor = document.querySelector("#engine-editor");
@@ -21,11 +21,11 @@ function escapeHtml(value) {
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 function setStatus(text, kind = "") { statusBox.className = `editor-status ${kind}`; statusBox.textContent = text; }
 function pilotKey() { return sessionStorage.getItem("pilotMonitorKey"); }
-async function api(method, payload) {
+async function api(method, payload, query = "") {
   let key = pilotKey();
   if (!key) key = window.prompt("Enter the pilot key");
   if (!key) throw new Error("cancelled");
-  const response = await fetch("/.netlify/functions/rules-engine", {
+  const response = await fetch(`/.netlify/functions/rules-engine${query}`, {
     method, cache: "no-store",
     headers: { "Accept": "application/json", "Content-Type": "application/json", "X-Pilot-Key": key },
     body: payload ? JSON.stringify(payload) : undefined
@@ -70,6 +70,76 @@ function markDirty() {
   document.querySelector("#validation-state").className = "warning-text";
 }
 
+function releaseDate(value) {
+  return Number.isFinite(value) ? new Date(value).toLocaleString() : "Date unavailable";
+}
+function renderReleaseHistory() {
+  const panel = document.querySelector("#release-history");
+  const select = document.querySelector("#release-select");
+  panel.hidden = false;
+  if (!state.releases.length) {
+    select.innerHTML = "<option value=''>No published packages</option>";
+    select.disabled = true;
+    document.querySelector("#release-view").disabled = true;
+    document.querySelector("#release-details").textContent = "Publishing the validated draft will create version 1.";
+    return;
+  }
+  select.disabled = false;
+  document.querySelector("#release-view").disabled = false;
+  select.innerHTML = state.releases.map(release => `<option value="${escapeHtml(release.releaseId)}">Version ${escapeHtml(release.packageVersion)} · ${escapeHtml(releaseDate(release.publishedAtMs))}${release.releaseId === state.current?.releaseId ? " · CURRENT" : ""}</option>`).join("");
+  state.selectedRelease = null;
+  document.querySelector("#release-download").disabled = true;
+  document.querySelector("#release-restore").disabled = true;
+  document.querySelector("#release-details").textContent = `${state.releases.length} immutable published package${state.releases.length === 1 ? "" : "s"} available.`;
+}
+
+async function viewRelease() {
+  const releaseId = document.querySelector("#release-select").value;
+  if (!releaseId) return;
+  setStatus(`Loading ${releaseId}…`);
+  try {
+    const result = await api("GET", undefined, `?releaseId=${encodeURIComponent(releaseId)}`);
+    const release = result.release;
+    state.selectedRelease = release;
+    const authoring = release.authoringPackage;
+    const compatible = authoring?.schemaVersion === 2;
+    const counts = authoring ? `${authoring.devices?.length || 0} devices · ${authoring.calculatedFields?.length || 0} calculated fields · ${authoring.events?.length || 0} events` : "Authoring package unavailable";
+    document.querySelector("#release-details").innerHTML = `<strong>Version ${escapeHtml(release.packageVersion)}${release.releaseId === state.current?.releaseId ? " · CURRENT" : ""}</strong><span>${escapeHtml(releaseDate(release.publishedAtMs))} · schema ${escapeHtml(release.schemaVersion ?? "unknown")} · ${escapeHtml(counts)}</span><code>SHA-256 ${escapeHtml(release.contentHash || "unavailable")}</code><em>${compatible ? "Compatible with the current editor" : "View/download only — migration required before restore"}</em>`;
+    document.querySelector("#release-download").disabled = !release.runtimePackage;
+    document.querySelector("#release-restore").disabled = !compatible;
+    setStatus(`Loaded immutable package version ${release.packageVersion}.`, "ok");
+  } catch (error) { setStatus(`Could not load release: ${error.body?.code || error.message}`, "error"); }
+}
+
+function downloadSelectedRelease() {
+  const release = state.selectedRelease;
+  if (!release?.runtimePackage) return;
+  const blob = new Blob([`${JSON.stringify(release.runtimePackage, null, 2)}\n`], { type: "application/json" });
+  const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `${release.releaseId}.json`; link.click(); URL.revokeObjectURL(link.href);
+}
+
+async function restoreSelectedRelease() {
+  const release = state.selectedRelease;
+  if (!release) return;
+  const confirmation = window.prompt(`Restore version ${release.packageVersion} into the current draft? Unsaved and saved draft work will be replaced. Published packages and the current pointer are unchanged. Type RESTORE to continue.`);
+  if (confirmation !== "RESTORE") return;
+  setStatus(`Restoring version ${release.packageVersion} into all draft sections…`);
+  try {
+    const result = await api("POST", { action: "restore", releaseId: release.releaseId, baseRevisions: state.revisions });
+    state.draft = result.draft; state.revisions = result.draft.revisions; state.dirty.clear(); state.runtimePackage = null;
+    state.selected = { devices: 0, calculatedFields: 0, events: 0 };
+    document.querySelector("#engine-save").disabled = true;
+    document.querySelector("#engine-validate").disabled = false;
+    document.querySelector("#engine-download").disabled = true;
+    document.querySelector("#engine-publish").disabled = true;
+    document.querySelector("#validation-state").textContent = "Not checked";
+    document.querySelector("#validation-state").className = "warning-text";
+    document.querySelector("#runtime-size").textContent = `Restored from version ${release.packageVersion}; validation required before publishing.`;
+    updateCounts(); renderEditor();
+    setStatus(`Version ${release.packageVersion} was restored to the draft. The published pointer remains version ${state.current?.packageVersion || "none"}. Validate before publishing a new version.`, "ok");
+  } catch (error) { setStatus(`Restore failed: ${error.body?.code || error.message}`, "error"); }
+}
+
 function captureDevice() {
   const device = state.draft.devices[state.selected.devices];
   if (!device || !document.querySelector("#device-id")) return;
@@ -110,19 +180,26 @@ function renderDevice() {
   if (!device) { editor.innerHTML = "<p class='empty-editor'>Add a device to begin.</p>"; return; }
   const driverOptions = Object.entries(state.capabilities.drivers).map(([id, label]) => `<option value="${escapeHtml(id)}"${id === device.driver ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
   const rows = device.fields.map((field, index) => `
-    <div class="device-field-row data-grid-row" data-index="${index}">
-      <input data-key="systemName" value="${escapeHtml(field.systemName)}" aria-label="System name">
-      <input data-key="label" value="${escapeHtml(field.label)}" aria-label="Label">
-      <input data-key="object" value="${escapeHtml(field.object)}" aria-label="Device object">
-      <select data-key="type"><option${field.type === "number" ? " selected" : ""}>number</option><option${field.type === "integer" ? " selected" : ""}>integer</option><option${field.type === "boolean" ? " selected" : ""}>boolean</option><option${field.type === "enum" ? " selected" : ""}>enum</option></select>
-      <input data-key="unit" value="${escapeHtml(field.unit || "")}" aria-label="Unit">
-      <select data-key="access"><option value="read"${field.access === "read" ? " selected" : ""}>read</option><option value="readWrite"${field.access === "readWrite" ? " selected" : ""}>read/write</option></select>
-      <input data-key="writeMethod" value="${escapeHtml(field.write?.method || "")}" aria-label="Write method" placeholder="method">
-      <input data-key="writeParameters" value="${escapeHtml(typeof field.write?.parameters === "string" ? field.write.parameters : JSON.stringify(field.write?.parameters || {}))}" aria-label="Write parameters" placeholder='{"valueParameter":"on"}'>
-      <input data-key="normalValue" value="${escapeHtml(field.write?.normalValue ?? "")}" aria-label="Normal value" placeholder="normal">
-      <select data-key="logMode">${logModeOptions(field.logging?.mode)}</select>
-      <input data-key="threshold" type="number" step="any" value="${escapeHtml(field.logging?.threshold ?? "")}" aria-label="Logging threshold">
-      <button class="row-delete" type="button" data-remove-field="${index}" aria-label="Remove field">×</button>
+    <div class="device-field-row" data-index="${index}">
+      <div class="device-field-primary">
+        <label class="field-system"><span>System name</span><input data-key="systemName" value="${escapeHtml(field.systemName)}"></label>
+        <label class="field-label"><span>Label</span><input data-key="label" value="${escapeHtml(field.label)}"></label>
+        <label class="field-object"><span>Object</span><input data-key="object" value="${escapeHtml(field.object)}"></label>
+        <label class="field-type"><span>Type</span><select data-key="type"><option${field.type === "number" ? " selected" : ""}>number</option><option${field.type === "integer" ? " selected" : ""}>integer</option><option${field.type === "boolean" ? " selected" : ""}>boolean</option><option${field.type === "enum" ? " selected" : ""}>enum</option></select></label>
+        <label class="field-unit"><span>Unit</span><input data-key="unit" value="${escapeHtml(field.unit || "")}"></label>
+        <label class="field-log"><span>Log</span><select data-key="logMode">${logModeOptions(field.logging?.mode)}</select></label>
+        <label class="field-threshold"><span>Change threshold</span><input data-key="threshold" type="number" step="any" value="${escapeHtml(field.logging?.threshold ?? "")}"${field.logging?.mode !== "delta" ? " disabled" : ""}></label>
+        <label class="field-access"><span>Access</span><select data-key="access"><option value="read"${field.access === "read" ? " selected" : ""}>read</option><option value="readWrite"${field.access === "readWrite" ? " selected" : ""}>read/write</option></select></label>
+        <button class="row-delete field-delete" type="button" data-remove-field="${index}" aria-label="Remove field">×</button>
+      </div>
+      <details class="field-action-mapping"${field.access === "readWrite" ? " open" : ""}>
+        <summary>Device action mapping</summary>
+        <div>
+          <label><span>Write method</span><input data-key="writeMethod" value="${escapeHtml(field.write?.method || "")}" placeholder="method"></label>
+          <label><span>Write arguments</span><input data-key="writeParameters" value="${escapeHtml(typeof field.write?.parameters === "string" ? field.write.parameters : JSON.stringify(field.write?.parameters || {}))}" placeholder='{"valueParameter":"on"}'></label>
+          <label><span>Normal value</span><input data-key="normalValue" value="${escapeHtml(field.write?.normalValue ?? "")}" placeholder="normal"></label>
+        </div>
+      </details>
     </div>`).join("");
   editor.innerHTML = `
     <div class="engine-editor-heading"><div><p class="kicker">DEVICE DEFINITION</p><h2>${escapeHtml(device.label)}</h2></div><div class="inline-switches"><label class="switch-label"><input id="device-enabled" type="checkbox"${device.enabled ? " checked" : ""}> Enabled</label><button class="secondary-button compact-button danger-button" id="remove-item" type="button">Remove</button></div></div>
@@ -133,10 +210,7 @@ function renderDevice() {
       <label>IP address / location<input id="device-address" value="${escapeHtml(device.address)}"></label>
     </div>
     <div class="subsection-heading"><div><p class="kicker">NAMED FIELDS</p><h2>Telemetry and actions</h2></div><button class="secondary-button compact-button" id="add-device-field" type="button">Add field</button></div>
-    <div class="data-grid device-fields-grid">
-      <div class="data-grid-head"><span>System name</span><span>Label</span><span>Object</span><span>Type</span><span>Unit</span><span>Access</span><span>Write method</span><span>Write args</span><span>Normal</span><span>Log</span><span>Range</span><span></span></div>
-      ${rows}
-    </div>
+    <div class="device-fields-grid">${rows}</div>
     <p class="form-help">External calculations and events reference the system name. Device objects and API methods remain inside this definition.</p>`;
 }
 
@@ -367,12 +441,12 @@ async function loadDraft() {
   setStatus("Loading the Rules Engine draft…");
   try {
     const result = await api("GET");
-    state.draft = result.draft; state.revisions = result.draft.revisions; state.current = result.current; state.capabilities = result.capabilities; state.dirty.clear(); state.runtimePackage = null;
+    state.draft = result.draft; state.revisions = result.draft.revisions; state.current = result.current; state.capabilities = result.capabilities; state.releases = result.releases || []; state.dirty.clear(); state.runtimePackage = null;
     document.querySelector("#engine-release").textContent = result.current ? `${result.current.releaseId} · version ${result.current.packageVersion}` : "No published parameter package";
     document.querySelector("#engine-hash").textContent = result.current ? `SHA-256 ${result.current.contentHash} · delivery disabled` : "Defaults loaded into the Firestore draft; delivery disabled.";
     document.querySelector("#engine-tabs").hidden = false; document.querySelector("#engine-workspace").hidden = false;
     ["engine-save", "engine-validate", "engine-publish"].forEach(id => document.querySelector(`#${id}`).disabled = false);
-    updateCounts(); renderEditor(); setStatus("Draft loaded. All default events are OFF.", "ok");
+    updateCounts(); renderEditor(); renderReleaseHistory(); setStatus("Draft loaded. All default events are OFF.", "ok");
   } catch (error) { if (error.message !== "cancelled") setStatus(`Could not load Rules Engine: ${error.body?.code || error.message}`, "error"); }
 }
 
@@ -416,10 +490,11 @@ async function publishPackage() {
   try {
     const result = await api("POST", { action: "publish", basePackageVersion: state.current?.packageVersion || 0 });
     state.current = result.current; state.runtimePackage = result.runtimePackage;
+    state.releases = [{ ...result.current, schemaVersion: 2, runtimeBytes: result.runtimeBytes }, ...state.releases.filter(release => release.releaseId !== result.current.releaseId)];
     document.querySelector("#engine-release").textContent = `${result.current.releaseId} · version ${result.current.packageVersion}`;
     document.querySelector("#engine-hash").textContent = `SHA-256 ${result.current.contentHash} · delivery disabled`;
     document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte MicroPython runtime package · RTDB delivery disabled`;
-    showFindings(result); setStatus("Immutable package published to Firestore. Nothing was sent to RTDB or Tab5.", "ok");
+    renderReleaseHistory(); showFindings(result); setStatus("Immutable package published to Firestore. Nothing was sent to RTDB or Tab5.", "ok");
   } catch (error) { setStatus(`Publish failed: ${error.body?.code || error.message}`, "error"); }
 }
 function downloadRuntime() {
@@ -455,6 +530,15 @@ document.querySelector("#engine-save").addEventListener("click", async () => { t
 document.querySelector("#engine-validate").addEventListener("click", validatePackage);
 document.querySelector("#engine-publish").addEventListener("click", publishPackage);
 document.querySelector("#engine-download").addEventListener("click", downloadRuntime);
+document.querySelector("#release-view").addEventListener("click", viewRelease);
+document.querySelector("#release-download").addEventListener("click", downloadSelectedRelease);
+document.querySelector("#release-restore").addEventListener("click", restoreSelectedRelease);
+document.querySelector("#release-select").addEventListener("change", () => {
+  state.selectedRelease = null;
+  document.querySelector("#release-download").disabled = true;
+  document.querySelector("#release-restore").disabled = true;
+  document.querySelector("#release-details").textContent = "Select View to inspect this immutable package.";
+});
 document.querySelector("#add-item").addEventListener("click", addItem);
 document.querySelector("#engine-tabs").addEventListener("click", event => {
   const button = event.target.closest("[data-section]"); if (!button || button.dataset.section === state.section) return;
@@ -475,6 +559,9 @@ editor.addEventListener("change", event => {
   }
   if (event.target.id === "close-basis") {
     captureEvent(); renderEditor(); return;
+  }
+  if (event.target.dataset.key === "access" || event.target.dataset.key === "logMode") {
+    if (state.section === "devices") { captureDevice(); renderEditor(); return; }
   }
   if (event.target.dataset.key === "field") {
     const row = event.target.closest(".condition-row"); const operator = row.querySelector("[data-key=operator]"); operator.innerHTML = operatorOptions(event.target.value, null);

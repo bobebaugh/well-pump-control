@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#09111f">
   <title>Rules Engine — Well Pump Pilot</title>
-  <link rel="stylesheet" href="/styles.css?v=20260827-2">
-  <script src="/rules-engine.js?v=20260827-2" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=20260828-3">
+  <script src="/rules-engine.js?v=20260828-3" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -48,6 +48,21 @@
     </section>
 
     <section id="engine-status" class="editor-status" aria-live="polite">No draft loaded.</section>
+
+    <section id="release-history" class="panel release-history" hidden>
+      <div>
+        <p class="kicker">PUBLISHED PACKAGE HISTORY</p>
+        <h2>Immutable releases</h2>
+        <small>Select any published version. Restoring copies it into the draft; publishing always creates the next version.</small>
+      </div>
+      <label class="release-selector">Published version<select id="release-select"></select></label>
+      <div class="release-actions">
+        <button class="secondary-button" id="release-view" type="button">View</button>
+        <button class="secondary-button" id="release-download" type="button" disabled>Download runtime</button>
+        <button class="secondary-button" id="release-restore" type="button" disabled>Restore to draft</button>
+      </div>
+      <div id="release-details" class="release-details">No published package selected.</div>
+    </section>
 
     <nav id="engine-tabs" class="engine-tiles" aria-label="Rules Engine sections" hidden>
       <button class="engine-tile active" type="button" data-section="devices">
