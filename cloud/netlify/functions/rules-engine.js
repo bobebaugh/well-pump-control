@@ -151,7 +151,15 @@ function createHandler(dependencies = {}) {
       if (error?.name === "RulesEngineDeliveryError") return response(503, { status: "error", code: error.code });
       if (error?.code === "invalid_json" || error?.code === "payload_too_large") return response(400, { status: "error", code: error.code });
       const configurationError = error?.name === "ConfigurationError";
-      console.error("Rules Engine pilot failed", { category: configurationError ? "configuration" : "storage" });
+      // Preserve the intentionally generic browser response, but retain enough
+      // non-sensitive information in the Netlify log to diagnose a Firestore
+      // failure without logging release contents or credentials.
+      const errorCode = typeof error?.code === "string" || typeof error?.code === "number" ? String(error.code) : undefined;
+      console.error("Rules Engine pilot failed", {
+        category: configurationError ? "configuration" : "storage",
+        errorName: error?.name || "Error",
+        ...(errorCode ? { errorCode } : {})
+      });
       return response(503, { status: "error", code: configurationError ? "configuration_missing" : "rules_engine_unavailable" });
     }
   };
