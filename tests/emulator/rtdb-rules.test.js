@@ -81,7 +81,7 @@ before(async () => {
     const admin = context.database();
     await set(ref(admin, `${DEVICE}/commands/cmd-12`), { commandSequence: 12, status: "pending" });
     await set(ref(admin, `${SITE}/control/globalEnable`), false);
-    await set(ref(admin, `${SITE}/rules/current`), { rulesVersion: 1, contentHash: "0".repeat(64) });
+    await set(ref(admin, `${SITE}/rules/current`), { packageVersion: 1, contentHash: "0".repeat(64) });
   });
 });
 
@@ -124,7 +124,7 @@ test("device cannot write commands, control, rules, parents, or unrelated paths"
   for (const [path, value] of [
     [`${DEVICE}/commands/new`, { commandSequence: 13 }],
     [`${SITE}/control/globalEnable`, true],
-    [`${SITE}/rules/current`, { rulesVersion: 2 }],
+    [`${SITE}/rules/current`, { packageVersion: 2 }],
     [DEVICE, { presence: presence() }],
     [`${SITE}/unrelated`, true]
   ]) await assertFails(set(ref(deviceDatabase, path), value));
@@ -132,14 +132,15 @@ test("device cannot write commands, control, rules, parents, or unrelated paths"
 
 test("fixed publisher can replace only a complete rules pointer", async () => {
   const current = {
-    schemaVersion: 1, siteId: "well-main", releaseId: "20260825143045-rules-v2",
-    rulesVersion: 2, rulesSchemaVersion: 1, contentHash: "a".repeat(64),
-    hashAlgorithm: "sha256", publishedAtMs: 1787668245000,
-    downloadPath: "/.netlify/functions/rules-release/20260825143045-rules-v2.json"
+    schemaVersion: 2, kind: "well-pump-runtime-release-pointer", siteId: "well-main",
+    releaseId: "20260825143045-parameters-v2", packageVersion: 2,
+    runtimeSchemaVersion: 2, contentHash: "a".repeat(64), hashAlgorithm: "sha256",
+    byteLength: 1234, publishedAtMs: 1787668245000,
+    downloadPath: "/.netlify/functions/rules-engine-release?releaseId=20260825143045-parameters-v2"
   };
   await assertSucceeds(set(ref(publisherDatabase, `${SITE}/rules/current`), current));
   await assertSucceeds(get(ref(publisherDatabase, `${SITE}/rules/current`)));
-  await assertFails(set(ref(publisherDatabase, `${SITE}/rules/current`), { rulesVersion: 3 }));
+  await assertFails(set(ref(publisherDatabase, `${SITE}/rules/current`), { packageVersion: 3 }));
   await assertFails(set(ref(publisherDatabase, `${SITE}/control/globalEnable`), true));
 });
 

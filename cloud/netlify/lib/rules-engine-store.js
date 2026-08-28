@@ -97,6 +97,24 @@ function createRulesEngineStore(dependencies = {}) {
       });
     },
 
+    async markDelivered(releaseId, contentHash, metadata, nowMs) {
+      return db.runTransaction(async transaction => {
+        const current = await transaction.get(state);
+        if (!current.exists || current.data().releaseId !== releaseId ||
+            current.data().contentHash !== contentHash) {
+          throw new RulesEngineStoreConflictError();
+        }
+        const next = {
+          ...current.data(),
+          deliveryEnabled: true,
+          deliveredAtMs: nowMs,
+          delivery: metadata
+        };
+        transaction.set(state, next);
+        return next;
+      });
+    },
+
     async restoreRelease(releaseId, expectedRevisions, nowMs) {
       const releaseReference = releases.doc(releaseId);
       return db.runTransaction(async transaction => {

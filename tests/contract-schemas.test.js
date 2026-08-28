@@ -16,7 +16,8 @@ const schemas = [
   "contracts/device-command-v1.schema.json",
   "contracts/device-sync-v1.schema.json",
   "contracts/rules-release-metadata-v1.schema.json",
-  "contracts/rules-package-v1.schema.json"
+  "contracts/rules-package-v1.schema.json",
+  "contracts/rules-runtime-release-metadata-v2.schema.json"
 ];
 
 const examples = [
@@ -29,6 +30,7 @@ const examples = [
   ["contracts/device-sync-v1.schema.json", "contracts/examples/v1/device-sync-response.json"],
   ["contracts/rules-release-metadata-v1.schema.json", "contracts/examples/v1/rules-release-metadata.json"],
   ["contracts/rules-package-v1.schema.json", "contracts/examples/v1/rules-package.json"]
+  ,["contracts/rules-runtime-release-metadata-v2.schema.json", "contracts/examples/v2/rules-runtime-release-metadata.json"]
 ];
 
 const schemaRegistry = new Map(schemas.flatMap(relative => {
@@ -153,7 +155,9 @@ test("durable ingest contracts allow cloud-owned receipt time to be omitted", ()
 test("coordination contracts reject unsupported schema versions", () => {
   for (const [schemaPath, examplePath] of examples) {
     const schema = readJson(schemaPath);
-    const example = { ...readJson(examplePath), schemaVersion: 2 };
+    const expectedVersion = schema.properties?.schemaVersion?.const;
+    if (!Number.isInteger(expectedVersion)) continue;
+    const example = { ...readJson(examplePath), schemaVersion: expectedVersion + 1 };
     assert.notDeepEqual(validate(schema, example), [], `${examplePath} accepted schemaVersion 2`);
   }
 });

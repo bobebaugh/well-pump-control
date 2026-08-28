@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 2,
+  "kind": "well-pump-runtime-release-pointer",
+  "siteId": "well-main",
+  "releaseId": "20260828170000-parameters-v1",
+  "packageVersion": 1,
+  "runtimeSchemaVersion": 2,
+  "contentHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "hashAlgorithm": "sha256",
+  "byteLength": 12345,
+  "publishedAtMs": 1787936400000,
+  "downloadPath": "/.netlify/functions/rules-engine-release?releaseId=20260828170000-parameters-v1"
+}

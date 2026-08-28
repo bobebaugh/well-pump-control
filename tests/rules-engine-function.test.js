@@ -15,6 +15,7 @@ function harness(customize) {
   const revisions = { devices: 1, calculatedFields: 1, events: 1 };
   let current = null;
   const published = [];
+  const deliveries = [];
   const store = {
     async loadOrSeed() { return { draft: { ...structuredClone(draft), revisions: { ...revisions } }, current }; },
     async listReleases() { return published.map(item => ({ releaseId: item.releaseId, packageVersion: item.release.packageVersion })).reverse(); },
@@ -28,6 +29,12 @@ function harness(customize) {
       assert.deepEqual(expectedRevisions, revisions);
       published.push({ releaseId, release, stateValue }); current = stateValue;
     },
+    async markDelivered(releaseId, contentHash, metadata, nowMs) {
+      assert.equal(releaseId, current?.releaseId);
+      assert.equal(contentHash, current?.contentHash);
+      current = { ...current, deliveryEnabled: true, deliveredAtMs: nowMs, delivery: metadata };
+      return current;
+    },
     async restoreRelease(releaseId, expectedRevisions) {
       assert.deepEqual(expectedRevisions, revisions);
       const release = published.find(item => item.releaseId === releaseId)?.release;
@@ -37,8 +44,12 @@ function harness(customize) {
     }
   };
   if (customize) customize(draft, store);
-  const handler = _createHandler({ env: { PILOT_INGEST_TOKEN: "test-key" }, createStore: () => store, now: () => new Date("2026-08-27T16:30:45.000Z") });
-  return { handler, draft, published };
+  const handler = _createHandler({
+    env: { PILOT_INGEST_TOKEN: "test-key" }, createStore: () => store,
+    createDelivery: () => ({ async publishPointer(metadata) { deliveries.push(metadata); } }),
+    now: () => new Date("2026-08-27T16:30:45.000Z")
+  });
+  return { handler, draft, published, deliveries };
 }
 
 test("loads seeded sections and advertises only disabled delivery", async () => {
@@ -96,6 +107,33 @@ test("lists, reads, and restores any published package without moving the curren
   assert.deepEqual(body.draft.revisions, { devices: 2, calculatedFields: 2, events: 2 });
   const after = JSON.parse((await handler(request("GET"))).body);
   assert.equal(after.current.packageVersion, 1);
+});
+
+test("delivers only the current immutable package after rechecking exact bytes", async () => {
+  const { handler, deliveries } = harness();
+  const published = JSON.parse((await handler(request("POST", { action: "publish", basePackageVersion: 0 }))).body);
+  const delivered = await handler(request("POST", { action: "deliver", releaseId: published.current.releaseId }));
+  assert.equal(delivered.statusCode, 200);
+  const body = JSON.parse(delivered.body);
+  assert.equal(body.status, "delivered");
+  assert.equal(body.current.deliveryEnabled, true);
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0].packageVersion, 1);
+  assert.equal(deliveries[0].runtimeSchemaVersion, 2);
+  assert.equal(deliveries[0].contentHash, published.current.contentHash);
+  assert.match(deliveries[0].downloadPath, /rules-engine-release\?releaseId=/);
+});
+
+test("does not point RTDB backward to a historical immutable package", async () => {
+  const { handler, deliveries } = harness();
+  const first = JSON.parse((await handler(request("POST", { action: "publish", basePackageVersion: 0 }))).body);
+  const second = JSON.parse((await handler(request("POST", { action: "publish", basePackageVersion: 1 }))).body);
+  const old = await handler(request("POST", { action: "deliver", releaseId: first.current.releaseId }));
+  assert.equal(old.statusCode, 409);
+  assert.equal(JSON.parse(old.body).code, "delivery_not_current");
+  assert.equal(deliveries.length, 0);
+  const current = await handler(request("POST", { action: "deliver", releaseId: second.current.releaseId }));
+  assert.equal(current.statusCode, 200);
 });
 
 test("rejects invalid drafts, stale publication, and unauthorized access", async () => {

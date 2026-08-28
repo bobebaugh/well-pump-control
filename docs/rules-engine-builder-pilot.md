@@ -65,9 +65,9 @@ Each release contains:
 - The complete authoring package, including web notification policy.
 - The compiled, ordered runtime package with web-only fields removed.
 - A canonical JSON body and SHA-256 content hash.
-- `deliveryEnabled: false`.
+- a `deliveryEnabled` state that remains false until the operator explicitly delivers the current immutable release.
 
-The runtime body is rejected if it exceeds the current 65,536-byte Tab5 pilot limit.
+The runtime body is rejected if it exceeds the current 65,536-byte Tab5 pilot limit. Delivery rechecks the stored bytes, SHA-256 hash, release identity, package version, and byte length before writing one schema-v2 desired-release pointer to RTDB. Only the current immutable release can be delivered; restoring an earlier release requires publishing it again as the next monotonic version.
 
 The editor lists every immutable published release in descending package-version order. A release can be inspected and its runtime package downloaded. A schema-compatible release can be restored into the three draft documents in one transaction. Restoration checks all current draft revisions, advances each draft revision, and leaves `rulesEngineState/current` unchanged. The restored draft must be validated and published as the next monotonically increasing version; an earlier release is never modified or reactivated in place. Releases from an incompatible authoring schema remain viewable and downloadable until an explicit migration is implemented.
 

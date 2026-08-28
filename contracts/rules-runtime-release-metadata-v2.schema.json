@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/rules-runtime-release-metadata-v2.schema.json",
+  "title": "RTDB desired Rules Engine runtime package v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "siteId", "releaseId", "packageVersion", "runtimeSchemaVersion", "contentHash", "hashAlgorithm", "byteLength", "publishedAtMs", "downloadPath"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "kind": { "const": "well-pump-runtime-release-pointer" },
+    "siteId": { "const": "well-main" },
+    "releaseId": { "type": "string", "pattern": "^[0-9]{14}-parameters-v[1-9][0-9]*$" },
+    "packageVersion": { "type": "integer", "minimum": 1 },
+    "runtimeSchemaVersion": { "const": 2 },
+    "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "hashAlgorithm": { "const": "sha256" },
+    "byteLength": { "type": "integer", "minimum": 1, "maximum": 65536 },
+    "publishedAtMs": { "type": "integer", "minimum": 0 },
+    "downloadPath": { "type": "string", "pattern": "^/\\.netlify/functions/rules-engine-release\\?releaseId=[0-9]{14}-parameters-v[1-9][0-9]*$" }
+  }
+}

@@ -62,6 +62,10 @@ function updateCounts() {
   document.querySelector("#calculations-count").textContent = `${state.draft.calculatedFields.length} configured`;
   document.querySelector("#events-count").textContent = `${state.draft.events.length} configured`;
 }
+function deliveryText(current) {
+  if (!current) return "Defaults loaded into the Firestore draft; no immutable package is published.";
+  return `SHA-256 ${current.contentHash} · ${current.deliveryEnabled ? "RTDB desired release published" : "not delivered to RTDB"}`;
+}
 function markDirty() {
   state.dirty.add(state.section);
   document.querySelector("#engine-save").disabled = false;
@@ -443,9 +447,10 @@ async function loadDraft() {
     const result = await api("GET");
     state.draft = result.draft; state.revisions = result.draft.revisions; state.current = result.current; state.capabilities = result.capabilities; state.releases = result.releases || []; state.dirty.clear(); state.runtimePackage = null;
     document.querySelector("#engine-release").textContent = result.current ? `${result.current.releaseId} · version ${result.current.packageVersion}` : "No published parameter package";
-    document.querySelector("#engine-hash").textContent = result.current ? `SHA-256 ${result.current.contentHash} · delivery disabled` : "Defaults loaded into the Firestore draft; delivery disabled.";
+    document.querySelector("#engine-hash").textContent = deliveryText(result.current);
     document.querySelector("#engine-tabs").hidden = false; document.querySelector("#engine-workspace").hidden = false;
     ["engine-save", "engine-validate", "engine-publish"].forEach(id => document.querySelector(`#${id}`).disabled = false);
+    document.querySelector("#engine-deliver").disabled = !result.current || result.current.deliveryEnabled === true;
     updateCounts(); renderEditor(); renderReleaseHistory(); setStatus("Draft loaded. All default events are OFF.", "ok");
   } catch (error) { if (error.message !== "cancelled") setStatus(`Could not load Rules Engine: ${error.body?.code || error.message}`, "error"); }
 }
@@ -472,7 +477,7 @@ async function validatePackage() {
     await saveAll(); const result = await api("POST", { action: "validate" });
     state.runtimePackage = result.runtimePackage;
     document.querySelector("#validation-state").textContent = "Passed"; document.querySelector("#validation-state").className = "ok-text";
-    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte MicroPython runtime package · RTDB delivery disabled`;
+    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte MicroPython runtime package · publish before delivery`;
     document.querySelector("#engine-download").disabled = false; document.querySelector("#engine-publish").disabled = false;
     showFindings(result); setStatus("Validation passed. The draft can become the next immutable package version.", "ok");
   } catch (error) {
@@ -492,10 +497,24 @@ async function publishPackage() {
     state.current = result.current; state.runtimePackage = result.runtimePackage;
     state.releases = [{ ...result.current, schemaVersion: 2, runtimeBytes: result.runtimeBytes }, ...state.releases.filter(release => release.releaseId !== result.current.releaseId)];
     document.querySelector("#engine-release").textContent = `${result.current.releaseId} · version ${result.current.packageVersion}`;
-    document.querySelector("#engine-hash").textContent = `SHA-256 ${result.current.contentHash} · delivery disabled`;
-    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte MicroPython runtime package · RTDB delivery disabled`;
-    renderReleaseHistory(); showFindings(result); setStatus("Immutable package published to Firestore. Nothing was sent to RTDB or Tab5.", "ok");
+    document.querySelector("#engine-hash").textContent = deliveryText(result.current);
+    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte MicroPython runtime package · ready for controlled RTDB delivery`;
+    document.querySelector("#engine-deliver").disabled = false;
+    renderReleaseHistory(); showFindings(result); setStatus("Immutable package published. Delivery remains an explicit, separately confirmed action.", "ok");
   } catch (error) { setStatus(`Publish failed: ${error.body?.code || error.message}`, "error"); }
+}
+async function deliverPackage() {
+  if (!state.current) return;
+  const confirmation = window.prompt(`Publish immutable version ${state.current.packageVersion} to the RTDB desired-release pointer? This does not bypass Tab5 validation or adoption. Type DELIVER to continue.`);
+  if (confirmation !== "DELIVER") return;
+  setStatus(`Publishing version ${state.current.packageVersion} as the desired Tab5 package…`);
+  try {
+    const result = await api("POST", { action: "deliver", releaseId: state.current.releaseId });
+    state.current = result.current;
+    document.querySelector("#engine-hash").textContent = deliveryText(state.current);
+    document.querySelector("#engine-deliver").disabled = true;
+    setStatus(`Version ${state.current.packageVersion} is now the RTDB desired package. Tab5 will still download, validate, and either adopt or reject it independently.`, "ok");
+  } catch (error) { setStatus(`Delivery failed: ${error.body?.code || error.message}`, "error"); }
 }
 function downloadRuntime() {
   if (!state.runtimePackage) return;
@@ -529,6 +548,7 @@ document.querySelector("#engine-load").addEventListener("click", loadDraft);
 document.querySelector("#engine-save").addEventListener("click", async () => { try { const sections = await saveAll(); setStatus(`Saved ${sections.join(", ")} draft section(s).`, "ok"); } catch (error) { setStatus(`Save failed: ${error.body?.code || error.message}`, "error"); } });
 document.querySelector("#engine-validate").addEventListener("click", validatePackage);
 document.querySelector("#engine-publish").addEventListener("click", publishPackage);
+document.querySelector("#engine-deliver").addEventListener("click", deliverPackage);
 document.querySelector("#engine-download").addEventListener("click", downloadRuntime);
 document.querySelector("#release-view").addEventListener("click", viewRelease);
 document.querySelector("#release-download").addEventListener("click", downloadSelectedRelease);

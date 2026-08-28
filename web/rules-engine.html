@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#09111f">
   <title>Rules Engine — Well Pump Pilot</title>
-  <link rel="stylesheet" href="/styles.css?v=20260828-3">
-  <script src="/rules-engine.js?v=20260828-3" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=20260828-4">
+  <script src="/rules-engine.js?v=20260828-4" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -17,14 +17,14 @@
     <div class="topbar-actions">
       <a class="nav-link" href="/rules.html">Rules editor</a>
       <a class="nav-link" href="/">Monitoring</a>
-      <div class="pilot-badge"><span></span>Firestore pilot</div>
+      <div class="pilot-badge"><span></span>Rules Engine pilot</div>
     </div>
   </header>
 
   <main class="engine-main">
     <section class="editor-notice">
       <strong>Executable design pilot.</strong>
-      <span>Builds and versions a validated MicroPython-friendly package. RTDB delivery and Tab5 adoption are disabled.</span>
+      <span>Builds and versions a validated MicroPython-friendly package. Delivery updates RTDB only after an immutable release is rechecked; Tab5 adoption remains a separate device-side gate.</span>
     </section>
 
     <section class="panel engine-toolbar">
@@ -44,6 +44,7 @@
         <button class="secondary-button" id="engine-validate" type="button" disabled>Validate package</button>
         <button class="secondary-button" id="engine-download" type="button" disabled>Download runtime JSON</button>
         <button class="primary-button" id="engine-publish" type="button" disabled>Publish next version</button>
+        <button class="primary-button" id="engine-deliver" type="button" disabled>Deliver current to Tab5</button>
       </div>
     </section>
 

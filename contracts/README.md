@@ -12,6 +12,7 @@ The M2 v1 contracts define the target cloud/RTDB boundary without implementing o
 - `device-command-v1.schema.json` — RTDB command coordination;
 - `device-sync-v1.schema.json` — `device-sync` request and response;
 - `rules-release-metadata-v1.schema.json` — RTDB current rules pointer.
+- `rules-runtime-release-metadata-v2.schema.json` — RTDB desired immutable Rules Engine runtime package. This supersedes the legacy v1 rules package pointer for new Tab5 releases.
 
 Every schema has one or more valid examples under `examples/v1/`. Unknown observation fields are deliberately preserved. See `docs/cloud-rtdb-contracts-v1.md` for paths, identifiers, idempotency, and the staged endpoint migration.
 

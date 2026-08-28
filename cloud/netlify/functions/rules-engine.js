@@ -4,6 +4,7 @@ const { createHash, timingSafeEqual } = require("node:crypto");
 const { defaults, DEVICE_DRIVERS, FUNCTION_CATALOG, SUMMARY_OPERATIONS, TYPE_OPERATORS } = require("../lib/rules-engine-defaults");
 const { validateAndCompile } = require("../lib/rules-engine-contract");
 const { SECTIONS } = require("../lib/rules-engine-store");
+const { RulesEngineReleaseError, RELEASE_ID_PATTERN, verifiedRuntimeRelease } = require("../lib/rules-engine-release-contract");
 
 const MAX_BODY_BYTES = 524288;
 const MAX_RUNTIME_BYTES = 65536;
@@ -44,6 +45,7 @@ function createHandler(dependencies = {}) {
   const env = dependencies.env || process.env;
   const now = dependencies.now || (() => new Date());
   const storeFactory = dependencies.createStore || (() => require("../lib/rules-engine-store").createRulesEngineStore());
+  const deliveryFactory = dependencies.createDelivery || (() => require("../lib/rules-engine-delivery").createRulesEngineDelivery());
 
   return async function rulesEngine(event) {
     if (!["GET", "PUT", "POST"].includes(event.httpMethod)) return { ...response(405, { status: "error", code: "method_not_allowed" }), headers: { ...jsonHeaders, Allow: "GET, PUT, POST" } };
@@ -65,7 +67,12 @@ function createHandler(dependencies = {}) {
         return response(200, {
           status: "ok", draft: loaded.draft, current: loaded.current, releases,
           capabilities: { functions: FUNCTION_CATALOG, operators: TYPE_OPERATORS, drivers: DEVICE_DRIVERS, summaryOperations: SUMMARY_OPERATIONS },
-          delivery: { enabled: false, description: "Firestore pilot only; no RTDB pointer or Tab5 delivery." }
+          delivery: {
+            enabled: loaded.current?.deliveryEnabled === true,
+            releaseId: loaded.current?.delivery?.releaseId || null,
+            deliveredAtMs: loaded.current?.deliveredAtMs || null,
+            description: "Delivery publishes the current immutable package identity to RTDB; Tab5 adoption remains separately verified."
+          }
         });
       }
 
@@ -78,13 +85,34 @@ function createHandler(dependencies = {}) {
         return response(200, { status: "saved", section: request.section, revision });
       }
 
-      if (!request || !["validate", "publish", "restore"].includes(request.action)) return response(400, { status: "error", code: "invalid_action" });
+      if (!request || !["validate", "publish", "restore", "deliver"].includes(request.action)) return response(400, { status: "error", code: "invalid_action" });
       if (request.action === "restore") {
         if (!requestedReleaseId({ queryStringParameters: { releaseId: request.releaseId } }) || !request.baseRevisions || SECTIONS.some(section => !Number.isInteger(request.baseRevisions[section]))) {
           return response(400, { status: "error", code: "invalid_restore_request" });
         }
         const draft = await store.restoreRelease(request.releaseId, request.baseRevisions, now().getTime());
         return response(200, { status: "restored", releaseId: request.releaseId, draft });
+      }
+      if (request.action === "deliver") {
+        if (typeof request.releaseId !== "string" || !RELEASE_ID_PATTERN.test(request.releaseId)) {
+          return response(400, { status: "error", code: "invalid_delivery_request" });
+        }
+        const loaded = await store.loadOrSeed(defaults(), now().getTime());
+        if (!loaded.current || loaded.current.releaseId !== request.releaseId) {
+          return response(409, { status: "error", code: "delivery_not_current", current: loaded.current });
+        }
+        const release = await store.getRelease(request.releaseId);
+        const verified = verifiedRuntimeRelease(release, request.releaseId);
+        if (verified.metadata.contentHash !== loaded.current.contentHash ||
+            verified.metadata.packageVersion !== loaded.current.packageVersion) {
+          return response(409, { status: "error", code: "delivery_release_mismatch", current: loaded.current });
+        }
+        await deliveryFactory().publishPointer(verified.metadata);
+        const current = await store.markDelivered(
+          request.releaseId, verified.metadata.contentHash, verified.metadata,
+          now().getTime()
+        );
+        return response(200, { status: "delivered", current, metadata: verified.metadata });
       }
       const loaded = await store.loadOrSeed(defaults(), now().getTime());
       const result = validateAndCompile(loaded.draft);
@@ -119,6 +147,8 @@ function createHandler(dependencies = {}) {
       if (error?.name === "RulesEngineStoreConflictError") return response(409, { status: "error", code: "stale_draft" });
       if (error?.name === "RulesEngineReleaseNotFoundError") return response(404, { status: "error", code: "release_not_found" });
       if (error?.name === "RulesEngineIncompatibleReleaseError") return response(409, { status: "error", code: "incompatible_release_schema" });
+      if (error instanceof RulesEngineReleaseError) return response(409, { status: "error", code: error.code });
+      if (error?.name === "RulesEngineDeliveryError") return response(503, { status: "error", code: error.code });
       if (error?.code === "invalid_json" || error?.code === "payload_too_large") return response(400, { status: "error", code: error.code });
       const configurationError = error?.name === "ConfigurationError";
       console.error("Rules Engine pilot failed", { category: configurationError ? "configuration" : "storage" });
