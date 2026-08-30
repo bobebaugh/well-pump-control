@@ -1,4 +1,4 @@
-# Release: 2026-08-30 M6.28 — validate and stage V3 packages without execution.
+# Release: 2026-08-30 M6.29 — add the host-tested pure V3 semantic kernel.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -2084,6 +2084,447 @@ def rules_v3_state_report(desired=None, staged=None, rejected=None):
         'staged': dict(staged) if isinstance(staged, dict) else None,
         'rejected': dict(rejected) if isinstance(rejected, dict) else None,
     }
+
+
+def resolve_rules_v3_package(package):
+    """Resolve one validated V3 package for the pure kernel; perform no I/O."""
+    if isinstance(package, str):
+        try:
+            package = ujson.loads(package)
+        except Exception:
+            return None
+    if not _rules_v3_package_valid(package):
+        return None
+    devices = {}
+    writable = {}
+    field_types = {}
+    for device in package['devices']:
+        resolved_fields = []
+        for field in device['fields']:
+            resolved_field = {
+                'object': field['object'], 'systemName': field['systemName'],
+                'type': field['type'], 'enumValues': field.get('enumValues'),
+            }
+            resolved_fields.append(resolved_field)
+            field_types[field['systemName']] = {
+                'type': field['type'], 'enumValues': field.get('enumValues')}
+            if field.get('access') == 'readWrite':
+                writable[field['systemName']] = {
+                    'type': field['type'], 'enumValues': field.get('enumValues'),
+                    'normalValue': field['write']['normalValue'],
+                }
+        devices[device['id']] = {
+            'enabled': device['enabled'], 'fields': resolved_fields}
+    initial_fields = {}
+    operating_mode_target = None
+    for field in package['systemFields']:
+        field_types[field['systemName']] = {
+            'type': field['type'], 'enumValues': field.get('enumValues')}
+        if 'initialValue' in field:
+            initial_fields[field['systemName']] = field['initialValue']
+        if field.get('assignmentTarget') is True:
+            writable[field['systemName']] = {
+                'type': field['type'], 'enumValues': field.get('enumValues'),
+                'normalValue': field.get('initialValue'),
+            }
+        if field.get('runtimeRole') == 'operatingMode':
+            operating_mode_target = field['systemName']
+    pump_target = 'PumpEnable' if 'PumpEnable' in writable else None
+    lock_field = 'IsLocked' if 'IsLocked' in field_types else None
+    return {
+        'releaseId': package['releaseId'],
+        'packageVersion': package['packageVersion'],
+        'events': list(package['events']),
+        'devices': devices,
+        'fieldTypes': field_types,
+        'initialFields': initial_fields,
+        'writableTargets': writable,
+        'operatingModeTarget': operating_mode_target,
+        'pumpTarget': pump_target,
+        'lockField': lock_field,
+    }
+
+
+def accept_rules_v3_device_record(resolved, device_id, record):
+    """Accept all declared fields from one device atomically, or reject all."""
+    if not isinstance(resolved, dict) or not isinstance(record, dict):
+        return None
+    device = resolved.get('devices', {}).get(device_id)
+    if not isinstance(device, dict) or device.get('enabled') is not True:
+        return None
+    accepted = {}
+    for field in device.get('fields', []):
+        object_name = field['object']
+        system_name = field['systemName']
+        if object_name in record:
+            value = record[object_name]
+        elif system_name in record:
+            value = record[system_name]
+        else:
+            return None
+        if not _v3_typed_value(value, field['type'], field.get('enumValues')):
+            return None
+        accepted[system_name] = value
+    return accepted
+
+
+def freeze_rules_v3_snapshot(resolved, device_records, system_values=None):
+    """Build one immutable-by-convention selection snapshot from current records."""
+    if not isinstance(resolved, dict):
+        return None
+    snapshot = dict(resolved.get('initialFields', {}))
+    if isinstance(device_records, dict):
+        for values in device_records.values():
+            if isinstance(values, dict):
+                snapshot.update(values)
+    if isinstance(system_values, dict):
+        for name, value in system_values.items():
+            checked = resolved.get('fieldTypes', {}).get(name)
+            if (isinstance(checked, dict) and
+                    _v3_typed_value(value, checked['type'], checked.get('enumValues'))):
+                snapshot[name] = value
+    return snapshot
+
+
+def rules_v3_condition_value(condition, fields, previous_fields=None, occurrences=None):
+    """Evaluate a V3 condition as True, False, or unavailable (None)."""
+    if not isinstance(condition, dict) or not isinstance(fields, dict):
+        return None
+    clauses = condition.get('clauses')
+    if condition.get('mode') not in ('all', 'any') or not isinstance(clauses, list) or not clauses:
+        return None
+    previous_fields = previous_fields if isinstance(previous_fields, dict) else {}
+    occurrences = occurrences if isinstance(occurrences, dict) else {}
+    results = []
+    for clause in clauses:
+        if not isinstance(clause, dict):
+            return None
+        name = clause.get('field')
+        operator = clause.get('operator')
+        expected = clause.get('value')
+        if operator == 'occurs':
+            results.append(occurrences.get(name) is True)
+            continue
+        current = fields.get(name)
+        if current is None:
+            return None
+        if operator == 'eq':
+            result = current == expected
+        elif operator == 'neq':
+            result = current != expected
+        elif operator in ('between', 'outside'):
+            if (not _v3_number(current) or not isinstance(expected, list) or
+                    len(expected) != 2 or not all(_v3_number(item) for item in expected)):
+                return None
+            inside = expected[0] <= current <= expected[1]
+            result = inside if operator == 'between' else not inside
+        elif operator in ('changes', 'changes_from', 'changes_to'):
+            previous = previous_fields.get(name)
+            if previous is None:
+                return None
+            if operator == 'changes':
+                result = current != previous
+            elif operator == 'changes_from':
+                result = previous == expected and current != previous
+            else:
+                result = current == expected and previous != current
+        elif not (_v3_number(current) and _v3_number(expected)):
+            return None
+        elif operator == 'lt':
+            result = current < expected
+        elif operator == 'lte':
+            result = current <= expected
+        elif operator == 'gt':
+            result = current > expected
+        elif operator == 'gte':
+            result = current >= expected
+        else:
+            return None
+        results.append(result)
+    return all(results) if condition['mode'] == 'all' else any(results)
+
+
+def _new_rules_v3_event_state(event_id):
+    return {
+        'eventId': event_id, 'active': False, 'instanceId': None,
+        'nextInstance': 1, 'openCount': 0, 'openSinceMs': None,
+        'closeCount': 0, 'closeSinceMs': None,
+    }
+
+
+def new_rules_v3_kernel(resolved):
+    """Start one volatile V3 session with an empty event board and owner sets."""
+    if not isinstance(resolved, dict):
+        return None
+    events = {}
+    for event in resolved.get('events', []):
+        events[event['id']] = _new_rules_v3_event_state(event['id'])
+    return {
+        'releaseId': resolved.get('releaseId'), 'events': events,
+        'owners': {}, 'previousFields': {}, 'releasePending': False,
+    }
+
+
+def _copy_rules_v3_kernel(state, resolved):
+    if not isinstance(state, dict) or not isinstance(resolved, dict):
+        return new_rules_v3_kernel(resolved)
+    events = {}
+    for event in resolved.get('events', []):
+        previous = state.get('events', {}).get(event['id'])
+        events[event['id']] = (dict(previous) if isinstance(previous, dict)
+                               else _new_rules_v3_event_state(event['id']))
+    owners = {}
+    for target, owned in state.get('owners', {}).items():
+        if isinstance(owned, dict) and isinstance(owned.get('instances'), dict):
+            owners[target] = {
+                'value': owned.get('value'),
+                'instances': dict(owned['instances']),
+            }
+    return {
+        'releaseId': resolved.get('releaseId'), 'events': events,
+        'owners': owners,
+        'previousFields': dict(state.get('previousFields', {})),
+        'releasePending': state.get('releasePending') is True,
+    }
+
+
+def _rules_v3_qualified(count, since_ms, condition, now_ms):
+    return (isinstance(condition, dict) and
+            count >= condition.get('observationCount', 0) and
+            since_ms is not None and
+            now_ms - since_ms >= int(condition.get('minimumSeconds', 0) * 1000))
+
+
+def _rules_v3_open_value(event, fields, previous_fields, occurrences):
+    trigger = event['opening']['trigger']
+    if trigger['type'] == 'condition':
+        return rules_v3_condition_value(
+            trigger['condition'], fields, previous_fields, occurrences), trigger['condition']
+    occurrence_field = trigger['occurrenceField']
+    return occurrences.get(occurrence_field) is True, trigger['qualification']
+
+
+def _rules_v3_phase_assignments(event, phase, fields, previous_fields, occurrences):
+    selected = list(event[phase]['assignments'])
+    for group in event[phase]['guardedGroups']:
+        if rules_v3_condition_value(
+                group['guard'], fields, previous_fields, occurrences) is True:
+            selected.extend(group['assignments'])
+    return selected
+
+
+def _rules_v3_add_owner(state, target, value, instance_id, event_id):
+    owned = state['owners'].get(target)
+    if not isinstance(owned, dict):
+        owned = {'value': value, 'instances': {}}
+        state['owners'][target] = owned
+    if owned.get('value') == value:
+        owned['instances'][instance_id] = event_id
+
+
+def _rules_v3_remove_owner(state, instance_id):
+    empty = []
+    for target, owned in state['owners'].items():
+        owned.get('instances', {}).pop(instance_id, None)
+        if not owned.get('instances'):
+            empty.append(target)
+    for target in empty:
+        state['owners'].pop(target, None)
+
+
+def _rules_v3_has_owner(state, target):
+    owned = state.get('owners', {}).get(target)
+    return isinstance(owned, dict) and bool(owned.get('instances'))
+
+
+def rules_v3_effective_mode(resolved, state):
+    target = resolved.get('operatingModeTarget') if isinstance(resolved, dict) else None
+    return ('Monitor' if target is not None and _rules_v3_has_owner(state, target)
+            else 'Normal')
+
+
+def _rules_v3_action(target, value, reason, event_id=None, instance_id=None,
+                     phase=None, ownership=None):
+    action = {'target': target, 'value': value, 'reason': reason}
+    if event_id is not None:
+        action['eventId'] = event_id
+    if instance_id is not None:
+        action['eventInstanceId'] = instance_id
+    if phase is not None:
+        action['phase'] = phase
+    if ownership is not None:
+        action['ownership'] = ownership
+    return action
+
+
+def _rules_v3_append_action(actions, action):
+    for existing in actions:
+        if (existing.get('target') == action.get('target') and
+                existing.get('value') == action.get('value')):
+            return
+    actions.append(action)
+
+
+def advance_rules_v3_kernel(resolved, state, fields, now_ms,
+                            occurrences=None, clear_event_ids=None):
+    """Advance pure V3 selection; return state, selected actions, and records."""
+    if (not isinstance(resolved, dict) or not isinstance(fields, dict) or
+            not isinstance(now_ms, int) or isinstance(now_ms, bool)):
+        raise ValueError('invalid V3 kernel input')
+    next_state = _copy_rules_v3_kernel(state, resolved)
+    previous_fields = next_state['previousFields']
+    frozen = dict(resolved.get('initialFields', {}))
+    frozen.update(fields)
+    occurrences = occurrences if isinstance(occurrences, dict) else {}
+    clear_all = clear_event_ids is True
+    clear_ids = set(clear_event_ids if isinstance(clear_event_ids, (list, tuple, set)) else ())
+    old_mode = rules_v3_effective_mode(resolved, next_state)
+    pump_target = resolved.get('pumpTarget')
+    old_pump_owner = (pump_target is not None and
+                      _rules_v3_has_owner(next_state, pump_target))
+    actions = []
+    records = []
+    for event in resolved.get('events', []):
+        event_state = next_state['events'][event['id']]
+        if event.get('enabled') is not True:
+            if event_state.get('active') is True:
+                instance_id = event_state.get('instanceId')
+                _rules_v3_remove_owner(next_state, instance_id)
+                records.append({
+                    'type': 'close', 'reason': 'rule_disabled',
+                    'eventId': event['id'], 'eventInstanceId': instance_id,
+                    'atMs': now_ms})
+                next_instance = event_state.get('nextInstance', 1)
+                event_state = _new_rules_v3_event_state(event['id'])
+                event_state['nextInstance'] = next_instance
+                next_state['events'][event['id']] = event_state
+            continue
+        open_value, opening_qualification = _rules_v3_open_value(
+            event, frozen, previous_fields, occurrences)
+        if event_state.get('active') is not True:
+            if open_value is True:
+                if event_state['openCount'] == 0:
+                    event_state['openSinceMs'] = now_ms
+                event_state['openCount'] += 1
+            elif open_value is False:
+                event_state['openCount'] = 0
+                event_state['openSinceMs'] = None
+            if (open_value is True and _rules_v3_qualified(
+                    event_state['openCount'], event_state['openSinceMs'],
+                    opening_qualification, now_ms)):
+                sequence = event_state['nextInstance']
+                instance_id = '{}:{}:{}'.format(
+                    resolved['releaseId'], event['id'], sequence)
+                event_state['active'] = True
+                event_state['instanceId'] = instance_id
+                event_state['nextInstance'] = sequence + 1
+                event_state['closeCount'] = 0
+                event_state['closeSinceMs'] = None
+                records.append({
+                    'type': 'open', 'reason': 'opening_qualified',
+                    'eventId': event['id'], 'eventInstanceId': instance_id,
+                    'atMs': now_ms})
+                for assignment in _rules_v3_phase_assignments(
+                        event, 'onOpen', frozen, previous_fields, occurrences):
+                    if assignment['ownership'] == 'whileOpen':
+                        _rules_v3_add_owner(
+                            next_state, assignment['target'], assignment['value'],
+                            instance_id, event['id'])
+                    elif (assignment['target'] == pump_target and
+                          assignment['value'] is True):
+                        next_state['releasePending'] = True
+                    else:
+                        _rules_v3_append_action(actions, _rules_v3_action(
+                            assignment['target'], assignment['value'],
+                            'event-transition', event['id'], instance_id,
+                            'onOpen', assignment['ownership']))
+            continue
+        closing = event['closing']
+        close_value = False
+        close_qualification = None
+        if closing['policy'] == 'condition':
+            close_qualification = closing['condition']
+            close_value = rules_v3_condition_value(
+                close_qualification, frozen, previous_fields, occurrences)
+            if open_value is True:
+                close_value = False
+        elif closing['policy'] == 'immediate':
+            close_value = True
+        elif closing['policy'] == 'clearEvents':
+            close_value = clear_all or event['id'] in clear_ids
+        close_now = False
+        if closing['policy'] in ('immediate', 'clearEvents'):
+            close_now = close_value is True
+        elif close_value is True:
+            if event_state['closeCount'] == 0:
+                event_state['closeSinceMs'] = now_ms
+            event_state['closeCount'] += 1
+            close_now = _rules_v3_qualified(
+                event_state['closeCount'], event_state['closeSinceMs'],
+                close_qualification, now_ms)
+        elif close_value is False:
+            event_state['closeCount'] = 0
+            event_state['closeSinceMs'] = None
+        if close_now:
+            instance_id = event_state['instanceId']
+            _rules_v3_remove_owner(next_state, instance_id)
+            for assignment in _rules_v3_phase_assignments(
+                    event, 'onClose', frozen, previous_fields, occurrences):
+                if assignment['target'] == pump_target and assignment['value'] is True:
+                    next_state['releasePending'] = True
+                else:
+                    _rules_v3_append_action(actions, _rules_v3_action(
+                        assignment['target'], assignment['value'],
+                        'event-transition', event['id'], instance_id,
+                        'onClose', assignment['ownership']))
+            records.append({
+                'type': 'close',
+                'reason': ('clear_events' if closing['policy'] == 'clearEvents'
+                           else 'closing_qualified'),
+                'eventId': event['id'], 'eventInstanceId': instance_id,
+                'atMs': now_ms})
+            next_instance = event_state['nextInstance']
+            event_state = _new_rules_v3_event_state(event['id'])
+            event_state['nextInstance'] = next_instance
+            next_state['events'][event['id']] = event_state
+    new_mode = rules_v3_effective_mode(resolved, next_state)
+    mode_target = resolved.get('operatingModeTarget')
+    if mode_target is not None and new_mode != old_mode:
+        _rules_v3_append_action(actions, _rules_v3_action(
+            mode_target, new_mode, 'effective-mode'))
+    if new_mode == 'Monitor' and pump_target is not None:
+        actions = [item for item in actions if item.get('target') != pump_target]
+    new_pump_owner = (pump_target is not None and
+                      _rules_v3_has_owner(next_state, pump_target))
+    if old_pump_owner and not new_pump_owner:
+        next_state['releasePending'] = True
+    if old_mode == 'Normal' and new_mode == 'Monitor' and old_pump_owner:
+        next_state['releasePending'] = True
+    if new_mode == 'Normal' and new_pump_owner:
+        next_state['releasePending'] = False
+        if frozen.get(pump_target) is not False:
+            _rules_v3_append_action(actions, _rules_v3_action(
+                pump_target, False, 'active-ownership'))
+    elif next_state['releasePending'] is True:
+        lock_field = resolved.get('lockField')
+        current = frozen.get(pump_target)
+        lock_value = frozen.get(lock_field) if lock_field is not None else None
+        if isinstance(current, bool) and lock_value == 0:
+            if current is False:
+                normal_value = resolved['writableTargets'][pump_target]['normalValue']
+                _rules_v3_append_action(actions, _rules_v3_action(
+                    pump_target, normal_value, 'owner-release'))
+            else:
+                next_state['releasePending'] = False
+    for name, value in frozen.items():
+        if value is not None:
+            next_state['previousFields'][name] = value
+    return next_state, actions, records
+
+
+def restart_rules_v3_kernel(resolved):
+    """Create the deliberate restart boundary: no board, owners, or blind enable."""
+    return new_rules_v3_kernel(resolved)
 
 
 def _is_number(value):
