@@ -7,7 +7,7 @@ const { createRulesEngineV3Delivery } = require("../cloud/netlify/lib/rules-engi
 const env = { FIREBASE_WEB_API_KEY: "test-api-key", FIREBASE_RTDB_URL: "https://well-pump-control-default-rtdb.firebaseio.com" };
 function jsonResponse(status, body, etag = null) { return { ok: status >= 200 && status < 300, status, headers: { get(name) { return name.toLowerCase() === "etag" ? etag : null; } }, async json() { return body; } }; }
 function metadata() {
-  return { schemaVersion: 3, kind: "well-pump-event-runtime-release-pointer-v3", siteId: "well-main", releaseId: "20260830123456-event-v3-v1", packageVersion: 1, runtimeSchemaVersion: 3, contentHash: "a".repeat(64), hashAlgorithm: "sha256", byteLength: 1234, publishedAtMs: 1788266096000, executionEnabled: false, downloadPath: "/.netlify/functions/rules-engine-release?version=3&releaseId=20260830123456-event-v3-v1" };
+  return { schemaVersion: 3, kind: "well-pump-event-v3-staging-pointer", siteId: "well-main", releaseId: "20260830123456-event-v3-v1", packageVersion: 1, runtimeSchemaVersion: 3, contentHash: "a".repeat(64), hashAlgorithm: "sha256", byteLength: 1234, publishedAtMs: 1788266096000, executionEnabled: false, downloadPath: "/.netlify/functions/rules-engine-release?version=3&releaseId=20260830123456-event-v3-v1" };
 }
 
 test("V3 delivery uses isolated staging credentials and only the execution-disabled V3 pointer", async () => {

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/rules-v3-device-state-v1.schema.json",
+  "title": "Event V3 device staging status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "siteId", "deviceId", "sessionId", "executionEnabled", "reportedAtMs", "desired", "staged", "rejected"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "rules-v3-staging-state" },
+    "siteId": { "const": "well-main" },
+    "deviceId": { "const": "tab5-well-main" },
+    "sessionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "executionEnabled": { "const": false },
+    "reportedAtMs": { "type": "integer", "minimum": 0 },
+    "desired": { "$ref": "#/$defs/reference" },
+    "staged": { "$ref": "#/$defs/reference" },
+    "rejected": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason", "releaseId", "packageVersion", "contentHash"],
+          "properties": {
+            "reason": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "releaseId": { "type": ["string", "null"] },
+            "packageVersion": { "type": ["integer", "null"], "minimum": 1 },
+            "contentHash": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "reference": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["releaseId", "packageVersion", "runtimeSchemaVersion", "contentHash", "executionEnabled"],
+          "properties": {
+            "releaseId": { "type": "string", "pattern": "^[0-9]{14}-event-v3-v[1-9][0-9]*$" },
+            "packageVersion": { "type": "integer", "minimum": 1 },
+            "runtimeSchemaVersion": { "const": 3 },
+            "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "executionEnabled": { "const": false }
+          }
+        }
+      ]
+    }
+  }
+}

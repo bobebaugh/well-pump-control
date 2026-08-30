@@ -20,7 +20,7 @@
       "additionalProperties": false,
       "required": ["schemaVersion", "kind", "siteId", "releaseId", "packageVersion", "runtimeSchemaVersion", "contentHash", "hashAlgorithm", "byteLength", "publishedAtMs", "executionEnabled", "downloadPath"],
       "properties": {
-        "schemaVersion": { "const": 3 }, "kind": { "const": "well-pump-event-runtime-release-pointer-v3" }, "siteId": { "const": "well-main" },
+        "schemaVersion": { "const": 3 }, "kind": { "const": "well-pump-event-v3-staging-pointer" }, "siteId": { "const": "well-main" },
         "releaseId": { "type": "string", "pattern": "^[0-9]{14}-event-v3-v[1-9][0-9]*$" }, "packageVersion": { "type": "integer", "minimum": 1 }, "runtimeSchemaVersion": { "const": 3 },
         "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "hashAlgorithm": { "const": "sha256" }, "byteLength": { "type": "integer", "minimum": 1, "maximum": 65536 },
         "publishedAtMs": { "type": "integer", "minimum": 0 }, "executionEnabled": { "const": false }, "downloadPath": { "type": "string", "pattern": "^/\\.netlify/functions/rules-engine-release\\?version=3&releaseId=[0-9]{14}-event-v3-v[1-9][0-9]*$" }

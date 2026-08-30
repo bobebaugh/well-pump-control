@@ -39,7 +39,7 @@ test("V3 release serves exact immutable bytes and a closed execution-disabled st
   assert.equal(v2Calls, 0);
   const verified = verifiedRuntimeV3Release(immutable, immutable.releaseId);
   assert.deepEqual(verified.metadata, {
-    schemaVersion: 3, kind: "well-pump-event-runtime-release-pointer-v3", siteId: "well-main",
+    schemaVersion: 3, kind: "well-pump-event-v3-staging-pointer", siteId: "well-main",
     releaseId: immutable.releaseId, packageVersion: 1, runtimeSchemaVersion: 3,
     contentHash: immutable.contentHash, hashAlgorithm: "sha256", byteLength: Buffer.byteLength(immutable.runtimeBody, "utf8"),
     publishedAtMs: immutable.publishedAtMs, executionEnabled: false,

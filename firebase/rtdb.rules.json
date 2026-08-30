@@ -16,10 +16,28 @@
               "syncState": {
                 ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.hasChildren(['schemaVersion', 'exchangeId', 'siteId', 'deviceId', 'sessionId', 'lastSeenCommandSequence', 'lastAppliedCommandSequence', 'result', 'lastSyncAtMs']) && newData.child('schemaVersion').val() == 1 && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('exchangeId').isString() && newData.child('sessionId').isString() && newData.child('lastSeenCommandSequence').isNumber() && newData.child('lastSeenCommandSequence').val() >= 0 && newData.child('lastAppliedCommandSequence').isNumber() && newData.child('lastAppliedCommandSequence').val() >= 0 && newData.child('result').isString() && newData.child('lastSyncAtMs').isNumber()"
               },
-              "commands": {
+            "commands": {
                 ".read": "auth != null && auth.uid == 'tab5-well-main'",
                 ".write": false,
                 ".indexOn": ["commandSequence", "status"]
+              },
+              "rulesV3State": {
+                ".read": "auth != null && auth.uid == 'tab5-well-main'",
+                ".write": "auth != null && auth.uid == 'tab5-well-main'",
+                ".validate": "newData.hasChildren(['schemaVersion', 'kind', 'siteId', 'deviceId', 'sessionId', 'executionEnabled', 'reportedAtMs', 'desired', 'staged', 'rejected']) && newData.child('schemaVersion').val() == 1 && newData.child('kind').val() == 'rules-v3-staging-state' && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('sessionId').isString() && newData.child('sessionId').val().length > 0 && newData.child('executionEnabled').val() == false && newData.child('reportedAtMs').isNumber() && newData.child('reportedAtMs').val() >= 0",
+                "desired": {
+                  ".validate": "newData.val() == null || (newData.hasChildren(['releaseId', 'packageVersion', 'runtimeSchemaVersion', 'contentHash', 'executionEnabled']) && newData.child('releaseId').isString() && newData.child('releaseId').val().matches(/^[0-9]{14}-event-v3-v[1-9][0-9]*$/) && newData.child('packageVersion').isNumber() && newData.child('packageVersion').val() >= 1 && newData.child('runtimeSchemaVersion').val() == 3 && newData.child('contentHash').isString() && newData.child('contentHash').val().matches(/^[a-f0-9]{64}$/) && newData.child('executionEnabled').val() == false)",
+                  "$other": { ".validate": false }
+                },
+                "staged": {
+                  ".validate": "newData.val() == null || (newData.hasChildren(['releaseId', 'packageVersion', 'runtimeSchemaVersion', 'contentHash', 'executionEnabled']) && newData.child('releaseId').isString() && newData.child('releaseId').val().matches(/^[0-9]{14}-event-v3-v[1-9][0-9]*$/) && newData.child('packageVersion').isNumber() && newData.child('packageVersion').val() >= 1 && newData.child('runtimeSchemaVersion').val() == 3 && newData.child('contentHash').isString() && newData.child('contentHash').val().matches(/^[a-f0-9]{64}$/) && newData.child('executionEnabled').val() == false)",
+                  "$other": { ".validate": false }
+                },
+                "rejected": {
+                  ".validate": "newData.val() == null || (newData.hasChildren(['reason', 'releaseId', 'packageVersion', 'contentHash']) && newData.child('reason').isString() && newData.child('reason').val().length > 0 && (newData.child('releaseId').val() == null || newData.child('releaseId').isString()) && (newData.child('packageVersion').val() == null || (newData.child('packageVersion').isNumber() && newData.child('packageVersion').val() >= 1)) && (newData.child('contentHash').val() == null || (newData.child('contentHash').isString() && newData.child('contentHash').val().matches(/^[a-f0-9]{64}$/))))",
+                  "$other": { ".validate": false }
+                },
+                "$other": { ".validate": false }
               }
             }
           },
@@ -39,7 +57,7 @@
               "current": {
                 ".read": "auth != null && (auth.uid == 'tab5-well-main' || (auth.uid == 'netlify-rules-publisher' && auth.token.siteId == 'well-main' && auth.token.purpose == 'rules-v3-publication'))",
                 ".write": "auth != null && auth.uid == 'netlify-rules-publisher' && auth.token.siteId == 'well-main' && auth.token.purpose == 'rules-v3-publication'",
-                ".validate": "newData.hasChildren(['schemaVersion', 'kind', 'siteId', 'releaseId', 'packageVersion', 'runtimeSchemaVersion', 'contentHash', 'hashAlgorithm', 'byteLength', 'publishedAtMs', 'executionEnabled', 'downloadPath']) && newData.child('schemaVersion').val() == 3 && newData.child('kind').val() == 'well-pump-event-runtime-release-pointer-v3' && newData.child('siteId').val() == 'well-main' && newData.child('releaseId').isString() && newData.child('releaseId').val().matches(/^[0-9]{14}-event-v3-v[1-9][0-9]*$/) && newData.child('packageVersion').isNumber() && newData.child('packageVersion').val() >= 1 && newData.child('runtimeSchemaVersion').val() == 3 && newData.child('contentHash').isString() && newData.child('contentHash').val().matches(/^[a-f0-9]{64}$/) && newData.child('hashAlgorithm').val() == 'sha256' && newData.child('byteLength').isNumber() && newData.child('byteLength').val() > 0 && newData.child('byteLength').val() <= 65536 && newData.child('publishedAtMs').isNumber() && newData.child('publishedAtMs').val() >= 0 && newData.child('executionEnabled').val() == false && newData.child('downloadPath').isString() && newData.child('downloadPath').val().matches(/^\\/.netlify\\/functions\\/rules-engine-release\\?version=3&releaseId=[0-9]{14}-event-v3-v[1-9][0-9]*$/)",
+                ".validate": "newData.hasChildren(['schemaVersion', 'kind', 'siteId', 'releaseId', 'packageVersion', 'runtimeSchemaVersion', 'contentHash', 'hashAlgorithm', 'byteLength', 'publishedAtMs', 'executionEnabled', 'downloadPath']) && newData.child('schemaVersion').val() == 3 && newData.child('kind').val() == 'well-pump-event-v3-staging-pointer' && newData.child('siteId').val() == 'well-main' && newData.child('releaseId').isString() && newData.child('releaseId').val().matches(/^[0-9]{14}-event-v3-v[1-9][0-9]*$/) && newData.child('packageVersion').isNumber() && newData.child('packageVersion').val() >= 1 && newData.child('runtimeSchemaVersion').val() == 3 && newData.child('contentHash').isString() && newData.child('contentHash').val().matches(/^[a-f0-9]{64}$/) && newData.child('hashAlgorithm').val() == 'sha256' && newData.child('byteLength').isNumber() && newData.child('byteLength').val() > 0 && newData.child('byteLength').val() <= 65536 && newData.child('publishedAtMs').isNumber() && newData.child('publishedAtMs').val() >= 0 && newData.child('executionEnabled').val() == false && newData.child('downloadPath').isString() && newData.child('downloadPath').val().matches(/^\\/.netlify\\/functions\\/rules-engine-release\\?version=3&releaseId=[0-9]{14}-event-v3-v[1-9][0-9]*$/)",
                 "$other": { ".validate": false }
               }
             }

@@ -98,7 +98,7 @@ function verifiedRuntimeV3Release(release, expectedReleaseId) {
     runtimeBody: release.runtimeBody,
     metadata: {
       schemaVersion: POINTER_SCHEMA_VERSION,
-      kind: "well-pump-event-runtime-release-pointer-v3",
+      kind: "well-pump-event-v3-staging-pointer",
       siteId: SITE_ID,
       releaseId: release.releaseId,
       packageVersion: release.packageVersion,
