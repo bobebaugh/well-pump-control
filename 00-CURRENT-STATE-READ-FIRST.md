@@ -465,8 +465,31 @@ work in the same unit. Acceptance: `npm test` stays 110/110 and
 `pilot` was pushed 2026-08-30 to carry this document, which fired a Netlify branch
 deploy. Blast radius verified: only `00-CURRENT-STATE-READ-FIRST.md` and `AGENTS.md`
 changed — **zero files under `web/`, `cloud/`, `contracts/`, or `firebase/`** — so the
-deploy republished functionally identical content. **No Gate 1 or V3 code is
-deployed.** `main` has never been moved.
+deploy republished functionally identical content. `main` has never been moved.
+
+**SUPERSEDED 2026-08-30 — V3 transport is now merged and deployed.** Owner authorized
+deployment (nothing is live, so no gates). Checkpoint 2 is merged into both production
+branches and the cloud half is deployed:
+
+| Branch | Tip | Carries |
+|---|---|---|
+| `pilot` | see `git ls-remote` | V3 staging-pointer publication + RTDB rules |
+| `Tab5` | see `git ls-remote` | V3 pointer poll, download, validate, atomic stage |
+
+Re-verified on the **merged** results before pushing, not just on the branches: host
+110/110, RTDB emulator 9/9, Tab5 112/112, all clean merges. The protective telemetry
+path (`ingest-power.js`, `current-power.js`, `power-contract.js`, and the other four
+guarded files) is **untouched** by the deploy, and the V2 rules path still passes.
+
+**Execution remains disabled.** No rules engine runs on either side: the device reads
+the staged V3 package only for its `releaseId`/`contentHash` to report state, and it
+never reaches `evaluate_runtime_program` or `advance_rule_event`.
+
+**The RTDB security rules are NOT deployed by any automation.** Netlify publishes
+functions and web only; no workflow runs `firebase deploy --only database`. Until the
+owner deploys `firebase/rtdb.rules.json` to the live project, a V3 pointer write is
+denied by the previous rules and the function fails `pointer_write_failed`. This is the
+first thing to check if the end-to-end test fails.
 
 ### 6.3 Note for Gate 2
 
