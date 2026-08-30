@@ -381,12 +381,23 @@ misleading `Unable to parse JSON: ... "refusing t"...`, which looks like a corru
 file but is not — `firebase/rtdb.rules.json` parses as valid JSON. Do not chase that
 error as a content bug.
 
-**Both Gate 1 branches are 3 commits behind their bases — not 2.** The doc's own
-"Record Gate 1 verification" commit (`ecea6fd` on `pilot`, `ffae79a` on `Tab5`) landed
-after that sentence was written and made it stale immediately. Verified counts:
-delivery 2 ahead / **3** behind; staging 1 ahead / **3** behind. All three behind-commits
-touch only `00-CURRENT-STATE-READ-FIRST.md` and `AGENTS.md`, insertions only, zero code
-files — so "no conflict risk" is confirmed, and a rebase or merge is trivial.
+**Do not write the behind-count as a number here.** The previous two attempts
+("2 commits behind", then "3") were both stale within the same day, because *every
+commit to this file increments the count on both Gate 1 branches* — including the
+commit that corrects the number. Verify it live instead:
+
+```bash
+git rev-list --left-right --count origin/pilot...origin/agent/event-v3-checkpoint2-delivery
+git rev-list --left-right --count origin/Tab5...origin/agent/event-v3-checkpoint2-tab5-staging
+```
+
+The durable facts, which do not go stale: the Gate 1 branches are **2 ahead**
+(delivery) and **1 ahead** (staging) of their merge bases `d0b8a316` and `67553473`,
+and **every** commit either branch is behind to date touches only
+`00-CURRENT-STATE-READ-FIRST.md`, `AGENTS.md`, and `.gitattributes` — documentation and
+repo-hygiene only, zero code files. So there is no conflict risk and a rebase or merge
+is trivial. Re-check that claim with `git diff --name-only <merge-base>..<base>` before
+promotion rather than trusting it.
 
 ### 6.1b Next bounded unit — fix the V3 RTDB rules
 
