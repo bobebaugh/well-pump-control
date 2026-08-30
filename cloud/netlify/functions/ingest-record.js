@@ -9,6 +9,12 @@ const {
   stableJson,
   validateIngestRecord
 } = require("../lib/ingest-record-contract");
+const {
+  EventProjectionError,
+  boardProjection,
+  instanceUpdate,
+  isV3EventRecord
+} = require("../lib/event-v3-projection");
 
 const SITE_ID = "well-main";
 const DEVICE_ID = "tab5-well-main";
@@ -88,6 +94,13 @@ function createHandler(dependencies = {}) {
       const collectionName = record.recordType === "observation" ? "observations" : "eventRecords";
       const document = db.collection("sites").doc(SITE_ID).collection(collectionName).doc(record.recordId);
       const canonical = canonicalRecord(record);
+      const v3Event = isV3EventRecord(record);
+      const instanceDocument = v3Event
+        ? db.collection("sites").doc(SITE_ID).collection("eventInstances").doc(record.eventId)
+        : null;
+      const boardDocument = v3Event
+        ? db.collection("sites").doc(SITE_ID).collection("eventBoards").doc(record.deviceId)
+        : null;
 
       const outcome = await db.runTransaction(async transaction => {
         const existing = await transaction.get(document);
@@ -97,11 +110,32 @@ function createHandler(dependencies = {}) {
           }
           return { duplicate: true };
         }
+        let instance = null;
+        let projection = null;
+        if (v3Event) {
+          const [priorInstance, priorBoard] = await Promise.all([
+            transaction.get(instanceDocument), transaction.get(boardDocument)
+          ]);
+          instance = instanceUpdate(priorInstance.exists ? priorInstance.data() : null, canonical);
+          projection = boardProjection(priorBoard.exists ? priorBoard.data() : null, canonical, instance);
+        }
         transaction.create(document, {
           ...canonical,
           observedAt: toTimestamp(new Date(record.observedAt)),
           receivedAt: serverTimestamp()
         });
+        if (v3Event) {
+          transaction.set(instanceDocument, {
+            ...instance,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+          if (projection.changed) {
+            transaction.set(boardDocument, {
+              ...projection.board,
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+          }
+        }
         return { duplicate: false };
       });
 
@@ -114,7 +148,7 @@ function createHandler(dependencies = {}) {
         document: `sites/${SITE_ID}/${collectionName}/${record.recordId}`
       });
     } catch (error) {
-      if (error instanceof IngestRecordError) {
+      if (error instanceof IngestRecordError || error instanceof EventProjectionError) {
         return response(error.code === "idempotency_conflict" ? 409 : 400, {
           status: "error",
           code: error.code,

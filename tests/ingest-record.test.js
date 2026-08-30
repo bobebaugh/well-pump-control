@@ -44,10 +44,18 @@ function fakeFirestore() {
   const records = new Map();
   const document = parts => ({
     path: parts.join("/"),
-    collection(name) { return collection([...parts, name]); }
+    collection(name) { return collection([...parts, name]); },
+    async get() { return { exists: records.has(this.path), data: () => records.get(this.path) }; }
   });
   const collection = parts => ({
-    doc(id) { return document([...parts, id]); }
+    doc(id) { return document([...parts, id]); },
+    orderBy() { return this; },
+    limit() { return this; },
+    async get() {
+      const prefix = `${parts.join("/")}/`;
+      return { docs: [...records.entries()].filter(([key]) => key.startsWith(prefix) &&
+        !key.slice(prefix.length).includes("/")).map(([path, value]) => ({ path, data: () => value })) };
+    }
   });
   const db = {
     collection(name) { return collection([name]); },
@@ -59,6 +67,9 @@ function fakeFirestore() {
         create(ref, value) {
           if (records.has(ref.path)) throw new Error("already exists");
           records.set(ref.path, value);
+        },
+        set(ref, value, options) {
+          records.set(ref.path, options?.merge ? { ...(records.get(ref.path) || {}), ...value } : value);
         }
       };
       return callback(transaction);
@@ -80,6 +91,12 @@ function makeHandler() {
 
 function request(body, token = "test-ingest-token") {
   return { httpMethod: "POST", headers: { "X-Pilot-Key": token }, body: JSON.stringify(body) };
+}
+
+function assertNoUndefined(value) {
+  assert.notEqual(value, undefined);
+  if (Array.isArray(value)) value.forEach(assertNoUndefined);
+  else if (value && typeof value === "object") Object.values(value).forEach(assertNoUndefined);
 }
 
 test("stores a complete durable observation at its contract path", async () => {
@@ -124,6 +141,17 @@ test("stores V3 event openings and closings with one durable identity and one lo
   assert.equal(records.get(opened.document).eventInstanceId, "v3-instance-7");
   assert.equal(records.get(closed.document).eventInstanceId, "v3-instance-7");
   assert.notEqual(opened.recordId, closed.recordId);
+  const instance = records.get(`sites/well-main/eventInstances/${v3EventOpen.eventId}`);
+  const board = records.get("sites/well-main/eventBoards/tab5-well-main");
+  assert.equal(instance.status, "closed");
+  assert.equal(instance.openRecordId, v3EventOpen.recordId);
+  assert.equal(instance.closeRecordId, v3EventClose.recordId);
+  assert.equal(instance.eventInstanceId, "v3-instance-7");
+  assert.equal(instance.severity, "Red");
+  assert.equal(instance.consequence, "inhibit");
+  assertNoUndefined(instance);
+  assert.deepEqual(board.openEventIds, []);
+  assert.equal(board.mode, "Normal");
 });
 
 test("stores rules adoption and rejection audit records without creating event lifecycle state", async () => {
@@ -149,6 +177,42 @@ test("accepts a close before its independently retried opening without creating 
   const result = await handler(request(eventClose));
   assert.equal(result.statusCode, 201);
   assert.equal(records.size, 1);
+});
+
+test("V3 close-before-open remains closed after the delayed opening and raw retries stay idempotent", async () => {
+  const { handler, records } = makeHandler();
+  assert.equal((await handler(request(v3EventClose))).statusCode, 201);
+  assert.equal((await handler(request(v3EventOpen))).statusCode, 201);
+  assert.equal((await handler(request(v3EventOpen))).statusCode, 200);
+  const instance = records.get(`sites/well-main/eventInstances/${v3EventOpen.eventId}`);
+  const board = records.get("sites/well-main/eventBoards/tab5-well-main");
+  assert.equal(instance.status, "closed");
+  assert.equal(instance.openRecordId, v3EventOpen.recordId);
+  assert.equal(instance.severity, "Red");
+  assert.equal(instance.consequence, "inhibit");
+  assert.deepEqual(instance.openActor, v3EventOpen.actor);
+  assert.equal(board.openEventIds.length, 0);
+  assert.equal(records.size, 4);
+});
+
+test("V3 identity conflicts reject atomically without changing raw or projections", async () => {
+  const { handler, records } = makeHandler();
+  assert.equal((await handler(request(v3EventOpen))).statusCode, 201);
+  const conflicting = { ...v3EventClose, eventInstanceId: "v3-instance-99" };
+  const response = await handler(request(conflicting));
+  assert.equal(response.statusCode, 400);
+  assert.equal(JSON.parse(response.body).code, "event_instance_identity_conflict");
+  assert.equal(records.size, 3);
+  const instance = records.get(`sites/well-main/eventInstances/${v3EventOpen.eventId}`);
+  assert.equal(instance.status, "open");
+  assert.equal(instance.eventInstanceId, "v3-instance-7");
+});
+
+test("V1 records retain raw-only ingestion with no V3 projection", async () => {
+  const { handler, records } = makeHandler();
+  assert.equal((await handler(request(eventOpen))).statusCode, 201);
+  assert.equal(records.size, 1);
+  assert.equal([...records.keys()].some(key => key.includes("eventInstances") || key.includes("eventBoards")), false);
 });
 
 test("an identical retry is accepted without a second document", async () => {
