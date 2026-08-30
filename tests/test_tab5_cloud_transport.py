@@ -119,6 +119,10 @@ class CloudTransportTests(unittest.TestCase):
         self.cloud._pending_rules_request = None
         self.cloud._pending_rules_release = None
         self.cloud._pending_rules_pointer = None
+        self.cloud._pending_rules_v3_request = None
+        self.cloud._pending_rules_v3_release = None
+        self.cloud._pending_rules_v3_pointer = None
+        self.cloud._rules_v3_state = None
         self.cloud._applied_rules_reference = dict(
             self.cloud.PRE_M6_TRANSPORT_ONLY_RULES_REFERENCE)
         for key in self.cloud._transport_status:
@@ -508,6 +512,60 @@ class CloudTransportTests(unittest.TestCase):
                 "downloadPath": "https://example.invalid/rules.json",
             })
         self.assertEqual(self.requests.calls, [])
+
+    def test_v3_staging_transport_uses_exact_versioned_endpoint_and_separate_queue(self):
+        metadata = {
+            "schemaVersion": 3, "kind": "well-pump-event-v3-staging-pointer",
+            "siteId": "well-main", "releaseId": "20260830000000-event-v3-v1",
+            "packageVersion": 1, "runtimeSchemaVersion": 3, "contentHash": "b" * 64,
+            "hashAlgorithm": "sha256", "byteLength": 57, "publishedAtMs": 1788048000000,
+            "downloadPath": "/.netlify/functions/rules-engine-release?version=3&releaseId=20260830000000-event-v3-v1",
+            "executionEnabled": False,
+        }
+        raw_release = '{"schemaVersion":3,"kind":"well-pump-event-runtime-v3"}'
+        self.requests.queue({}, text=raw_release)
+        self.assertTrue(self.cloud.request_rules_v3_release(metadata))
+        queued = self.cloud._take_rules_v3_request()
+        self.assertEqual(queued, metadata)
+        self.cloud._queue_rules_v3_release(
+            queued, self.cloud._download_rules_v3_release(queued))
+        self.assertEqual(self.cloud.take_rules_v3_release(), {
+            "metadata": metadata, "release": raw_release})
+        method, url, _kwargs = self.requests.calls[-1]
+        self.assertEqual(method, "GET")
+        self.assertEqual(url, self.cloud.RULES_RELEASE_ORIGIN + metadata["downloadPath"])
+        self.assertIsNone(self.cloud.take_rules_release())
+
+    def test_v3_pointer_poll_and_report_do_not_change_v2_coordination_state(self):
+        schedule = self.cloud._new_rtdb_schedule(0)
+        schedule["phase"] = "ready"
+        schedule["auth"] = {
+            "idToken": "EXAMPLE_ONLY_ID_TOKEN",
+            "rtdbUrl": "https://well-pump-control-default-rtdb.firebaseio.com",
+            "expiresAtTicks": 1000000,
+        }
+        schedule["coordinationStage"] = "commands"
+        original_get = self.cloud._rtdb_get
+        original_put = self.cloud._rtdb_put
+        try:
+            self.cloud._rtdb_get = lambda _auth, path: {"path": path}
+            self.assertIsNone(self.cloud._run_rules_v3_staging_step(schedule, "commands"))
+            self.assertEqual(schedule["coordinationStage"], "commands")
+            self.assertEqual(self.cloud._run_rules_v3_staging_step(schedule, None), "rules-v3-pointer")
+            self.assertEqual(self.cloud.take_rules_v3_pointer(), {
+                "path": "v1/sites/well-main/rules/v3/current"})
+            self.assertEqual(schedule["coordinationStage"], "commands")
+            captured = []
+            self.cloud._rtdb_put = lambda _auth, path, value: captured.append((path, value))
+            self.assertTrue(self.cloud.set_rules_v3_state({
+                "kind": "rules-v3-staging-state", "executionEnabled": False,
+                "desired": None, "staged": None, "rejected": None}))
+            self.assertEqual(self.cloud._run_rules_v3_staging_step(schedule, None), "rules-v3-state")
+            self.assertEqual(captured[0][0], "v1/sites/well-main/devices/tab5-well-main/rulesV3State")
+            self.assertFalse(captured[0][1]["executionEnabled"])
+        finally:
+            self.cloud._rtdb_get = original_get
+            self.cloud._rtdb_put = original_put
 
     def test_bootstrap_rejects_unapproved_project_host_and_token_origins(self):
         request = {

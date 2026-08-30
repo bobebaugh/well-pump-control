@@ -1,4 +1,4 @@
-# Release: 2026-08-28 M6.23 — transport the v2 runtime pointer and exact body.
+# Release: 2026-08-30 M6.28 — stage, report, and never execute V3 rule bytes.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -51,6 +51,7 @@ DEVICE_SYNC_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functio
 DEVICE_SYNC_TIMEOUT_S = 3
 RTDB_TIMEOUT_S = 1
 RTDB_COORDINATION_PERIOD_MS = 10000
+RULES_V3_POLL_PERIOD_MS = 10000
 RTDB_PRESENCE_PERIOD_MS = 30000
 RTDB_RETRY_BASE_MS = 5000
 RTDB_RETRY_MAX_MS = 60000
@@ -199,6 +200,44 @@ def _download_rules_release(metadata):
         if (not isinstance(raw_release, str) or
                 len(raw_release.encode('utf-8')) > MAX_RULES_RELEASE_BYTES):
             raise TransportError('rules release size is not supported')
+        return raw_release
+    except TransportError:
+        raise
+    except Exception as e:
+        raise TransportError(str(e))
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+
+def _download_rules_v3_release(metadata):
+    """Fetch opaque V3 staging bytes from the one approved relative endpoint."""
+    release_id = metadata.get('releaseId') if isinstance(metadata, dict) else None
+    version = metadata.get('packageVersion') if isinstance(metadata, dict) else None
+    expected_path = ('/.netlify/functions/rules-engine-release?version=3&releaseId={}'
+                     .format(release_id))
+    if (not isinstance(release_id, str) or not isinstance(version, int) or
+            isinstance(version, bool) or version < 1 or
+            not (release_id[:14].isdigit() and
+                 release_id == '{}-event-v3-v{}'.format(release_id[:14], version)) or
+            metadata.get('downloadPath') != expected_path):
+        raise TransportError('rules V3 release path is not approved')
+    response = None
+    try:
+        response = requests.get(RULES_RELEASE_ORIGIN + expected_path, headers={
+            'X-Pilot-Key': INGEST_TOKEN,
+        }, timeout=DEVICE_SYNC_TIMEOUT_S)
+        if response.status_code < 200 or response.status_code >= 300:
+            error = TransportError('HTTP {}'.format(response.status_code))
+            error.status_code = response.status_code
+            raise error
+        raw_release = response.text
+        if (not isinstance(raw_release, str) or
+                len(raw_release.encode('utf-8')) > MAX_RULES_RELEASE_BYTES):
+            raise TransportError('rules V3 release size is not supported')
         return raw_release
     except TransportError:
         raise
@@ -388,6 +427,18 @@ _pending_rules_release = None
 
 _rules_pointer_lock = _thread.allocate_lock()
 _pending_rules_pointer = None
+
+# Separate V3 staging transport.  These values never alter the V2 pointer,
+# coordination snapshot, appliedRules bridge, or runtime files.
+_rules_v3_lock = _thread.allocate_lock()
+_pending_rules_v3_request = None
+_pending_rules_v3_release = None
+
+_rules_v3_pointer_lock = _thread.allocate_lock()
+_pending_rules_v3_pointer = None
+
+_rules_v3_state_lock = _thread.allocate_lock()
+_rules_v3_state = None
 
 _applied_rules_lock = _thread.allocate_lock()
 _applied_rules_reference = dict(PRE_M6_TRANSPORT_ONLY_RULES_REFERENCE)
@@ -600,6 +651,19 @@ def request_rules_release(metadata):
         _rules_lock.release()
 
 
+def request_rules_v3_release(metadata):
+    """Accept CPU A's already-validated V3 staging pointer without waiting."""
+    global _pending_rules_v3_request
+    if not isinstance(metadata, dict):
+        return False
+    _rules_v3_lock.acquire()
+    try:
+        _pending_rules_v3_request = dict(metadata)
+        return True
+    finally:
+        _rules_v3_lock.release()
+
+
 def take_rules_release():
     """Transfer one exact downloaded release body to CPU A."""
     global _pending_rules_release
@@ -610,6 +674,18 @@ def take_rules_release():
         return candidate
     finally:
         _rules_lock.release()
+
+
+def take_rules_v3_release():
+    """Transfer one exact V3 staging body to CPU A."""
+    global _pending_rules_v3_release
+    _rules_v3_lock.acquire()
+    try:
+        candidate = _pending_rules_v3_release
+        _pending_rules_v3_release = None
+        return candidate
+    finally:
+        _rules_v3_lock.release()
 
 
 def take_rules_pointer():
@@ -624,6 +700,18 @@ def take_rules_pointer():
         _rules_pointer_lock.release()
 
 
+def take_rules_v3_pointer():
+    """Transfer the independently polled V3 pointer to CPU A."""
+    global _pending_rules_v3_pointer
+    _rules_v3_pointer_lock.acquire()
+    try:
+        pointer = _pending_rules_v3_pointer
+        _pending_rules_v3_pointer = None
+        return pointer
+    finally:
+        _rules_v3_pointer_lock.release()
+
+
 def _queue_rules_pointer(pointer):
     """Keep only the newest unmodified RTDB pointer for CPU A validation."""
     global _pending_rules_pointer
@@ -632,6 +720,39 @@ def _queue_rules_pointer(pointer):
         _pending_rules_pointer = pointer
     finally:
         _rules_pointer_lock.release()
+
+
+def _queue_rules_v3_pointer(pointer):
+    global _pending_rules_v3_pointer
+    _rules_v3_pointer_lock.acquire()
+    try:
+        _pending_rules_v3_pointer = pointer
+    finally:
+        _rules_v3_pointer_lock.release()
+
+
+def set_rules_v3_state(state):
+    """Receive a CPU-A-authored staging status for separate device reporting."""
+    global _rules_v3_state
+    if not isinstance(state, dict) or state.get('executionEnabled') is not False:
+        return False
+    _rules_v3_state_lock.acquire()
+    try:
+        _rules_v3_state = dict(state)
+        return True
+    finally:
+        _rules_v3_state_lock.release()
+
+
+def _take_rules_v3_state():
+    global _rules_v3_state
+    _rules_v3_state_lock.acquire()
+    try:
+        state = _rules_v3_state
+        _rules_v3_state = None
+        return state
+    finally:
+        _rules_v3_state_lock.release()
 
 
 def set_applied_rules(reference):
@@ -675,6 +796,17 @@ def _take_rules_request():
         _rules_lock.release()
 
 
+def _take_rules_v3_request():
+    global _pending_rules_v3_request
+    _rules_v3_lock.acquire()
+    try:
+        metadata = _pending_rules_v3_request
+        _pending_rules_v3_request = None
+        return metadata
+    finally:
+        _rules_v3_lock.release()
+
+
 def _rules_download_may_follow_rtdb(rtdb_action):
     """A rare requested package may follow only disposable current transport.
 
@@ -695,6 +827,18 @@ def _queue_rules_release(metadata, raw_release):
         }
     finally:
         _rules_lock.release()
+
+
+def _queue_rules_v3_release(metadata, raw_release):
+    global _pending_rules_v3_release
+    _rules_v3_lock.acquire()
+    try:
+        _pending_rules_v3_release = {
+            'metadata': dict(metadata),
+            'release': raw_release,
+        }
+    finally:
+        _rules_v3_lock.release()
 
 
 def _queue_commands(commands):
@@ -998,6 +1142,8 @@ def _new_rtdb_schedule(now):
         'coordinationStage': None,
         'coordination': {},
         'lastRulesPointerKeySummary': None,
+        'nextRulesV3PollAt': now,
+        'lastRulesV3PointerKeySummary': None,
         'syncWritePending': False,
     }
 
@@ -1011,6 +1157,51 @@ def _rules_pointer_key_summary(value):
     if not keys:
         return 'empty-object'
     return ','.join(keys[:12])
+
+
+def _run_rules_v3_staging_step(schedule, rtdb_action):
+    """Perform one V3 staging/report operation outside V2 coordination.
+
+    V2 coordination remains its fixed global-enable/rules/commands exchange.
+    This independent, low-priority step never adds a V2 stage or changes the
+    V2 schedule outcome.  It carries status and bytes only; CPU A validates.
+    """
+    if rtdb_action not in (None, 'current-observation'):
+        return None
+    auth = schedule.get('auth')
+    if not isinstance(auth, dict):
+        return None
+    state = _take_rules_v3_state()
+    try:
+        if state is not None:
+            report = dict(state)
+            report['schemaVersion'] = 1
+            report['siteId'] = SITE_ID
+            report['deviceId'] = RTDB_DEVICE_ID
+            report['sessionId'] = _session_id
+            report['executionEnabled'] = False
+            report['reportedAtMs'] = {'.sv': 'timestamp'}
+            _rtdb_put(auth, 'v1/sites/{}/devices/{}/rulesV3State'.format(
+                SITE_ID, RTDB_DEVICE_ID), report)
+            return 'rules-v3-state'
+        now = time.ticks_ms()
+        if time.ticks_diff(now, schedule['nextRulesV3PollAt']) < 0:
+            return None
+        pointer = _rtdb_get(auth, 'v1/sites/{}/rules/v3/current'.format(SITE_ID))
+        _queue_rules_v3_pointer(pointer)
+        schedule['nextRulesV3PollAt'] = time.ticks_add(now, RULES_V3_POLL_PERIOD_MS)
+        key_summary = _rules_pointer_key_summary(pointer)
+        if key_summary != schedule['lastRulesV3PointerKeySummary']:
+            schedule['lastRulesV3PointerKeySummary'] = key_summary
+            log('RTDB V3 staging pointer read [keys={}]'.format(key_summary))
+        return 'rules-v3-pointer'
+    except Exception as e:
+        # A V3 staging outage is never an RTDB/bootstrap failure and cannot
+        # perturb the established V2 coordination retry or token semantics.
+        schedule['nextRulesV3PollAt'] = time.ticks_add(
+            time.ticks_ms(), RULES_V3_POLL_PERIOD_MS)
+        log('RTDB V3 staging error: {}'.format(e))
+        return 'rules-v3-error'
 
 
 def _next_rtdb_action(schedule, now, current_sequence=None):
@@ -1304,6 +1495,10 @@ def _run():
             if not durable_attempted:
                 rtdb_action = _run_rtdb_step(rtdb_schedule, latest_observation)
                 durable_yield_to_rtdb = False
+                # V3 has an independent pointer/report channel.  This runs
+                # after the unchanged V2 operation selection and never joins
+                # its coordination snapshot or retry state.
+                _run_rules_v3_staging_step(rtdb_schedule, rtdb_action)
                 # Rules bytes are lower priority than legacy telemetry,
                 # durable records, and RTDB coordination. A continuous 1 Hz
                 # disposable-current stream is the one safe exception: serve
@@ -1319,6 +1514,19 @@ def _run():
                                 metadata.get('releaseId')))
                         except Exception as e:
                             log('Rules release transport error: {}'.format(e))
+                # A V3 body is only a staging candidate. It has separate
+                # queueing and the exact version=3 endpoint; no V2 metadata
+                # can be interpreted as V3 or vice versa.
+                if _rules_download_may_follow_rtdb(rtdb_action):
+                    metadata = _take_rules_v3_request()
+                    if metadata is not None:
+                        try:
+                            _queue_rules_v3_release(
+                                metadata, _download_rules_v3_release(metadata))
+                            log('V3 staging release downloaded for CPU A: release={}'.format(
+                                metadata.get('releaseId')))
+                        except Exception as e:
+                            log('V3 staging release transport error: {}'.format(e))
 
         time.sleep_ms(100)
 
