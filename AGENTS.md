@@ -1,5 +1,11 @@
 # Repository guidance
 
+> **READ FIRST — `00-CURRENT-STATE-READ-FIRST.md` at the repository root.**
+> Current verified branch SHAs, active decisions and their rationale, open and
+> blocking items, the owner's work sequence, and which older records are superseded.
+> Read it before this file's references and before starting any work unit.
+> It is a state record, not a design authority.
+
 ## Safety and authority
 
 - The current pilot is observational only.
