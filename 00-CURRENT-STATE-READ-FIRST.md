@@ -33,10 +33,15 @@ without explicit owner approval.
 
 ## 2. Production is two branches
 
-| Line | Branch | SHA verified 2026-08-30 | Contents |
+**The SHAs below are a dated snapshot, not a pin.** They go stale on the next commit —
+including the commit that updates this file. Always verify live tips with
+`git ls-remote` per §1 step 3. Treat a mismatch here as this file being behind, not as
+the stop-condition described for a task-specified starting SHA.
+
+| Line | Branch | SHA snapshot 2026-08-30 | Contents |
 |---|---|---|---|
-| Cloud / web | `pilot` | `d0b8a316` | Netlify functions, Firestore/RTDB, web HMI, JS tests |
-| Device | `Tab5` | `67553473` | `tab5/` MicroPython upload tree + Python host tests |
+| Cloud / web | `pilot` | `de07543f` | Netlify functions, Firestore/RTDB, web HMI, JS tests |
+| Device | `Tab5` | `59bdcdb0` | `tab5/` MicroPython upload tree + Python host tests |
 
 `main` (`3a8b2f34`) exists but is **unused and deploys nothing** — its only unique
 commit suppresses production builds. Do not target it. Repo docs still call it the
