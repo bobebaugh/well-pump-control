@@ -12,11 +12,22 @@ const sw0Value = document.querySelector("#sw0-value");
 const rly0Value = document.querySelector("#rly0-value");
 const monitorButton = document.querySelector("#monitor-toggle");
 const monitorStatus = document.querySelector("#monitor-status");
+const eventV3Mode = document.querySelector("#event-v3-mode");
+const eventV3Status = document.querySelector("#event-v3-status");
+const eventV3Session = document.querySelector("#event-v3-session");
+const eventV3Boundary = document.querySelector("#event-v3-boundary");
+const eventV3OpenEvents = document.querySelector("#event-v3-open-events");
+const eventV3History = document.querySelector("#event-v3-history");
+const eventV3ControlStatus = document.querySelector("#event-v3-control-status");
+const eventV3ControlButtons = [...document.querySelectorAll("[data-event-v3-command]")];
+const eventV3Ui = globalThis.EventV3UiModel;
 
 const NORMAL_REFRESH_MS = 60000;
 const LIVE_REFRESH_MS = 1000;
 let telemetryTimer;
+let eventStatusTimer;
 let monitoringUntil = 0;
+let eventControlRequestInFlight = false;
 
 function formatTime(date) {
   return new Intl.DateTimeFormat(undefined, {
@@ -46,11 +57,133 @@ async function fetchStatus(path, options = {}) {
 
   if (!response.ok) {
     const error = new Error(`HTTP ${response.status}`);
+    error.status = response.status;
     error.body = body;
     throw error;
   }
 
   return body;
+}
+
+function eventDescription(event) {
+  return `${event.eventClass} · ${event.severity} · ${event.consequence} · ${event.reason}`;
+}
+
+function eventRow(event) {
+  const row = document.createElement("div");
+  row.className = "event-row";
+  row.setAttribute("role", "row");
+  const time = event.closedAt === "—" ? `Opened ${event.openedAt}` : `Opened ${event.openedAt} · Closed ${event.closedAt}`;
+  for (const value of [time, event.status, event.ruleId, eventDescription(event)]) {
+    const cell = document.createElement("span");
+    cell.setAttribute("role", "cell");
+    cell.textContent = value;
+    row.append(cell);
+  }
+  return row;
+}
+
+function renderEventV3Status(data) {
+  const view = eventV3Ui.statusView(data);
+  eventV3Mode.textContent = `Mode ${view.mode}`;
+  eventV3Session.textContent = view.sessionId;
+  eventV3Boundary.textContent = view.boundaryObservedAt;
+  eventV3Status.textContent = `${view.openEvents.length} open Event V3 event${view.openEvents.length === 1 ? "" : "s"}.`;
+
+  eventV3OpenEvents.replaceChildren();
+  if (view.openEvents.length === 0) {
+    const empty = document.createElement("li");
+    empty.textContent = "No open Event V3 events.";
+    eventV3OpenEvents.append(empty);
+  } else {
+    for (const event of view.openEvents) {
+      const item = document.createElement("li");
+      item.textContent = `${event.ruleId} · ${event.eventClass} · ${event.severity} · ${event.consequence} · opened ${event.openedAt}`;
+      eventV3OpenEvents.append(item);
+    }
+  }
+
+  eventV3History.replaceChildren();
+  if (view.history.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "event-empty";
+    empty.setAttribute("role", "row");
+    const message = document.createElement("span");
+    message.textContent = "No Event V3 history received.";
+    empty.append(message);
+    eventV3History.append(empty);
+  } else {
+    for (const event of view.history) eventV3History.append(eventRow(event));
+  }
+}
+
+function renderEventV3Unavailable(message) {
+  eventV3Mode.textContent = "Mode unavailable";
+  eventV3Session.textContent = "Not available";
+  eventV3Boundary.textContent = "—";
+  eventV3Status.textContent = message;
+  eventV3OpenEvents.replaceChildren();
+  const emptyOpen = document.createElement("li");
+  emptyOpen.textContent = message;
+  eventV3OpenEvents.append(emptyOpen);
+  eventV3History.replaceChildren();
+  const empty = document.createElement("div");
+  empty.className = "event-empty";
+  empty.setAttribute("role", "row");
+  const text = document.createElement("span");
+  text.textContent = message;
+  empty.append(text);
+  eventV3History.append(empty);
+}
+
+async function checkEventV3Status() {
+  clearTimeout(eventStatusTimer);
+  try {
+    renderEventV3Status(await fetchStatus("/.netlify/functions/events-status"));
+  } catch (error) {
+    renderEventV3Unavailable(error.status === 404
+      ? "Event V3 board not yet available."
+      : "Event V3 status unavailable.");
+  }
+  eventStatusTimer = setTimeout(checkEventV3Status, NORMAL_REFRESH_MS);
+}
+
+function setEventV3ControlBusy(busy) {
+  eventControlRequestInFlight = busy;
+  for (const button of eventV3ControlButtons) button.disabled = busy;
+}
+
+async function queueEventV3Control(commandType) {
+  const action = eventV3Ui.controlAction(commandType);
+  if (!action || eventControlRequestInFlight) return;
+  if (action.restartTarget && !window.confirm(`Queue ${action.label} for ${action.restartTarget}?`)) return;
+
+  let key = sessionStorage.getItem("pilotControlKey");
+  if (!key) key = window.prompt("Enter the Event V3 control key");
+  if (!key) return;
+
+  setEventV3ControlBusy(true);
+  eventV3ControlStatus.textContent = "Queueing Event V3 control request…";
+  try {
+    const result = await fetchStatus("/.netlify/functions/control-request", {
+      method: "POST",
+      headers: { "X-Pilot-Key": key, "Content-Type": "application/json" },
+      body: JSON.stringify({ commandType })
+    });
+    const commandId = result.command && typeof result.command.commandId === "string" ? result.command.commandId : null;
+    if (!commandId) throw new Error("missing command identity");
+    sessionStorage.setItem("pilotControlKey", key);
+    eventV3ControlStatus.textContent = `Queued · ${commandId}`;
+  } catch (error) {
+    if (error.status === 401 || error.body?.code === "unauthorized") {
+      sessionStorage.removeItem("pilotControlKey");
+      eventV3ControlStatus.textContent = "Event V3 control key was not accepted.";
+    } else {
+      eventV3ControlStatus.textContent = "Event V3 control request unavailable.";
+    }
+  } finally {
+    setEventV3ControlBusy(false);
+  }
 }
 
 function renderTelemetry(data) {
@@ -188,7 +321,11 @@ async function checkServices() {
 monitorButton.addEventListener("click", () => {
   setMonitoring(monitoringUntil > Date.now() ? "stop" : "start");
 });
+for (const button of eventV3ControlButtons) {
+  button.addEventListener("click", () => queueEventV3Control(button.dataset.eventV3Command));
+}
 
 checkServices();
 checkTelemetry();
+checkEventV3Status();
 setInterval(checkServices, 300000);

@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#09111f">
   <title>Well Pump Monitoring — Pilot</title>
   <link rel="stylesheet" href="/styles.css">
+  <script src="/event-v3-ui-model.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -152,19 +153,51 @@
     <section class="panel events-panel">
       <div class="panel-heading">
         <div>
-          <p class="kicker">EVENTS</p>
-          <h2>Recent activity</h2>
+          <p class="kicker">EVENT V3</p>
+          <h2>Event board and history</h2>
         </div>
-        <span class="tag">Newest first</span>
+        <span class="tag" id="event-v3-mode">Mode unavailable</span>
       </div>
-      <div class="event-table" role="table" aria-label="Recent events">
+      <p class="event-board-status" id="event-v3-status" aria-live="polite">Event V3 board not yet available.</p>
+      <div class="event-board-meta">
+        <span>Session <strong id="event-v3-session">Not available</strong></span>
+        <span>Boundary <strong id="event-v3-boundary">—</strong></span>
+      </div>
+      <section class="event-open-section" aria-labelledby="event-v3-open-heading">
+        <h3 id="event-v3-open-heading">Current open events</h3>
+        <ul class="event-open-list" id="event-v3-open-events">
+          <li>No open Event V3 events.</li>
+        </ul>
+      </section>
+      <div class="event-table" role="table" aria-label="Recent Event V3 history">
         <div class="event-head" role="row">
-          <span>Time</span><span>Type</span><span>Source</span><span>Details</span>
+          <span role="columnheader">Time</span><span role="columnheader">Status</span><span role="columnheader">Rule</span><span role="columnheader">Details</span>
         </div>
-        <div class="event-empty" role="row">
-          <span>No events have been received.</span>
+        <div id="event-v3-history" role="rowgroup">
+          <div class="event-empty" role="row">
+            <span>No Event V3 history received.</span>
+          </div>
         </div>
       </div>
+    </section>
+
+    <section class="panel event-controls-panel" aria-labelledby="event-v3-controls-heading">
+      <div class="panel-heading">
+        <div>
+          <p class="kicker">EVENT V3 CONTROLS — NOT YET COMMISSIONED</p>
+          <h2 id="event-v3-controls-heading">Queue an explicit control request</h2>
+        </div>
+        <span class="tag unavailable">Host-only command queue</span>
+      </div>
+      <p class="event-control-note">These controls queue a reviewed command only; no device outcome is shown here.</p>
+      <div class="event-control-actions" aria-label="Event V3 controls">
+        <button type="button" class="secondary-button" data-event-v3-command="clear-events">Clear Events</button>
+        <button type="button" class="secondary-button" data-event-v3-command="monitor">Monitor</button>
+        <button type="button" class="secondary-button" data-event-v3-command="normal">Normal</button>
+        <button type="button" class="secondary-button danger-button" data-event-v3-command="restart-tab5">Restart Tab5</button>
+        <button type="button" class="secondary-button danger-button" data-event-v3-command="restart-shelly1">Restart Shelly 1</button>
+      </div>
+      <p class="event-control-status" id="event-v3-control-status" aria-live="polite">No Event V3 control request queued.</p>
     </section>
   </main>
 

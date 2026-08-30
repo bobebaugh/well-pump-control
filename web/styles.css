@@ -178,9 +178,20 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
 .safety-note p { margin: 5px 0 0; color: var(--muted); font-size: .68rem; line-height: 1.45; }
 
 .events-panel { margin-top: 18px; padding: 18px; }
+.event-board-status { margin: 12px 0 0; color: var(--muted); font-size: .76rem; }
+.event-board-meta { display: flex; gap: 10px 24px; flex-wrap: wrap; margin-top: 10px; color: var(--muted); font-size: .68rem; }
+.event-board-meta strong { color: #cbd9e8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .66rem; overflow-wrap: anywhere; }
+.event-open-section { margin-top: 17px; }
+.event-open-section h3 { margin: 0 0 8px; color: #cbd9e8; font-size: .74rem; }
+.event-open-list { display: grid; gap: 6px; margin: 0; padding-left: 20px; color: var(--muted); font-size: .7rem; line-height: 1.4; }
 .event-table { margin-top: 14px; border: 1px solid var(--line-soft); border-radius: 9px; overflow: hidden; }
 .event-head { display: grid; grid-template-columns: 150px 110px 120px 1fr; padding: 9px 12px; background: rgba(255,255,255,.035); color: var(--muted); font-size: .66rem; text-transform: uppercase; letter-spacing: .08em; }
+.event-row { display: grid; grid-template-columns: 150px 110px 120px 1fr; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--line-soft); color: #cbd9e8; font-size: .7rem; line-height: 1.35; overflow-wrap: anywhere; }
 .event-empty { min-height: 78px; display: grid; place-items: center; color: var(--muted); font-size: .76rem; }
+.event-controls-panel { margin-top: 18px; padding: 18px; }
+.event-control-note, .event-control-status { margin: 12px 0 0; color: var(--muted); font-size: .74rem; line-height: 1.45; }
+.event-control-actions { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 15px; }
+.event-control-status { min-height: 20px; color: #cbd9e8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 
 footer { display: flex; justify-content: space-between; gap: 20px; padding: 14px clamp(18px,3vw,42px) 24px; color: #687e96; font-size: .66rem; }
 
@@ -200,6 +211,12 @@ footer { display: flex; justify-content: space-between; gap: 20px; padding: 14px
   .health-panel { grid-column: auto; }
   .health-list { display: block; }
   .event-head { display: none; }
+  .event-row { grid-template-columns: 1fr; gap: 4px; }
+  .event-row span::before { display: inline-block; width: 74px; color: var(--muted); font-size: .62rem; text-transform: uppercase; }
+  .event-row span:nth-child(1)::before { content: "Time"; }
+  .event-row span:nth-child(2)::before { content: "Status"; }
+  .event-row span:nth-child(3)::before { content: "Rule"; }
+  .event-row span:nth-child(4)::before { content: "Details"; }
   footer { flex-direction: column; }
   .pilot-badge { font-size: .66rem; }
 }
