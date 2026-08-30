@@ -534,6 +534,24 @@ stabilises; not changed mid-test.
 
 3. **Pull V2, insert V3** in cloud and `pilot.py`; end-to-end testing. This is the
    missing protection engine. ← **current step**
+
+   **Unit 2 (pure semantic kernel) is DONE and merged to `Tab5`.** All twelve §12
+   replay cases implemented; host suite **125/125**. The kernel is deliberately **not
+   wired to the one-second loop**, does no network I/O and issues no device command —
+   verified, not assumed. The device still runs the V2 package unchanged.
+
+   Its safety invariants were mutation-tested and are load-bearing: a target is
+   released only by its **final** owner; an unavailable `IsLocked` is never fabricated
+   into a value; no release happens while the Shelly reports locked; and missing
+   evidence **freezes** qualification rather than advancing or resetting it. Each of
+   those five deliberate breaks fails the suite.
+
+   `tab5/pilot.py` grew 3682 → **4123 lines** (166 KB → 186 KB). Inert code, but it is
+   parsed at boot on a memory-constrained device — watch free RAM on the next load.
+
+   **Next: Unit 3**, the nonblocking writable-field executor. That is the unit that
+   connects the kernel to reality, so the Shelly enable gate must be enforced centrally
+   in the adapter/executor per §12.
 4. **Shelly script** — only after step 3. Wiring determines its final rules wiring.
 5. **Design tightening and baseline rewrite** — after the fact.
 
