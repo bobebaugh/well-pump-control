@@ -592,13 +592,21 @@ See the step 2 completion record in §6.
 **Never tested:** any Tab5 inhibit of a physically connected pump. Still true, and now
 the *only* remaining never-tested item in the control path.
 
-**Live hazard to know before enabling execution.** The staged package
-`20260830183549-event-v3-v2` contains **`E007 UtilityVoltageHigh`, enabled, severity
-Red**, which on open assigns `PumpEnable = false` — a real STOP consequence, triggered
-by `SupplyVoltage > 265` over 2 observations. It is inert only because V3 execution is
-disabled and the semantic kernel does not exist. The moment step 3 enables execution,
-this package inhibits the pump on high line voltage. That may well be intended; it must
-be a decision, not a surprise.
+**THE RELAY IS NOT CONNECTED TO THE PUMP CONTROL CIRCUIT. Calibrate accordingly.**
+No software change in this project can start, stop, or inhibit the pump today, because
+the output goes nowhere. The owner connects it only after a couple of days of log
+testing, and that connection is his decision and his alone. Do not write about pump
+hazard as though the wire were in place, and do not gate ordinary work behind
+pump-safety language — it is noise that obscures the real risks, and it has already
+crept into this document once and been removed.
+
+What that means in practice for the staged package `20260830183549-event-v3-v2`: it
+contains `E007 UtilityVoltageHigh`, enabled, severity Red, which on open assigns
+`PumpEnable = false` at `SupplyVoltage > 265` over 2 observations. When step 3 enables
+execution this will exercise the **relay**, which is worth knowing so the log is read
+correctly — an `RLY(0)` transition is the expected, observable evidence that the engine
+works. It is not a pump event. The only step that changes that is physically landing
+the wire, which is deliberately deferred.
 
 Also in that package: `UDF(IsLocked)` is declared as a device field but is **still
 unreadable** per §5.2, so it resolves to `None`. No enabled rule reads it today, so it is
