@@ -72,10 +72,11 @@ function deliveryText(current) {
 }
 const deliveryErrors = {
   invalid_delivery_request: "Delivery request is invalid: the release id is missing or malformed.",
+  pointer_read_failed: "Could not read the current V3 pointer. The database security rules are most likely not deployed (firebase deploy --only database).",
   delivery_not_current: "This release is no longer the current published version. Reload before delivering.",
   delivery_release_mismatch: "Delivery refused: the stored release disagrees with the published pointer.",
   pointer_changed: "Delivery did not complete because another writer changed the RTDB pointer. Reload and try again.",
-  pointer_write_failed: "RTDB pointer write was rejected. The database security rules are most likely not deployed.",
+  pointer_write_failed: "RTDB pointer write was rejected. The database security rules are most likely not deployed (firebase deploy --only database).",
   publisher_auth_failed: "Delivery could not authenticate the V3 publisher token.",
   configuration_missing: "Delivery is unavailable because Firebase environment configuration is missing.",
   execution_must_remain_disabled: "Delivery was refused because the package was not execution-disabled."

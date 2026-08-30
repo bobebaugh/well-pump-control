@@ -46,8 +46,9 @@ test("Rules Engine browser can stage a current V3 package without enabling execu
   assert.doesNotMatch(html, /id="engine-(?:enable|execution)"/);
   assert.match(source, /deliverButton\.disabled = !state\.current/);
   assert.match(source, /deliverButton\.disabled = true;/);
-  for (const code of ["invalid_delivery_request", "delivery_not_current", "delivery_release_mismatch", "pointer_changed", "pointer_write_failed", "publisher_auth_failed", "configuration_missing", "execution_must_remain_disabled"]) {
-    assert.match(source, new RegExp(code));
+  for (const code of ["invalid_delivery_request", "pointer_read_failed", "delivery_not_current", "delivery_release_mismatch", "pointer_changed", "pointer_write_failed", "publisher_auth_failed", "configuration_missing", "execution_must_remain_disabled"]) {
+    // Require the code as a mapped key, not merely present somewhere in the file.
+    assert.match(source, new RegExp(`\\b${code}:`));
   }
   assert.match(source, /database security rules are most likely not deployed/);
 });
