@@ -15,7 +15,7 @@ test("Rules Engine browser is explicitly routed to the isolated V3 endpoint", ()
   assert.match(source, /authoring\?\.schemaVersion === 3/);
   assert.match(source, /action: "restore"/);
   assert.match(source, /action: "publish"/);
-  assert.match(html, /Event V3 Checkpoint 1 — nondeploying package work/);
+  assert.match(html, /Event V3 Checkpoint 2 — execution-disabled delivery staging/);
 });
 
 test("Rules Engine presents all schema-3 authoring sections and lifecycle controls", () => {
@@ -34,10 +34,19 @@ test("Rules Engine presents all schema-3 authoring sections and lifecycle contro
   assert.match(source, /runtimeRole: "occurrence", type: "signal"/);
 });
 
-test("Rules Engine browser has no delivery control or delivery request path", () => {
-  assert.doesNotMatch(html, /engine-deliver|>Deliver(?: package)?</i);
-  assert.doesNotMatch(source, /engine-deliver|deliverPackage|action:\s*["']deliver["']/);
-  assert.match(source, /no delivery path in Checkpoint 1/);
+test("Rules Engine browser can stage a current V3 package without enabling execution", () => {
+  assert.match(html, /id="engine-deliver" type="button" disabled>Deliver to Tab5</);
+  assert.match(source, /function deliverPackage/);
+  assert.match(source, /action: "deliver", releaseId: state\.current\.releaseId/);
+  assert.match(source, /Type DELIVER to continue/);
+  assert.match(html, /execution-disabled package for the Tab5/);
+  assert.match(source, /staged execution-disabled for Tab5, not running/);
+  assert.doesNotMatch(source, /executionEnabled:\s*true/);
+  assert.doesNotMatch(html, /executionEnabled:\s*true/);
+  for (const code of ["invalid_delivery_request", "delivery_not_current", "delivery_release_mismatch", "pointer_changed", "pointer_write_failed", "publisher_auth_failed", "configuration_missing", "execution_must_remain_disabled"]) {
+    assert.match(source, new RegExp(code));
+  }
+  assert.match(source, /database security rules are most likely not deployed/);
 });
 
 test("working-field editor transitions preserve the old form shape and normalize the new model", () => {
