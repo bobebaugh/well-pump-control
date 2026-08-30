@@ -8,7 +8,7 @@ for V3 is `EVENT_V3_IMPLEMENTATION.md` — see §1 and §8. Where this file and 
 authority disagree about *design*, the V3 authority wins and this file is wrong and
 should be corrected.
 
-**Last updated:** 2026-08-30
+**Last updated:** 2026-08-30 (second pass — Gate 1 emulator suite executed; see §5.8)
 **Maintained by:** design-oversight session, updated every session
 **Owner:** Bob Ebaugh (bob@ebaugh.net) — sole user and sole hardware authority
 
@@ -190,6 +190,33 @@ A rule referencing `IsLocked` type-checks and then resolves to nothing.
 Both fields need a binding, an object path, and a reader before the V3 enable gate can
 work on hardware.
 
+**Re-verified 2026-08-30 from `origin/Tab5` (`ffae79ab`), with the failure mode traced
+end to end.** `UDF(IsLocked)` occurs exactly once in `tab5/pilot.py` — the declaration,
+now at **line 104**, not L93. `loCntr` occurs **zero** times in the whole 3061-line file.
+
+The consequence is narrower and worse than "the gate cannot work" — it is a **silent
+no-op**, and it is fail-safe in the conservative direction:
+
+1. `runtime_direct_field_values()` looks `UDF(IsLocked)` up in `RUNTIME_OBJECT_PATHS`,
+   gets `None`, and — because the miss is not an error path — assigns `values[name] =
+   None` and continues. No raise, no log.
+2. `evaluate_runtime_program()` returns `None` for a `field` instruction whose value is
+   not a number.
+3. `runtime_condition_value()` returns `None` (it is correctly tri-state: "True, False,
+   or None when a required field is unavailable" — it does **not** fabricate `False`).
+4. `advance_rule_event()` on `condition_result is None` returns before the phase
+   machine: a `confirming` rule reverts to `inactive`, a `clearing` rule reverts to
+   `active`, and no transition is emitted.
+
+So an `IsLocked` rule **can never open**, and an already-active protective event can
+never be cleared by missing evidence. Nothing spuriously enables the pump. But there is
+**no diagnostic anywhere** — grep finds no unresolved/unbound/missing-field reporting —
+and `enabled_rule_count()` counts the rule as enabled regardless. A published package
+referencing `IsLocked` therefore adopts cleanly, displays as an enabled rule, and does
+nothing forever. Treat that as the requirement: the fix is a binding, an object path,
+and a reader **plus** a visible unresolved-field diagnostic, or the same class of
+silent dead rule can recur for any future field.
+
 **5.3 RESOLVED — checkpoint 2 / Gate 1 is verified.** See §6.1.
 
 **5.7 The protected-baseline test fails for a line-ending reason, not a content
@@ -198,12 +225,43 @@ reason. Fix the repo, not the test expectations.**
 `tests/contract-schemas.test.js` pins sha256 digests for seven protective-path files
 and reads them with `readFileSync`. Verified 2026-08-30: the git blob content of
 `ingest-power.js`, `current-power.js`, and `power-contract.js` matches the expected
-baselines **exactly**. The on-disk copies do not, because `core.autocrlf=true` and
+baselines **exactly**.
+
+**Upgraded from asserted to VERIFIED, 2026-08-30 (second pass, Linux).** Two gaps in
+the first pass are now closed. First, **all seven** guarded files were checked, not
+three: every one matches its expected digest exactly in the committed blob, and every
+one contains **zero** CR bytes in git. Second, the "would pass in Linux CI" prediction
+was actually executed rather than reasoned about — `node --test
+tests/contract-schemas.test.js` on an LF checkout passes **9/9, including the
+protected-baseline test**. The guarded content is provably unmodified and the diagnosis
+is confirmed: the CRs exist only in a Windows working tree via `core.autocrlf`, never
+in the repository. The on-disk copies do not, because `core.autocrlf=true` and
 `.gitattributes` carries no `text`/`eol` rule — only an LVGL whitespace exception.
 `ingest-power.js` has 211 CR characters on disk.
 
 So the test fails on any Windows checkout and would pass in Linux CI. The guarded
 content is provably unmodified.
+
+**RESOLVED ON `pilot` 2026-08-30 — owner approved.** `.gitattributes` on `pilot` now
+carries `* text=auto eol=lf`, with the vendored LVGL tree excluded
+(`firmware/tab5/components/lvgl/** -whitespace -text`) so upstream bytes stay exactly
+as shipped. Verified inert before committing: `git add --renormalize .` rewrites **no**
+file, because no blob committed on `pilot` contains a CR. The tripwire now holds for
+every checkout regardless of `core.autocrlf`. `npm test` 103/103 on `pilot` after the
+change.
+
+**DEFERRED ON `Tab5` — deliberately, do not "finish the job" without reading this.**
+The same one-line change is **not** inert on `Tab5`. Five files are committed there
+with CRLF: `tab5/BASELINE.md`, `tab5/device_secrets.example.py`, `tab5/main.py`,
+`tab5/webrepl.py`, and **`tab5/pilot.py`** — the device runtime. Applying
+`* text=auto eol=lf` on `Tab5` would renormalize all five, rewriting every one of
+`pilot.py`'s 3061 lines. `agent/event-v3-checkpoint2-tab5-staging` is in flight against
+that exact file (+623 lines) and carries the same CRLF, so the renormalization would
+collide head-on with unaccepted Gate 1 device work and destroy the reviewable diff.
+
+Do it as its own dedicated commit **after** checkpoint 2 is accepted and merged, when
+no branch is in flight against `tab5/`. Nothing on `Tab5` depends on the digest
+tripwire, so there is no urgency. Until then `Tab5` keeps no `.gitattributes`.
 
 **This is worth fixing rather than filing.** The test is a tripwire for unauthorized
 changes to the protective telemetry path. Permanently red for an unrelated reason, it
@@ -211,6 +269,39 @@ has already been normalized as a known failure and can no longer detect a real c
 Fix in `.gitattributes` (`* text=auto eol=lf`, or scoped to the guarded files) so it
 holds for every checkout, rather than per-machine `core.autocrlf`. Never "fix" it by
 updating the expected digests.
+
+**5.8 BLOCKING — Gate 1's own RTDB rules deny the V3 writes they are meant to allow.**
+
+Found 2026-08-30 by running the emulator suite that had never been run. On
+`agent/event-v3-checkpoint2-delivery` (`f355c18b`), `npm run test:rtdb-rules` gives
+**9 tests, 7 pass, 2 fail**. The seven passing are the pre-existing V2 tests. **The two
+failing are exactly the two tests Gate 1 added** — the V3 staging pointer and the V3
+staging state. Both fail `PERMISSION_DENIED` on their *first* `assertSucceeds`, i.e.
+the legitimate write is refused.
+
+The failure direction is **fail-closed**, so nothing unsafe is reachable; but Gate 1 as
+published does not function — a V3 pointer cannot be written and a device cannot report
+staging state. Two independent root causes, both confirmed by patching a scratch copy
+and re-running (the published file was restored and re-verified byte-identical):
+
+1. **`"$other": {".validate": false}` denies every scalar field.** It is applied to
+   `rules/v3/current`, `rulesV3State`, `desired`, `staged`, and `rejected` — none of
+   which name their permitted children. In RTDB, `$other` matches *every* child that is
+   not explicitly named, so it rejects `schemaVersion`, `kind`, `releaseId`, and the
+   rest — the very fields the parent `.validate` demands via `hasChildren`. The V2
+   `rules/current` node, which has no `$other`, passes. Removing the five `$other`
+   clauses lets both valid writes through — and then the negative assertions
+   (`unreviewed: true`, `extra: true`) start passing when they must fail. So `$other`
+   is doing double duty and **deletion is not the fix**: the rules need an explicit
+   named-child validator layer *beneath* `$other`.
+2. **`hasChildren` requires children the valid payload sets to `null`.**
+   `rulesV3State.validate` requires `[... 'staged', 'rejected']`, but the contract's own
+   valid state writes `rejected: null`, and a null child does not exist in RTDB. A
+   legitimate "nothing rejected" state is therefore unwritable. Confirmed: dropping
+   `staged`/`rejected` from `hasChildren` lets the valid write through.
+
+**Gate 1 must not be accepted or promoted in this state.** This is the next bounded
+unit — see §6.1.
 
 **5.4 `P009` classification depends on the wiring outcome.** If the capture period
 does not inhibit, `IsLocked > 0` means lockout only and `P009`'s Red/Alert/notify is
@@ -253,13 +344,67 @@ Tests reported: Tab5 host 112/112; V3 Node 10/10; V3 contract selection 23/23; f
 Node suite 78 passed / 7 blocked — the blocks being missing `firebase-admin` and the
 line-ending issue in §5.7. Firebase emulator suite could not run.
 
-**Not yet accepted.** Emulator coverage is the one real remaining blocker; the
-protected-baseline mismatch is resolved as a false alarm (§5.7).
+### 6.1a Second verification pass — 2026-08-30, Linux cloud session
 
-**Both Gate 1 branches are now 2 commits behind their bases** — documentation-only
-commits from this file landing on `pilot` and `Tab5`. No conflict risk, but rebase or
-merge before promotion, and expect Gate 2 SHA verification to differ from the Gate 1
-report's table.
+Run against the live published branches, not a report. Branch identity re-confirmed:
+`delivery` = `f355c18b`, `tab5-staging` = `a416034d`, merge bases `d0b8a316` and
+`67553473` exactly as the table states. `agent/event-v3-contract` is still at the
+pinned `78ca53af`, so the §1 authority pin is live, not stale.
+
+**The environment blocks were environmental, and they are gone.** With dependencies
+installed on an LF checkout:
+
+| Suite | Result |
+|---|---|
+| Node host suite, delivery branch | **110 pass / 0 fail / 0 blocked** |
+| `tests/contract-schemas.test.js` incl. protected baseline | **9/9 pass** |
+| Tab5 host suite, staging branch (`unittest discover`) | **112/112 OK** |
+| **Firebase RTDB emulator suite** | **9 tests, 7 pass, 2 FAIL** |
+
+The first three close out the previously reported blocks: the "7 blocked" were missing
+`firebase-admin` plus the CRLF artifact, nothing more. The reported 112/112 is
+confirmed independently.
+
+**The emulator suite is no longer a coverage gap — it is a failure.** Running it was
+the one thing standing between Gate 1 and acceptance, and it does not pass. The two
+failures are precisely the two tests Gate 1 added. Root causes are diagnosed in
+**§5.8**.
+
+**Gate 1 acceptance status: BLOCKED on a real defect, not on missing coverage.** The
+earlier "emulator coverage is the one real remaining blocker" line above is superseded.
+
+Environment note, durable: the emulator suite **does** run in a Linux container with
+Java 21 present, but the Firebase CLI must be invoked with the proxy variables unset
+(`env -u https_proxy -u HTTPS_PROXY -u http_proxy -u HTTP_PROXY -u JAVA_TOOL_OPTIONS`).
+Left set, the CLI's loopback rules upload receives a proxy error body and fails with a
+misleading `Unable to parse JSON: ... "refusing t"...`, which looks like a corrupt rules
+file but is not — `firebase/rtdb.rules.json` parses as valid JSON. Do not chase that
+error as a content bug.
+
+**Both Gate 1 branches are 3 commits behind their bases — not 2.** The doc's own
+"Record Gate 1 verification" commit (`ecea6fd` on `pilot`, `ffae79a` on `Tab5`) landed
+after that sentence was written and made it stale immediately. Verified counts:
+delivery 2 ahead / **3** behind; staging 1 ahead / **3** behind. All three behind-commits
+touch only `00-CURRENT-STATE-READ-FIRST.md` and `AGENTS.md`, insertions only, zero code
+files — so "no conflict risk" is confirmed, and a rebase or merge is trivial.
+
+### 6.1b Next bounded unit — fix the V3 RTDB rules
+
+Scope: `firebase/rtdb.rules.json` on `agent/event-v3-checkpoint2-delivery` only.
+Make `tests/emulator/rtdb-rules.test.js` pass 9/9 without weakening any negative
+assertion. Both defects in §5.8 must be fixed together, because fixing either alone
+flips the other set of assertions:
+
+- add an explicit named-child validator layer under `rules/v3/current`, `rulesV3State`,
+  `desired`, `staged`, and `rejected`, so `$other` can keep rejecting unreviewed fields
+  while the contract's own fields validate;
+- stop requiring `hasChildren` for children the contract legitimately writes as `null`
+  (`staged`, `rejected`), without allowing an arbitrary shape in their place.
+
+Non-goals: no change to `executionEnabled: false` enforcement at any of the four
+layers, no change to any V2 path, no schema or function changes, no `.gitattributes`
+work in the same unit. Acceptance: `npm test` stays 110/110 and
+`npm run test:rtdb-rules` reaches 9/9.
 
 ### 6.2 Deploy footprint to date
 
@@ -320,6 +465,12 @@ Voltage event, issue the STOP consequence. The relay changed `RLY(0)` ON→OFF; 
 **Verified host tests:** Tab5 105/105 at the V3 doc's writing. Web 59/61, with two
 files failing to load for lack of `firebase-admin` in that environment — a dependency
 limitation, not assertion failures.
+
+**Re-verified 2026-08-30 (Linux, dependencies installed), on the Gate 1 branches:**
+Node host suite **110/110**, Tab5 host suite **112/112**, protected-baseline test
+**passing**. These were executed, not reported. The Firebase RTDB emulator suite was
+executed for the first time and **fails 2 of 9** — see §5.8. That failure is verified,
+not asserted.
 
 **Asserted but untested:** everything in V3 §§4–9. The V3 semantic kernel does not
 exist yet.
