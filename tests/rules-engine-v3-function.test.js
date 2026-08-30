@@ -10,7 +10,7 @@ function request(method, payload, query = { version: "3" }) {
   return { httpMethod: method, headers: { "X-Pilot-Key": "test-key" }, queryStringParameters: query, body: payload === undefined ? "" : JSON.stringify(payload) };
 }
 
-function harness() {
+function harness(options = {}) {
   const draft = defaults();
   const revisions = { devices: 1, calculatedFields: 1, systemFields: 1, events: 1 };
   const published = [];
@@ -25,6 +25,13 @@ function harness() {
       assert.equal(expectedVersion, current?.packageVersion || 0); assert.deepEqual(expectedRevisions, revisions);
       published.push({ releaseId, release, stateValue }); current = stateValue;
     },
+    async markDelivered(releaseId, contentHash, metadata, nowMs) {
+      assert.equal(releaseId, current?.releaseId);
+      assert.equal(contentHash, current?.contentHash);
+      assert.equal(metadata.executionEnabled, false);
+      current = { ...current, deliveryEnabled: true, executionEnabled: false, deliveredAtMs: nowMs, delivery: metadata };
+      return current;
+    },
     async restoreRelease(releaseId, expectedRevisions) {
       assert.deepEqual(expectedRevisions, revisions);
       const release = published.find(item => item.releaseId === releaseId)?.release;
@@ -37,7 +44,8 @@ function harness() {
     env: { PILOT_INGEST_TOKEN: "test-key" },
     createV3Store: () => store,
     createStore: () => { throw new Error("V2 store must not serve V3 request"); },
-    createDelivery: () => { deliveryFactoryCalls += 1; throw new Error("V3 must not create a delivery factory"); },
+    createDelivery: () => { deliveryFactoryCalls += 1; throw new Error("V2 delivery factory must not serve V3 request"); },
+    createV3Delivery: options.createV3Delivery,
     now: () => new Date("2026-08-30T12:34:56.000Z")
   });
   return { handler, published, get deliveryFactoryCalls() { return deliveryFactoryCalls; } };
@@ -50,7 +58,7 @@ test("V3 endpoint validates, publishes, reopens, and restores an isolated immuta
   assert.equal(loaded.draft.schemaVersion, 3);
   assert.deepEqual(Object.keys(loaded.draft.revisions), ["devices", "calculatedFields", "systemFields", "events"]);
   assert.equal(loaded.delivery.enabled, false);
-  assert.equal(loaded.capabilities.deliveryAvailable, false);
+  assert.equal(loaded.capabilities.deliveryAvailable, true);
 
   const validation = JSON.parse((await handler(request("POST", { action: "validate" }))).body);
   assert.equal(validation.status, "valid");
@@ -87,11 +95,18 @@ test("V3 endpoint validates, publishes, reopens, and restores an isolated immuta
   assert.equal(restoredBody.draft.events[0].web.notifyOnClose, false);
 });
 
-test("V3 endpoint rejects delivery without constructing or calling a delivery factory", async () => {
-  const harnessed = harness();
-  const result = await harnessed.handler(request("POST", { action: "deliver", releaseId: "20260830123456-event-v3-v1" }));
-  assert.equal(result.statusCode, 409);
-  assert.equal(JSON.parse(result.body).code, "v3_delivery_not_available");
+test("V3 endpoint delivers only an execution-disabled staging pointer without constructing the V2 factory", async () => {
+  const delivered = [];
+  const harnessed = harness({ createV3Delivery: () => ({ async publishPointer(metadata) { delivered.push(metadata); } }) });
+  const published = JSON.parse((await harnessed.handler(request("POST", { action: "publish", basePackageVersion: 0 }))).body);
+  const result = await harnessed.handler(request("POST", { action: "deliver", releaseId: published.current.releaseId }));
+  assert.equal(result.statusCode, 200);
+  const body = JSON.parse(result.body);
+  assert.equal(body.current.deliveryEnabled, true);
+  assert.equal(body.current.executionEnabled, false);
+  assert.equal(body.metadata.executionEnabled, false);
+  assert.equal(body.metadata.downloadPath, `/.netlify/functions/rules-engine-release?version=3&releaseId=${published.current.releaseId}`);
+  assert.equal(delivered.length, 1);
   assert.equal(harnessed.deliveryFactoryCalls, 0);
 });
 

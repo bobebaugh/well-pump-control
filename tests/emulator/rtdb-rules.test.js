@@ -16,6 +16,7 @@ let environment;
 let deviceDatabase;
 let anonymousDatabase;
 let publisherDatabase;
+let v3PublisherDatabase;
 
 function emulatorAddress() {
   const value = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
@@ -76,6 +77,9 @@ before(async () => {
   anonymousDatabase = environment.unauthenticatedContext().database();
   publisherDatabase = environment.authenticatedContext("netlify-rules-publisher", {
     siteId: "well-main", purpose: "rules-publication"
+  }).database();
+  v3PublisherDatabase = environment.authenticatedContext("netlify-rules-publisher", {
+    siteId: "well-main", purpose: "rules-v3-publication"
   }).database();
   await environment.withSecurityRulesDisabled(async context => {
     const admin = context.database();
@@ -142,6 +146,52 @@ test("fixed publisher can replace only a complete rules pointer", async () => {
   await assertSucceeds(get(ref(publisherDatabase, `${SITE}/rules/current`)));
   await assertFails(set(ref(publisherDatabase, `${SITE}/rules/current`), { packageVersion: 3 }));
   await assertFails(set(ref(publisherDatabase, `${SITE}/control/globalEnable`), true));
+});
+
+test("separate V3 staging publisher can replace only a closed execution-disabled V3 pointer", async () => {
+  const current = {
+    schemaVersion: 3, kind: "well-pump-event-v3-staging-pointer", siteId: "well-main",
+    releaseId: "20260830123456-event-v3-v1", packageVersion: 1,
+    runtimeSchemaVersion: 3, contentHash: "a".repeat(64), hashAlgorithm: "sha256",
+    byteLength: 1234, publishedAtMs: 1788266096000, executionEnabled: false,
+    downloadPath: "/.netlify/functions/rules-engine-release?version=3&releaseId=20260830123456-event-v3-v1"
+  };
+  const path = `${SITE}/rules/v3/current`;
+  await assertSucceeds(set(ref(v3PublisherDatabase, path), current));
+  await assertSucceeds(get(ref(v3PublisherDatabase, path)));
+  await assertSucceeds(get(ref(deviceDatabase, path)));
+  await assertFails(set(ref(publisherDatabase, path), current));
+  for (const invalid of [
+    { ...current, executionEnabled: true },
+    { ...current, releaseId: "20260830123456-parameters-v1" },
+    { ...current, byteLength: 65537 },
+    { ...current, downloadPath: "/.netlify/functions/rules-engine-release?releaseId=20260830123456-event-v3-v1" },
+    { ...current, unreviewed: true }
+  ]) await assertFails(set(ref(v3PublisherDatabase, path), invalid));
+  await assertFails(set(ref(v3PublisherDatabase, `${SITE}/rules/current`), { packageVersion: 2 }));
+});
+
+test("only the fixed device can report closed execution-disabled V3 staging state", async () => {
+  const statePath = `${DEVICE}/rulesV3State`;
+  const reference = {
+    releaseId: "20260830123456-event-v3-v1", packageVersion: 1,
+    runtimeSchemaVersion: 3, contentHash: "a".repeat(64), executionEnabled: false
+  };
+  const state = {
+    schemaVersion: 1, kind: "rules-v3-staging-state", siteId: "well-main",
+    deviceId: "tab5-well-main", sessionId: "boot_12345678", executionEnabled: false,
+    reportedAtMs: serverTimestamp(), desired: reference, staged: reference, rejected: null
+  };
+  await assertSucceeds(set(ref(deviceDatabase, statePath), state));
+  await assertSucceeds(get(ref(deviceDatabase, statePath)));
+  await assertFails(set(ref(v3PublisherDatabase, statePath), state));
+  for (const invalid of [
+    { ...state, executionEnabled: true },
+    { ...state, kind: "active" },
+    { ...state, desired: { ...reference, contentHash: "b".repeat(63) } },
+    { ...state, extra: true },
+    { ...state, rejected: { reason: "bad", releaseId: null, packageVersion: null, contentHash: null, extra: true } }
+  ]) await assertFails(set(ref(deviceDatabase, statePath), invalid));
 });
 
 test("malformed and misaddressed current observations are denied", async () => {

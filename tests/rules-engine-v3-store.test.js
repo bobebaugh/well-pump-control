@@ -60,4 +60,8 @@ test("V3 store seeds, saves, publishes, reopens, and restores only V3 Firestore 
   const restored = await store.restoreRelease(state.releaseId, saved.draft.revisions, 130);
   assert.equal(restored.systemFields[0].label, "Restored operating mode");
   assert.deepEqual(restored.revisions, { devices: 2, calculatedFields: 2, systemFields: 3, events: 2 });
+  const delivered = await store.markDelivered(state.releaseId, state.contentHash, { executionEnabled: false, releaseId: state.releaseId }, 140);
+  assert.equal(delivered.deliveryEnabled, true);
+  assert.equal(delivered.executionEnabled, false);
+  assert.equal(values.has(`sites/well-main/rulesEngineState/current`), false);
 });

@@ -18,6 +18,9 @@ const schemas = [
   "contracts/rules-release-metadata-v1.schema.json",
   "contracts/rules-package-v1.schema.json",
   "contracts/rules-runtime-release-metadata-v2.schema.json",
+  "contracts/rules-runtime-release-metadata-v3.schema.json",
+  "contracts/rules-v3-state-v1.schema.json",
+  "contracts/rules-v3-device-state-v1.schema.json",
   "contracts/rules-runtime-package-v3.schema.json"
 ];
 
@@ -70,6 +73,10 @@ function validate(schema, value, rootSchema = schema, location = "$") {
   if (schema.oneOf) {
     const matches = schema.oneOf.filter(part => validate(part, value, rootSchema, location).length === 0);
     if (matches.length !== 1) errors.push(`${location} matched ${matches.length} oneOf branches`);
+  }
+  if (schema.anyOf) {
+    const matches = schema.anyOf.filter(part => validate(part, value, rootSchema, location).length === 0);
+    if (matches.length === 0) errors.push(`${location} matched no anyOf branches`);
   }
   if (schema.if && validate(schema.if, value, rootSchema, location).length === 0 && schema.then) {
     errors.push(...validate(schema.then, value, rootSchema, location));
@@ -185,6 +192,22 @@ test("V3 runtime schema closes nested compiler output and excludes authoring not
   const boundedComparison = structuredClone(runtime);
   boundedComparison.events[0].opening.trigger.condition.clauses[0] = { field: "SupplyVoltage", operator: "between", value: [240, 265] };
   assert.deepEqual(validate(schema, boundedComparison), []);
+});
+
+test("V3 device staging state is closed and execution-disabled", () => {
+  const schema = readJson("contracts/rules-v3-device-state-v1.schema.json");
+  const reference = {
+    releaseId: "20260830123456-event-v3-v1", packageVersion: 1,
+    runtimeSchemaVersion: 3, contentHash: "a".repeat(64), executionEnabled: false
+  };
+  const state = {
+    schemaVersion: 1, kind: "rules-v3-staging-state", siteId: "well-main",
+    deviceId: "tab5-well-main", sessionId: "boot_12345678", executionEnabled: false,
+    reportedAtMs: 1788266096000, desired: reference, staged: reference, rejected: null
+  };
+  assert.deepEqual(validate(schema, state), []);
+  assert.notDeepEqual(validate(schema, { ...state, executionEnabled: true }), []);
+  assert.notDeepEqual(validate(schema, { ...state, extra: true }), []);
 });
 
 test("V3 runtime schema accepts typed generic session working fields", () => {
