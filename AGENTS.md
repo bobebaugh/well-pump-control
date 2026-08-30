@@ -1,8 +1,15 @@
 # Repository guidance
 
+## Event V3 sessions
+
+- Read `EVENT_V3_IMPLEMENTATION.md` completely before event, Rules Engine, Monitor, latch, Clear Events, restart, or event-record work.
+- For those subjects it is the temporary implementation authority and supersedes older repository plans and architecture prose until accepted V3 behavior is documented from the implementation.
+- Web and contract V3 work belongs on `agent/event-v3-contract`, based exactly on the live `pilot` SHA recorded there. Do not use `agent/event-command-reconciliation` as the implementation base.
+- Keep V2 deployed behavior intact while developing and testing an explicit V3 contract. Do not deploy, move the RTDB rules pointer, merge, or promote without explicit owner approval.
+
 ## Safety and authority
 
-- The current pilot is observational only.
+- The deployed pilot remains limited to its already reviewed behavior. V3 control design authorizes host-only contract and test work on its named nondeploying branch, not deployment or new hardware authority.
 - Never add pump start, stop, inhibit, relay, or control authority unless the requested phase explicitly includes a reviewed control change.
 - Tab5 must never manufacture ordinary pump demand.
 - Netlify and Firestore must never be placed in an immediate protective path.
