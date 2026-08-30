@@ -11,7 +11,7 @@
 # consequence. Rules can never command Output 0 ON. Battery charge control is
 # the separate exception: an automatic hysteresis policy keeps the pack between
 # BATTERY_LOW_PCT and BATTERY_HIGH_PCT - see the battery section below.
-# Unit 2 Event V3 is host-only semantic selection, intentionally disconnected from M6.27.
+# Unit 2-3 Event V3 is host-only semantic selection/execution, intentionally disconnected from M6.27.
 
 import M5
 import __main__
@@ -1134,10 +1134,13 @@ def resolve_v3_package(package):
             not isinstance(calculations, list) or len(calculations) > 64):
         raise ValueError('invalid V3 package shape')
     fields, writable, device_fields, device_objects, writable_devices = {}, {}, {}, {}, {}
+    device_drivers, device_addresses = {}, {}
     protected_targets = {}
     device_ids = set()
     for device in devices:
         if (not isinstance(device, dict) or not isinstance(device.get('id'), str) or
+                not isinstance(device.get('address'), str) or not device['address'] or
+                len(device['address']) > 256 or
                 device.get('driver') not in RUNTIME_DIRECT_BINDINGS or
                 device.get('enabled') not in (True, False) or
                 not isinstance(device.get('fields'), list) or not device['fields'] or
@@ -1146,6 +1149,8 @@ def resolve_v3_package(package):
         if device['id'] in device_ids:
             raise ValueError('duplicate V3 device')
         device_ids.add(device['id'])
+        device_drivers[device['id']] = device['driver']
+        device_addresses[device['id']] = device['address']
         names, object_fields = [], {}
         binding_catalog = RUNTIME_DIRECT_BINDINGS[device['driver']]
         for field in device['fields']:
@@ -1161,7 +1166,10 @@ def resolve_v3_package(package):
             object_fields[field['object']] = field
             if field.get('access') == 'readWrite':
                 write = field.get('write')
-                if not isinstance(write, dict) or not _v3_value_matches(write.get('normalValue'), field):
+                if (not isinstance(write, dict) or write.get('method') != 'Switch.Set' or
+                        write.get('parameters') != {'id': 0, 'valueParameter': 'on'} or
+                        write.get('normalValue') is not True or
+                        not _v3_value_matches(write.get('normalValue'), field)):
                     raise ValueError('invalid V3 writable field')
                 writable[field['systemName']] = field
                 writable_devices[field['systemName']] = device['id']
@@ -1230,6 +1238,8 @@ def resolve_v3_package(package):
     return {'resolvedV3': True, 'package': package, 'events': resolved_events,
             'fields': fields, 'writable': writable, 'deviceFields': device_fields,
             'writableDevices': writable_devices, 'deviceObjects': device_objects,
+            'deviceDrivers': device_drivers, 'deviceAddresses': device_addresses,
+            'protectedTargets': protected_targets,
             'pumpTarget': pump_target}
 
 
@@ -1520,6 +1530,357 @@ def v3_kernel_step(kernel, records, now_ms, commands=None):
         'assignments': transition_assignments + effective_assignments,
         'mode': 'Monitor' if monitor else 'Normal',
     }
+
+
+# --- Event V3 host-only writable-field executor (not connected to M6.27) ---
+# Selection/enqueue is pure.  Only the explicitly invoked worker receives a
+# transport and may issue one adapter-bound command at a time.
+
+
+def _v3_executor_clone(executor):
+    return {
+        'resolved': executor['resolved'],
+        'queue': [dict(command) for command in executor['queue']],
+        'transitionQueue': [dict(command) for command in executor['transitionQueue']],
+        'pendingReadbacks': [dict(command) for command in executor['pendingReadbacks']],
+        'desired': {target: dict(value) for target, value in executor['desired'].items()},
+        'latestMode': executor['latestMode'],
+        'commandSequence': executor['commandSequence'],
+        'maxAttempts': executor['maxAttempts'],
+        'maxTransitionCommands': executor['maxTransitionCommands'],
+    }
+
+
+def new_v3_executor(package, max_attempts=2):
+    """Create a bounded host-only executor; it does not contact a device."""
+    resolved = package if isinstance(package, dict) and package.get('resolvedV3') else resolve_v3_package(package)
+    if (not isinstance(max_attempts, int) or isinstance(max_attempts, bool) or
+            max_attempts < 1 or max_attempts > 3):
+        raise ValueError('invalid V3 executor retry bound')
+    return {'resolved': resolved, 'queue': [], 'transitionQueue': [], 'pendingReadbacks': [],
+            'desired': {}, 'latestMode': 'Normal',
+            'commandSequence': 0, 'maxAttempts': max_attempts,
+            'maxTransitionCommands': 64}
+
+
+def _v3_executor_record(command_id, target, value, state, reason=None):
+    record = {'commandId': command_id, 'target': target, 'value': value,
+              'state': state}
+    if reason is not None:
+        record['reason'] = reason
+    return record
+
+
+def _v3_protected_enable_reason(resolved, target, value, accepted_devices, snapshot):
+    """Return a gate reason for unsafe protected enable, otherwise None."""
+    protected = resolved.get('protectedTargets', {}).get(target)
+    if protected is None or value is not True:
+        return None
+    lock_field = resolved.get('deviceObjects', {}).get(protected, {}).get('UDF(IsLocked)')
+    if protected not in accepted_devices:
+        return 'protected_enable_requires_current_record'
+    if not isinstance(lock_field, dict) or snapshot.get(lock_field.get('systemName')) != 0:
+        return 'protected_enable_locked'
+    return None
+
+
+def _v3_bound_write_command(resolved, target, value, command_id):
+    field = resolved.get('writable', {}).get(target)
+    device_id = resolved.get('writableDevices', {}).get(target)
+    write = field.get('write') if isinstance(field, dict) else None
+    if (not isinstance(write, dict) or not isinstance(write.get('method'), str) or
+            not isinstance(write.get('parameters'), dict) or
+            not isinstance(write['parameters'].get('valueParameter'), str) or
+            device_id is None):
+        return None
+    parameters = {'id': write['parameters']['id'],
+                  write['parameters']['valueParameter']: value}
+    return {'commandId': command_id, 'deviceId': device_id,
+            'driver': resolved.get('deviceDrivers', {}).get(device_id),
+            'address': resolved.get('deviceAddresses', {}).get(device_id),
+            'target': target, 'value': value, 'method': write['method'],
+            'parameters': parameters, 'attempts': 0}
+
+
+def _v3_executor_drop_target(executor, target):
+    executor['queue'] = [command for command in executor['queue']
+                         if command['target'] != target]
+
+
+def _v3_executor_supersede_transition_enable(executor, target, rejected):
+    """Cancel stale protected transition enables when Normal selects disable."""
+    remaining = []
+    for command in executor['transitionQueue']:
+        if (command['target'] == target and command['value'] is True and
+                target in executor['resolved'].get('protectedTargets', {})):
+            rejected.append(_v3_executor_record(command['commandId'], target, True,
+                                                'rejected', 'superseded'))
+        else:
+            remaining.append(command)
+    executor['transitionQueue'] = remaining
+    remaining = []
+    for command in executor['pendingReadbacks']:
+        if (command['target'] == target and command['value'] is True and
+                target in executor['resolved'].get('protectedTargets', {})):
+            rejected.append(_v3_executor_record(command['commandId'], target, True,
+                                                'rejected', 'superseded'))
+        else:
+            remaining.append(command)
+    executor['pendingReadbacks'] = remaining
+
+
+def _v3_executor_schedule(executor, target, rejected):
+    """Coalesce one target's latest desired value without doing I/O."""
+    desired = executor['desired'].get(target)
+    _v3_executor_drop_target(executor, target)
+    if not isinstance(desired, dict) or desired.get('awaitingConfirmation') is True:
+        return
+    if (target in executor['resolved'].get('protectedTargets', {}) and
+            desired.get('mode') == 'Monitor' and desired.get('value') is False):
+        rejected.append(_v3_executor_record(desired['commandId'], target, desired['value'],
+                                            'rejected', 'monitor_suppressed'))
+        del executor['desired'][target]
+        return
+    reason = _v3_protected_enable_reason(executor['resolved'], target, desired['value'],
+                                         desired['acceptedDevices'], desired['snapshot'])
+    if reason is not None:
+        rejected.append(_v3_executor_record(desired['commandId'], target, desired['value'],
+                                            'rejected', reason))
+        return
+    command = _v3_bound_write_command(executor['resolved'], target, desired['value'],
+                                       desired['commandId'])
+    if command is None:
+        rejected.append(_v3_executor_record(desired['commandId'], target, desired['value'],
+                                            'rejected', 'unsupported_write_binding'))
+        del executor['desired'][target]
+        return
+    command['attempts'] = desired.get('attempts', 0)
+    executor['queue'].append(command)
+
+
+def v3_enqueue_selected_assignments(executor, outcome):
+    """Purely bind kernel selections to a bounded command queue; no I/O."""
+    if (not isinstance(executor, dict) or not isinstance(executor.get('resolved'), dict) or
+            not isinstance(outcome, dict)):
+        raise ValueError('invalid V3 executor enqueue input')
+    next_executor = _v3_executor_clone(executor)
+    selected, rejected, assigned_targets = [], [], set()
+    assignments = outcome.get('assignments')
+    assignments = assignments if isinstance(assignments, list) else []
+    accepted_devices = outcome.get('acceptedDevices')
+    accepted_devices = accepted_devices if isinstance(accepted_devices, list) else []
+    snapshot = outcome.get('snapshot')
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    mode = outcome.get('mode')
+    mode = mode if mode in ('Normal', 'Monitor') else next_executor['latestMode']
+    next_executor['latestMode'] = mode
+    for assignment in assignments:
+        target = assignment.get('target') if isinstance(assignment, dict) else None
+        value = assignment.get('value') if isinstance(assignment, dict) else None
+        field = next_executor['resolved'].get('writable', {}).get(target)
+        if not isinstance(field, dict) or not _v3_value_matches(value, field):
+            next_executor['commandSequence'] += 1
+            command_id = 'v3-command-' + str(next_executor['commandSequence'])
+            selected.append(_v3_executor_record(command_id, target, value, 'selected'))
+            rejected.append(_v3_executor_record(command_id, target, value, 'rejected',
+                                                'assignment_type_or_target'))
+            continue
+        if assignment.get('ownership') == 'transition':
+            next_executor['commandSequence'] += 1
+            command_id = 'v3-command-' + str(next_executor['commandSequence'])
+            selected.append(_v3_executor_record(command_id, target, value, 'selected'))
+            if len(next_executor['transitionQueue']) >= next_executor['maxTransitionCommands']:
+                rejected.append(_v3_executor_record(command_id, target, value, 'rejected',
+                                                    'transition_queue_full'))
+                continue
+            command = _v3_bound_write_command(next_executor['resolved'], target, value, command_id)
+            if command is None:
+                rejected.append(_v3_executor_record(command_id, target, value, 'rejected',
+                                                    'unsupported_write_binding'))
+                continue
+            command['kind'] = 'transition'
+            next_executor['transitionQueue'].append(command)
+            continue
+        existing = next_executor['desired'].get(target)
+        if isinstance(existing, dict) and existing.get('value') == value:
+            command_id = existing['commandId']
+        else:
+            next_executor['commandSequence'] += 1
+            command_id = 'v3-command-' + str(next_executor['commandSequence'])
+        selected.append(_v3_executor_record(command_id, target, value, 'selected'))
+        assigned_targets.add(target)
+        if (target in next_executor['resolved'].get('protectedTargets', {}) and
+                value is False):
+            _v3_executor_supersede_transition_enable(next_executor, target, rejected)
+        if not isinstance(existing, dict) or existing.get('value') != value:
+            next_executor['desired'][target] = {
+                'commandId': command_id, 'value': value, 'acceptedDevices': list(accepted_devices),
+                'snapshot': dict(snapshot), 'mode': mode, 'awaitingConfirmation': False,
+                'attempts': 0,
+            }
+        else:
+            existing['acceptedDevices'], existing['snapshot'], existing['mode'] = (
+                list(accepted_devices), dict(snapshot), mode)
+    for target, desired in list(next_executor['desired'].items()):
+        if target not in assigned_targets:
+            desired['acceptedDevices'] = list(accepted_devices)
+            desired['snapshot'] = dict(snapshot)
+            desired['mode'] = mode
+        _v3_executor_schedule(next_executor, target, rejected)
+    return next_executor, {'selected': selected, 'rejected': rejected,
+                           'issued': [], 'confirmed': []}
+
+
+def _v3_transport_accepted(result):
+    return result is True or (isinstance(result, dict) and result.get('accepted') is True)
+
+
+def v3_executor_worker(executor, transport, accepted_devices, snapshot, mode='Normal'):
+    """Issue at most one queued command through an injected transport."""
+    if (not isinstance(executor, dict) or not callable(transport) or
+            not isinstance(accepted_devices, list) or not isinstance(snapshot, dict) or
+            mode not in ('Normal', 'Monitor')):
+        raise ValueError('invalid V3 executor worker input')
+    next_executor = _v3_executor_clone(executor)
+    outcome = {'selected': [], 'rejected': [], 'issued': [], 'confirmed': []}
+    if not next_executor['queue'] and not next_executor['transitionQueue']:
+        return next_executor, outcome
+    transition = bool(next_executor['transitionQueue'])
+    command = (next_executor['transitionQueue'].pop(0) if transition else
+               next_executor['queue'].pop(0))
+    if transition:
+        latest = next_executor['desired'].get(command['target'])
+        if (command['value'] is True and isinstance(latest, dict) and
+                latest.get('value') is False):
+            outcome['rejected'].append(_v3_executor_record(command['commandId'], command['target'],
+                                                            command['value'], 'rejected', 'superseded'))
+            return next_executor, outcome
+        if any(pending['target'] == command['target']
+               for pending in next_executor['pendingReadbacks']):
+            next_executor['transitionQueue'].insert(0, command)
+            return next_executor, outcome
+        if (command['target'] in next_executor['resolved'].get('protectedTargets', {}) and
+                mode == 'Monitor' and command['value'] is False):
+            outcome['rejected'].append(_v3_executor_record(command['commandId'], command['target'],
+                                                            command['value'], 'rejected', 'monitor_suppressed'))
+            return next_executor, outcome
+        gate_reason = _v3_protected_enable_reason(next_executor['resolved'], command['target'],
+                                                   command['value'], accepted_devices, snapshot)
+        if gate_reason is not None:
+            outcome['rejected'].append(_v3_executor_record(command['commandId'], command['target'],
+                                                            command['value'], 'rejected', gate_reason))
+            return next_executor, outcome
+        command['attempts'] += 1
+        outcome['issued'].append(_v3_executor_record(command['commandId'], command['target'],
+                                                      command['value'], 'issued'))
+        try:
+            result = transport(dict(command))
+            reason = result.get('reason') if isinstance(result, dict) else None
+        except Exception:
+            result, reason = False, 'transport_exception'
+        if _v3_transport_accepted(result):
+            next_executor['pendingReadbacks'].append(command)
+        elif command['attempts'] < next_executor['maxAttempts']:
+            next_executor['transitionQueue'].append(command)
+        else:
+            outcome['rejected'].append(_v3_executor_record(command['commandId'], command['target'],
+                                                            command['value'], 'rejected',
+                                                            reason or 'transport_unconfirmed'))
+        return next_executor, outcome
+    desired = next_executor['desired'].get(command['target'])
+    if not isinstance(desired, dict) or desired.get('value') != command['value']:
+        outcome['rejected'].append(_v3_executor_record(command['commandId'], command['target'],
+                                                        command['value'], 'rejected', 'superseded'))
+        return next_executor, outcome
+    desired['acceptedDevices'], desired['snapshot'], desired['mode'] = (
+        list(accepted_devices), dict(snapshot), mode)
+    if (command['target'] in next_executor['resolved'].get('protectedTargets', {}) and
+            mode == 'Monitor' and command['value'] is False):
+        del next_executor['desired'][command['target']]
+        outcome['rejected'].append(_v3_executor_record(command['commandId'], command['target'],
+                                                        command['value'], 'rejected', 'monitor_suppressed'))
+        return next_executor, outcome
+    gate_reason = _v3_protected_enable_reason(next_executor['resolved'], command['target'],
+                                               command['value'], accepted_devices, snapshot)
+    if gate_reason is not None:
+        outcome['rejected'].append(_v3_executor_record(command['commandId'], command['target'],
+                                                        command['value'], 'rejected', gate_reason))
+        return next_executor, outcome
+    command['attempts'] += 1
+    desired['attempts'] = command['attempts']
+    outcome['issued'].append(_v3_executor_record(command['commandId'], command['target'],
+                                                  command['value'], 'issued'))
+    try:
+        result = transport(dict(command))
+        reason = result.get('reason') if isinstance(result, dict) else None
+    except Exception:
+        result, reason = False, 'transport_exception'
+    if _v3_transport_accepted(result):
+        desired['awaitingConfirmation'] = True
+    elif command['attempts'] < next_executor['maxAttempts']:
+        next_executor['queue'].append(command)
+    elif (command['target'] in next_executor['resolved'].get('protectedTargets', {}) and
+          command['value'] is True):
+        command['attempts'] = 0
+        next_executor['queue'].append(command)
+        outcome['rejected'].append(_v3_executor_record(command['commandId'], command['target'],
+                                                        command['value'], 'rejected',
+                                                        reason or 'transport_unconfirmed_pending'))
+    else:
+        next_executor['desired'].pop(command['target'], None)
+        outcome['rejected'].append(_v3_executor_record(command['commandId'], command['target'],
+                                                        command['value'], 'rejected',
+                                                        reason or 'transport_unconfirmed'))
+    return next_executor, outcome
+
+
+def v3_executor_confirm_readback(executor, accepted_devices, snapshot):
+    """Confirm issued commands only from a later complete current readback."""
+    if (not isinstance(executor, dict) or not isinstance(accepted_devices, list) or
+            not isinstance(snapshot, dict)):
+        raise ValueError('invalid V3 executor readback input')
+    next_executor = _v3_executor_clone(executor)
+    outcome = {'selected': [], 'rejected': [], 'issued': [], 'confirmed': []}
+    pending = []
+    for command in next_executor['pendingReadbacks']:
+        if command['deviceId'] not in accepted_devices:
+            pending.append(command)
+        elif (_v3_protected_enable_reason(next_executor['resolved'], command['target'],
+                                           command['value'], accepted_devices, snapshot) is None and
+              snapshot.get(command['target']) == command['value']):
+            outcome['confirmed'].append(_v3_executor_record(command['commandId'], command['target'],
+                                                             command['value'], 'confirmed'))
+        else:
+            outcome['rejected'].append(_v3_executor_record(command['commandId'], command['target'],
+                                                            command['value'], 'rejected',
+                                                            'readback_mismatch'))
+    next_executor['pendingReadbacks'] = pending
+    for target, desired in list(next_executor['desired'].items()):
+        if desired.get('awaitingConfirmation') is not True:
+            continue
+        device_id = next_executor['resolved'].get('writableDevices', {}).get(target)
+        if device_id not in accepted_devices:
+            continue
+        gate_reason = _v3_protected_enable_reason(next_executor['resolved'], target,
+                                                   desired['value'], accepted_devices, snapshot)
+        if gate_reason is not None:
+            desired['awaitingConfirmation'] = False
+            desired['acceptedDevices'], desired['snapshot'] = list(accepted_devices), dict(snapshot)
+            outcome['rejected'].append(_v3_executor_record(desired['commandId'], target,
+                                                            desired['value'], 'rejected', gate_reason))
+            _v3_executor_schedule(next_executor, target, outcome['rejected'])
+        elif snapshot.get(target) == desired['value']:
+            outcome['confirmed'].append(_v3_executor_record(desired['commandId'], target,
+                                                             desired['value'], 'confirmed'))
+            del next_executor['desired'][target]
+        else:
+            desired['awaitingConfirmation'] = False
+            desired['acceptedDevices'], desired['snapshot'] = list(accepted_devices), dict(snapshot)
+            outcome['rejected'].append(_v3_executor_record(desired['commandId'], target,
+                                                            desired['value'], 'rejected',
+                                                            'readback_mismatch'))
+            _v3_executor_schedule(next_executor, target, outcome['rejected'])
+    return next_executor, outcome
 
 
 def new_rule_event_state(rule_id):

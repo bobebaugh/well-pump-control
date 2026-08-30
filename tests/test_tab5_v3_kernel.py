@@ -97,13 +97,13 @@ def v3_package():
         "releaseId": "20260830000000-event-v3-v1", "packageVersion": 1,
         "adoption": {"runtimeSchemaVersion": 3, "legacyPackagePolicy": "reject"},
         "devices": [
-            {"id": "em", "driver": "shelly-gen1-em", "enabled": True, "fields": [
+            {"id": "em", "address": "192.0.2.10", "driver": "shelly-gen1-em", "enabled": True, "fields": [
                 {"systemName": "SupplyVoltage", "object": "emeter/0.voltage", "type": "number", "unit": "V", "access": "read"},
                 {"systemName": "PumpWatts", "object": "emeter/0.power", "type": "number", "unit": "W", "access": "read"},
                 {"systemName": "ShellyEMAvailable", "object": "$availability", "type": "boolean", "unit": None, "access": "read"},
             ]},
-            {"id": "shelly1", "driver": "shelly-gen4-switch", "enabled": True, "fields": [
-                {"systemName": "PumpEnable", "object": "RLY(0)", "type": "boolean", "unit": None, "access": "readWrite", "write": {"normalValue": True}},
+            {"id": "shelly1", "address": "192.0.2.11", "driver": "shelly-gen4-switch", "enabled": True, "fields": [
+                {"systemName": "PumpEnable", "object": "RLY(0)", "type": "boolean", "unit": None, "access": "readWrite", "write": {"method": "Switch.Set", "parameters": {"id": 0, "valueParameter": "on"}, "normalValue": True}},
                 {"systemName": "IsLocked", "object": "UDF(IsLocked)", "type": "integer", "unit": "s", "access": "read"},
                 {"systemName": "Shelly1Available", "object": "$availability", "type": "boolean", "unit": None, "access": "read"},
             ]},
