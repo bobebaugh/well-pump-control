@@ -3,7 +3,19 @@ name: M3 RTDB Rules Emulator
 on:
   push:
     branches:
-      - agent/m3-cloud-rtdb-transport
+      - pilot
+      - 'agent/**'
+      - 'claude/**'
+    paths:
+      - firebase/rtdb.rules.json
+      - firebase.json
+      - tests/emulator/rtdb-rules.test.js
+      - package.json
+      - package-lock.json
+      - .github/workflows/m3-rtdb-rules-emulator.yml
+  pull_request:
+    branches:
+      - pilot
     paths:
       - firebase/rtdb.rules.json
       - firebase.json
