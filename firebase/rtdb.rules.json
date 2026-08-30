@@ -34,29 +34,29 @@
                 "reportedAtMs": { ".validate": true },
                 "desired": {
                   ".validate": "newData.val() == null || (newData.hasChildren(['releaseId', 'packageVersion', 'runtimeSchemaVersion', 'contentHash', 'executionEnabled']) && newData.child('releaseId').isString() && newData.child('releaseId').val().matches(/^[0-9]{14}-event-v3-v[1-9][0-9]*$/) && newData.child('packageVersion').isNumber() && newData.child('packageVersion').val() >= 1 && newData.child('runtimeSchemaVersion').val() == 3 && newData.child('contentHash').isString() && newData.child('contentHash').val().matches(/^[a-f0-9]{64}$/) && newData.child('executionEnabled').val() == false)",
-                                    "releaseId": { ".validate": true },
+                  "releaseId": { ".validate": true },
                   "packageVersion": { ".validate": true },
                   "runtimeSchemaVersion": { ".validate": true },
                   "contentHash": { ".validate": true },
                   "executionEnabled": { ".validate": true },
-"$other": { ".validate": false }
+                  "$other": { ".validate": false }
                 },
                 "staged": {
                   ".validate": "newData.val() == null || (newData.hasChildren(['releaseId', 'packageVersion', 'runtimeSchemaVersion', 'contentHash', 'executionEnabled']) && newData.child('releaseId').isString() && newData.child('releaseId').val().matches(/^[0-9]{14}-event-v3-v[1-9][0-9]*$/) && newData.child('packageVersion').isNumber() && newData.child('packageVersion').val() >= 1 && newData.child('runtimeSchemaVersion').val() == 3 && newData.child('contentHash').isString() && newData.child('contentHash').val().matches(/^[a-f0-9]{64}$/) && newData.child('executionEnabled').val() == false)",
-                                    "releaseId": { ".validate": true },
+                  "releaseId": { ".validate": true },
                   "packageVersion": { ".validate": true },
                   "runtimeSchemaVersion": { ".validate": true },
                   "contentHash": { ".validate": true },
                   "executionEnabled": { ".validate": true },
-"$other": { ".validate": false }
+                  "$other": { ".validate": false }
                 },
                 "rejected": {
                   ".validate": "newData.val() == null || (newData.hasChildren(['reason', 'releaseId', 'packageVersion', 'contentHash']) && newData.child('reason').isString() && newData.child('reason').val().length > 0 && (newData.child('releaseId').val() == null || newData.child('releaseId').isString()) && (newData.child('packageVersion').val() == null || (newData.child('packageVersion').isNumber() && newData.child('packageVersion').val() >= 1)) && (newData.child('contentHash').val() == null || (newData.child('contentHash').isString() && newData.child('contentHash').val().matches(/^[a-f0-9]{64}$/))))",
-                                    "reason": { ".validate": true },
+                  "reason": { ".validate": true },
                   "releaseId": { ".validate": true },
                   "packageVersion": { ".validate": true },
                   "contentHash": { ".validate": true },
-"$other": { ".validate": false }
+                  "$other": { ".validate": false }
                 },
                 "$other": { ".validate": false }
               }
@@ -79,7 +79,7 @@
                 ".read": "auth != null && (auth.uid == 'tab5-well-main' || (auth.uid == 'netlify-rules-publisher' && auth.token.siteId == 'well-main' && auth.token.purpose == 'rules-v3-publication'))",
                 ".write": "auth != null && auth.uid == 'netlify-rules-publisher' && auth.token.siteId == 'well-main' && auth.token.purpose == 'rules-v3-publication'",
                 ".validate": "newData.hasChildren(['schemaVersion', 'kind', 'siteId', 'releaseId', 'packageVersion', 'runtimeSchemaVersion', 'contentHash', 'hashAlgorithm', 'byteLength', 'publishedAtMs', 'executionEnabled', 'downloadPath']) && newData.child('schemaVersion').val() == 3 && newData.child('kind').val() == 'well-pump-event-v3-staging-pointer' && newData.child('siteId').val() == 'well-main' && newData.child('releaseId').isString() && newData.child('releaseId').val().matches(/^[0-9]{14}-event-v3-v[1-9][0-9]*$/) && newData.child('packageVersion').isNumber() && newData.child('packageVersion').val() >= 1 && newData.child('runtimeSchemaVersion').val() == 3 && newData.child('contentHash').isString() && newData.child('contentHash').val().matches(/^[a-f0-9]{64}$/) && newData.child('hashAlgorithm').val() == 'sha256' && newData.child('byteLength').isNumber() && newData.child('byteLength').val() > 0 && newData.child('byteLength').val() <= 65536 && newData.child('publishedAtMs').isNumber() && newData.child('publishedAtMs').val() >= 0 && newData.child('executionEnabled').val() == false && newData.child('downloadPath').isString() && newData.child('downloadPath').val().matches(/^\\/.netlify\\/functions\\/rules-engine-release\\?version=3&releaseId=[0-9]{14}-event-v3-v[1-9][0-9]*$/)",
-                                "schemaVersion": { ".validate": true },
+                "schemaVersion": { ".validate": true },
                 "kind": { ".validate": true },
                 "siteId": { ".validate": true },
                 "releaseId": { ".validate": true },
@@ -91,7 +91,7 @@
                 "publishedAtMs": { ".validate": true },
                 "executionEnabled": { ".validate": true },
                 "downloadPath": { ".validate": true },
-"$other": { ".validate": false }
+                "$other": { ".validate": false }
               }
             }
           }
