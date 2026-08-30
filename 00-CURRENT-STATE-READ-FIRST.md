@@ -242,6 +242,27 @@ in the repository. The on-disk copies do not, because `core.autocrlf=true` and
 So the test fails on any Windows checkout and would pass in Linux CI. The guarded
 content is provably unmodified.
 
+**RESOLVED ON `pilot` 2026-08-30 — owner approved.** `.gitattributes` on `pilot` now
+carries `* text=auto eol=lf`, with the vendored LVGL tree excluded
+(`firmware/tab5/components/lvgl/** -whitespace -text`) so upstream bytes stay exactly
+as shipped. Verified inert before committing: `git add --renormalize .` rewrites **no**
+file, because no blob committed on `pilot` contains a CR. The tripwire now holds for
+every checkout regardless of `core.autocrlf`. `npm test` 103/103 on `pilot` after the
+change.
+
+**DEFERRED ON `Tab5` — deliberately, do not "finish the job" without reading this.**
+The same one-line change is **not** inert on `Tab5`. Five files are committed there
+with CRLF: `tab5/BASELINE.md`, `tab5/device_secrets.example.py`, `tab5/main.py`,
+`tab5/webrepl.py`, and **`tab5/pilot.py`** — the device runtime. Applying
+`* text=auto eol=lf` on `Tab5` would renormalize all five, rewriting every one of
+`pilot.py`'s 3061 lines. `agent/event-v3-checkpoint2-tab5-staging` is in flight against
+that exact file (+623 lines) and carries the same CRLF, so the renormalization would
+collide head-on with unaccepted Gate 1 device work and destroy the reviewable diff.
+
+Do it as its own dedicated commit **after** checkpoint 2 is accepted and merged, when
+no branch is in flight against `tab5/`. Nothing on `Tab5` depends on the digest
+tripwire, so there is no urgency. Until then `Tab5` keeps no `.gitattributes`.
+
 **This is worth fixing rather than filing.** The test is a tripwire for unauthorized
 changes to the protective telemetry path. Permanently red for an unrelated reason, it
 has already been normalized as a known failure and can no longer detect a real change.

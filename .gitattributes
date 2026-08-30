@@ -1,2 +1,9 @@
-# Preserve upstream LVGL 9.2.2 source formatting during Git whitespace checks.
-firmware/tab5/components/lvgl/** -whitespace
+# Normalize line endings inside the repository so the protected-baseline digests
+# in tests/contract-schemas.test.js hold on every checkout, rather than depending
+# on a per-machine core.autocrlf setting. See 00-CURRENT-STATE-READ-FIRST.md 5.7.
+# Never "fix" that test by editing its expected digests.
+* text=auto eol=lf
+
+# Vendored upstream LVGL 9.2.2 source: keep bytes exactly as shipped and out of
+# Git whitespace checks. (ESP-IDF tree is dead history; see section 7.)
+firmware/tab5/components/lvgl/** -whitespace -text
