@@ -15,6 +15,7 @@ const EXCHANGE_PATTERN = /^[0-9]{14}-sync-[A-Za-z0-9_-]{8,64}-[0-9]{10}$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const COMMAND_PATTERN = /^[0-9]{14}-command-[A-Za-z0-9_-]{8,64}-[0-9]{10}$/;
 const COMMAND_TYPES = new Set(["close-event", "set-event-override", "set-global-enable", "reset-shelly-lockout"]);
+const V3_COMMAND_TYPES = new Set(["clear-events", "monitor", "normal", "restart-tab5", "restart-shelly1"]);
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -57,20 +58,23 @@ function validateDeviceSyncRequest(value) {
 
 function pendingCommands(raw, request) {
   const commands = isPlainObject(raw) ? Object.values(raw) : [];
-  const allowed = new Set([
+  const legacyAllowed = new Set([
     "schemaVersion", "commandId", "commandSequence", "siteId",
     "targetDeviceId", "commandType", "requestedAt", "requestedBy",
     "status", "payload", "completedAt", "resultRecordId",
     "rejectionReason"
   ]);
-  return commands.filter(command => (
+  return commands.filter(command => {
+    const v3 = command && command.runtimeSchemaVersion === 3;
+    const allowed = v3 ? new Set([...legacyAllowed, "runtimeSchemaVersion"]) : legacyAllowed;
+    return (
     isPlainObject(command) &&
     Object.keys(command).every(key => allowed.has(key)) &&
     command.schemaVersion === 1 &&
     typeof command.commandId === "string" && COMMAND_PATTERN.test(command.commandId) &&
     command.siteId === request.siteId &&
     command.targetDeviceId === request.deviceId &&
-    COMMAND_TYPES.has(command.commandType) &&
+    (v3 ? V3_COMMAND_TYPES.has(command.commandType) : COMMAND_TYPES.has(command.commandType)) &&
     typeof command.requestedAt === "string" && Number.isFinite(Date.parse(command.requestedAt)) &&
     isPlainObject(command.requestedBy) &&
     Object.keys(command.requestedBy).length === 2 &&
@@ -79,10 +83,12 @@ function pendingCommands(raw, request) {
     typeof command.requestedBy.id === "string" && command.requestedBy.id.length >= 1 && command.requestedBy.id.length <= 128 &&
     command.status === "pending" &&
     isPlainObject(command.payload) &&
+    (!v3 || Object.keys(command.payload).length === 0) &&
     Number.isInteger(command.commandSequence) &&
     command.commandSequence >= 1 &&
     command.commandSequence > request.lastAppliedCommandSequence
-  )).sort((left, right) => left.commandSequence - right.commandSequence);
+    );
+  }).sort((left, right) => left.commandSequence - right.commandSequence);
 }
 
 function rulesReference(raw, fallback) {

@@ -4,6 +4,7 @@ const { createPrivateKey } = require("node:crypto");
 const { cert, getApps, initializeApp } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
+const { getDatabase } = require("firebase-admin/database");
 
 class ConfigurationError extends Error {
   constructor(message) {
@@ -79,8 +80,30 @@ function getPilotAuth() {
   return { auth: getAuth(app), projectId };
 }
 
+function approvedDatabaseUrl(value, projectId) {
+  let parsed;
+  try { parsed = new URL(value); } catch { throw new ConfigurationError("FIREBASE_RTDB_URL is not a valid URL"); }
+  const approved = new Set([
+    `https://${projectId}-default-rtdb.firebaseio.com`,
+    `https://${projectId}-default-rtdb.firebasedatabase.app`
+  ]);
+  if (parsed.protocol !== "https:" || !approved.has(parsed.origin) ||
+      (parsed.pathname !== "/" && parsed.pathname !== "") || parsed.search || parsed.hash) {
+    throw new ConfigurationError("FIREBASE_RTDB_URL is not the approved pilot project database");
+  }
+  return parsed.origin;
+}
+
+function getPilotDatabase() {
+  const { app, projectId } = getPilotApp();
+  const databaseUrl = approvedDatabaseUrl(process.env.FIREBASE_RTDB_URL, projectId);
+  return { db: getDatabase(app, databaseUrl), projectId, databaseUrl };
+}
+
 module.exports = {
   ConfigurationError,
+  approvedDatabaseUrl,
   getPilotAuth,
+  getPilotDatabase,
   getPilotFirestore
 };

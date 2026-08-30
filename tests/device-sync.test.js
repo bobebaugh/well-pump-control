@@ -10,11 +10,12 @@ const {
   _rtdbPath,
   _tokenMatches
 } = require("../cloud/netlify/functions/device-sync");
-const { validateDeviceSyncRequest } = require("../cloud/netlify/lib/device-sync-contract");
+const { pendingCommands, validateDeviceSyncRequest } = require("../cloud/netlify/lib/device-sync-contract");
 
 const root = path.resolve(__dirname, "..");
 const request = JSON.parse(readFileSync(path.join(root, "contracts/examples/v1/device-sync-request.json"), "utf8"));
 const command = JSON.parse(readFileSync(path.join(root, "contracts/examples/v1/device-command.json"), "utf8"));
+const v3Command = JSON.parse(readFileSync(path.join(root, "contracts/examples/v3/device-command.json"), "utf8"));
 
 function jsonResult(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
@@ -137,6 +138,18 @@ test("RTDB rules are closed by default and scope the fixed device", () => {
 
 test("published request example is accepted by runtime validation", () => {
   assert.equal(validateDeviceSyncRequest(request), request);
+});
+
+test("pending commands retain V1 behavior and accept only exact V3 controls", () => {
+  const nextV3 = { ...v3Command, commandSequence: 13 };
+  const delivered = pendingCommands({ legacy: command, v3: nextV3 }, request);
+  assert.deepEqual(delivered.map(item => item.commandSequence), [12, 13]);
+  for (const malformed of [
+    { ...nextV3, commandType: "set-global-enable" },
+    { ...nextV3, payload: { value: true } },
+    { ...nextV3, extra: true },
+    { ...command, runtimeSchemaVersion: 3 }
+  ]) assert.deepEqual(pendingCommands({ malformed }, request), []);
 });
 
 test("duplicate exchange is operationally retry-safe without response replay or RTDB writes", async () => {

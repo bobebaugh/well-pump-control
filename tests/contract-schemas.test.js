@@ -29,6 +29,7 @@ const examples = [
   ["contracts/event-record-v1.schema.json", "contracts/examples/v3/event-open.json"],
   ["contracts/event-record-v1.schema.json", "contracts/examples/v3/event-close.json"],
   ["contracts/device-command-v1.schema.json", "contracts/examples/v1/device-command.json"],
+  ["contracts/device-command-v1.schema.json", "contracts/examples/v3/device-command.json"],
   ["contracts/device-sync-v1.schema.json", "contracts/examples/v1/device-sync-request.json"],
   ["contracts/device-sync-v1.schema.json", "contracts/examples/v1/device-sync-response.json"],
   ["contracts/rules-release-metadata-v1.schema.json", "contracts/examples/v1/rules-release-metadata.json"],
@@ -152,6 +153,21 @@ test("V3 event extension requires kernel identity and transition fields without 
   invalid.forEach(value => assert.notDeepEqual(validate(schema, value), []));
   assert.deepEqual(validate(schema, readJson("contracts/examples/v1/event-open.json")), []);
   assert.deepEqual(validate(schema, readJson("contracts/examples/v1/event-close.json")), []);
+});
+
+test("V3 device commands are discriminator-bound reviewed empty-payload controls", () => {
+  const schema = readJson("contracts/device-command-v1.schema.json");
+  const v3 = readJson("contracts/examples/v3/device-command.json");
+  const legacy = readJson("contracts/examples/v1/device-command.json");
+  assert.deepEqual(validate(schema, v3), []);
+  assert.deepEqual(validate(schema, legacy), []);
+  for (const value of [
+    { ...v3, commandType: "set-global-enable" },
+    { ...v3, payload: { eventId: "E007" } },
+    { ...legacy, commandType: "monitor" },
+    { ...legacy, runtimeSchemaVersion: 3 },
+    { ...v3, extraEnvelopeField: true }
+  ]) assert.notDeepEqual(validate(schema, value), []);
 });
 
 test("V3 schema closes nested device, write, calculation, and program-token shapes", () => {

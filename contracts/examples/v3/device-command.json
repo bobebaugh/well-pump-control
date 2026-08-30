@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "runtimeSchemaVersion": 3,
+  "commandId": "20260830000007-command-web_control-0000000007",
+  "commandSequence": 7,
+  "siteId": "well-main",
+  "targetDeviceId": "tab5-well-main",
+  "commandType": "clear-events",
+  "requestedAt": "2026-08-30T00:00:07Z",
+  "requestedBy": { "type": "user", "id": "pilot-web" },
+  "status": "pending",
+  "payload": {}
+}
