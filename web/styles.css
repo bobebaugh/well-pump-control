@@ -331,7 +331,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(67,168,255,.
 .release-details strong { color: var(--text); }.release-details code { overflow-wrap: anywhere; color: #9acdf7; }.release-details em { color: var(--green); font-style: normal; }
 .engine-validation-summary { padding-left: 20px; border-left: 1px solid var(--line); }
 .ok-text { color: var(--green); }.warning-text { color: var(--amber); }.error-text { color: var(--red); }
-.engine-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 12px 0 16px; }
+.engine-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 12px 0 16px; }
 .engine-tile { display: grid; grid-template-columns: 34px 1fr; gap: 2px 10px; align-items: center; padding: 15px 17px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--panel); text-align: left; cursor: pointer; }
 .engine-tile:hover { background: var(--panel-2); }.engine-tile.active { border-color: rgba(67,168,255,.62); box-shadow: inset 0 0 0 1px rgba(67,168,255,.2); background: rgba(67,168,255,.1); }
 .engine-tile strong { font-size: .88rem; }.engine-tile small { grid-column: 2; color: var(--muted); font-size: .66rem; }

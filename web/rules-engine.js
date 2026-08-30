@@ -3,11 +3,12 @@
 const sectionLabels = {
   devices: ["DEVICES", "Configured devices"],
   calculatedFields: ["CALCULATED FIELDS", "Formulas and Boyle law"],
+  systemFields: ["SYSTEM FIELDS", "Runtime-owned state and occurrences"],
   events: ["EVENTS", "Event definitions"]
 };
 const state = {
   draft: null, revisions: {}, current: null, capabilities: null,
-  section: "devices", selected: { devices: 0, calculatedFields: 0, events: 0 },
+  section: "devices", selected: { devices: 0, calculatedFields: 0, systemFields: 0, events: 0 },
   dirty: new Set(), runtimePackage: null, releases: [], selectedRelease: null
 };
 
@@ -25,7 +26,8 @@ async function api(method, payload, query = "") {
   let key = pilotKey();
   if (!key) key = window.prompt("Enter the pilot key");
   if (!key) throw new Error("cancelled");
-  const response = await fetch(`/.netlify/functions/rules-engine${query}`, {
+  const separator = query ? "&" : "?";
+  const response = await fetch(`/.netlify/functions/rules-engine${query}${separator}version=3`, {
     method, cache: "no-store",
     headers: { "Accept": "application/json", "Content-Type": "application/json", "X-Pilot-Key": key },
     body: payload ? JSON.stringify(payload) : undefined
@@ -42,17 +44,17 @@ async function api(method, payload, query = "") {
 function allFields() {
   if (!state.draft) return [];
   const fields = state.draft.devices.flatMap(device => device.fields || []);
-  return fields.concat(state.draft.calculatedFields.flatMap(calculation => calculation.kind === "expression" ? [calculation.output] : (calculation.outputs || [])));
+  return fields.concat(state.draft.calculatedFields.flatMap(calculation => calculation.kind === "expression" ? [calculation.output] : (calculation.outputs || [])), state.draft.systemFields || []);
 }
 function directFields() { return state.draft.devices.flatMap(device => device.fields || []); }
 function calculatedFields() { return state.draft.calculatedFields.flatMap(calculation => calculation.kind === "expression" ? [calculation.output] : (calculation.outputs || [])); }
 function fieldByName(name) { return allFields().find(field => field.systemName === name); }
-function writableFields() { return state.draft.devices.flatMap(device => device.fields || []).filter(field => field.access === "readWrite"); }
+function writableFields() { return state.draft.devices.flatMap(device => device.fields || []).filter(field => field.access === "readWrite").concat((state.draft.systemFields || []).filter(field => field.assignmentTarget === true)); }
 function optionHtml(field, selected) {
   return `<option value="${escapeHtml(field.systemName)}"${field.systemName === selected ? " selected" : ""}>${escapeHtml(field.systemName)} · ${escapeHtml(field.type)}${field.unit ? ` · ${escapeHtml(field.unit)}` : ""}</option>`;
 }
 function fieldOptions(selected) {
-  return `<optgroup label="Direct Observations">${directFields().map(field => optionHtml(field, selected)).join("")}</optgroup><optgroup label="Calculated Values">${calculatedFields().map(field => optionHtml(field, selected)).join("")}</optgroup>`;
+  return `<optgroup label="Direct Observations">${directFields().map(field => optionHtml(field, selected)).join("")}</optgroup><optgroup label="Calculated Values">${calculatedFields().map(field => optionHtml(field, selected)).join("")}</optgroup><optgroup label="System Fields">${(state.draft.systemFields || []).map(field => optionHtml(field, selected)).join("")}</optgroup>`;
 }
 function logModeOptions(selected) {
   return ["none", "delta", "change", "always"].map(value => `<option${value === selected ? " selected" : ""}>${value}</option>`).join("");
@@ -60,11 +62,12 @@ function logModeOptions(selected) {
 function updateCounts() {
   document.querySelector("#devices-count").textContent = `${state.draft.devices.length} configured`;
   document.querySelector("#calculations-count").textContent = `${state.draft.calculatedFields.length} configured`;
+  document.querySelector("#system-fields-count").textContent = `${state.draft.systemFields.length} configured`;
   document.querySelector("#events-count").textContent = `${state.draft.events.length} configured`;
 }
 function deliveryText(current) {
-  if (!current) return "Defaults loaded into the Firestore draft; no immutable package is published.";
-  return `SHA-256 ${current.contentHash} · ${current.deliveryEnabled ? "RTDB desired release published" : "not delivered to RTDB"}`;
+  if (!current) return "V3 defaults loaded into the isolated draft; no immutable package is published.";
+  return `SHA-256 ${current.contentHash} · immutable V3 package; delivery unavailable in Checkpoint 1`;
 }
 function markDirty() {
   state.dirty.add(state.section);
@@ -106,8 +109,8 @@ async function viewRelease() {
     const release = result.release;
     state.selectedRelease = release;
     const authoring = release.authoringPackage;
-    const compatible = authoring?.schemaVersion === 2;
-    const counts = authoring ? `${authoring.devices?.length || 0} devices · ${authoring.calculatedFields?.length || 0} calculated fields · ${authoring.events?.length || 0} events` : "Authoring package unavailable";
+    const compatible = authoring?.schemaVersion === 3;
+    const counts = authoring ? `${authoring.devices?.length || 0} devices · ${authoring.calculatedFields?.length || 0} calculated fields · ${authoring.systemFields?.length || 0} system fields · ${authoring.events?.length || 0} events` : "Authoring package unavailable";
     document.querySelector("#release-details").innerHTML = `<strong>Version ${escapeHtml(release.packageVersion)}${release.releaseId === state.current?.releaseId ? " · CURRENT" : ""}</strong><span>${escapeHtml(releaseDate(release.publishedAtMs))} · schema ${escapeHtml(release.schemaVersion ?? "unknown")} · ${escapeHtml(counts)}</span><code>SHA-256 ${escapeHtml(release.contentHash || "unavailable")}</code><em>${compatible ? "Compatible with the current editor" : "View/download only — migration required before restore"}</em>`;
     document.querySelector("#release-download").disabled = !release.runtimePackage;
     document.querySelector("#release-restore").disabled = !compatible;
@@ -131,7 +134,7 @@ async function restoreSelectedRelease() {
   try {
     const result = await api("POST", { action: "restore", releaseId: release.releaseId, baseRevisions: state.revisions });
     state.draft = result.draft; state.revisions = result.draft.revisions; state.dirty.clear(); state.runtimePackage = null;
-    state.selected = { devices: 0, calculatedFields: 0, events: 0 };
+    state.selected = { devices: 0, calculatedFields: 0, systemFields: 0, events: 0 };
     document.querySelector("#engine-save").disabled = true;
     document.querySelector("#engine-validate").disabled = false;
     document.querySelector("#engine-download").disabled = true;
@@ -294,7 +297,7 @@ function renderCalculation() {
   const functionOptions = Object.entries(state.capabilities.functions).map(([id, definition]) => `<option value="${escapeHtml(id)}"${id === calculation.functionId ? " selected" : ""}>${escapeHtml(definition.label)}</option>`).join("");
   const inputRows = Object.keys(spec?.inputs || {}).map(name => `<label>${escapeHtml(name)}<select data-calculation-input="${escapeHtml(name)}">${fieldOptions(calculation.inputs?.[name])}</select></label>`).join("");
   const parameterRows = Object.keys(spec?.parameters || {}).map(name => `<label>${escapeHtml(name)}<input data-calculation-parameter="${escapeHtml(name)}" value="${escapeHtml(calculation.parameters?.[name] ?? "")}"></label>`).join("");
-  const expressionEditor = `<section class="expression-card"><p class="kicker">ARITHMETIC EXPRESSION</p><textarea id="calculation-expression" rows="4" spellcheck="false">${escapeHtml(calculation.expression || "")}</textarea><p class="form-help">Use named numeric fields, constants, +, −, ×, ÷, and parentheses. The web compiler validates dependencies and prepares the Tab5 instructions.</p></section>`;
+  const expressionEditor = `<section class="expression-card"><p class="kicker">ARITHMETIC EXPRESSION</p><textarea id="calculation-expression" rows="4" spellcheck="false">${escapeHtml(calculation.expression || "")}</textarea><p class="form-help">Use named numeric fields, constants, +, −, ×, ÷, and parentheses. The web compiler validates dependencies for the immutable package.</p></section>`;
   const functionEditor = `<div class="form-grid compact-form"><label class="wide">Programmed function<select id="calculation-function">${functionOptions}</select></label></div><div class="calculation-config-grid"><section><p class="kicker">INPUT FIELDS</p><div class="stacked-form">${inputRows || "<p class='form-help'>No inputs.</p>"}</div></section><section><p class="kicker">FUNCTION PARAMETERS</p><div class="stacked-form">${parameterRows || "<p class='form-help'>No parameters.</p>"}</div></section></div>`;
   const outputs = calculation.kind === "expression" ? outputRowsHtml([calculation.output], false) : outputRowsHtml(calculation.outputs, true);
   editor.innerHTML = `
@@ -313,87 +316,11 @@ function parseClauseValue(raw, field, operator) {
   if (field?.type === "boolean") return raw.toLowerCase() === "true";
   return raw;
 }
-function captureCondition(prefix) {
-  return {
-    mode: document.querySelector(`#${prefix}-mode`).value,
-    observationCount: Number(document.querySelector(`#${prefix}-count`).value),
-    minimumSeconds: Number(document.querySelector(`#${prefix}-seconds`).value),
-    clauses: [...editor.querySelectorAll(`.${prefix}-clause-row`)].map(row => {
-      const fieldName = row.querySelector("[data-key=field]").value;
-      const operator = row.querySelector("[data-key=operator]").value;
-      return { field: fieldName, operator, value: parseClauseValue(row.querySelector("[data-key=value]").value, fieldByName(fieldName), operator) };
-    })
-  };
-}
-function captureEvent() {
-  const event = state.draft.events[state.selected.events];
-  if (!event || !document.querySelector("#event-id")) return;
-  const displayedCloseBasis = event.close.basis;
-  event.id = document.querySelector("#event-id").value.trim();
-  event.systemName = document.querySelector("#event-system-name").value.trim();
-  event.displayName = document.querySelector("#event-display-name").value.trim();
-  event.severity = document.querySelector("#event-severity").value;
-  event.enabled = document.querySelector("#event-enabled").checked;
-  event.latched = document.querySelector("#event-latched").checked;
-  event.open = captureCondition("open");
-  const selectedCloseBasis = document.querySelector("#close-basis").value;
-  const displayedClose = displayedCloseBasis === "custom"
-    ? captureCondition("close")
-    : { observationCount: Number(document.querySelector("#close-count").value), minimumSeconds: Number(document.querySelector("#close-seconds").value) };
-  event.close = selectedCloseBasis === "openingFalse"
-    ? { basis: "openingFalse", observationCount: displayedClose.observationCount, minimumSeconds: displayedClose.minimumSeconds }
-    : { ...displayedClose, basis: "custom" };
-  if (selectedCloseBasis === "custom" && displayedCloseBasis !== "custom") {
-    const field = allFields()[0];
-    event.close = { basis: "custom", mode: "all", clauses: field ? [{ field: field.systemName, operator: state.capabilities.operators[field.type][0], value: field.type === "boolean" ? true : 0 }] : [], observationCount: event.close.observationCount, minimumSeconds: event.close.minimumSeconds };
-  }
-  const durationEnabled = document.querySelector("#summary-duration-enabled").checked;
-  event.summary = {
-    durationOutput: durationEnabled ? {
-      systemName: document.querySelector("#summary-duration-name").value.trim(),
-      label: document.querySelector("#summary-duration-label").value.trim(),
-      type: "number", unit: "s", logging: { mode: "none" }
-    } : null,
-    aggregates: [...editor.querySelectorAll(".summary-row")].map(row => ({
-      source: row.querySelector("[data-key=source]").value,
-      operation: row.querySelector("[data-key=operation]").value,
-      scale: Number(row.querySelector("[data-key=scale]").value),
-      output: {
-        systemName: row.querySelector("[data-key=systemName]").value.trim(),
-        label: row.querySelector("[data-key=label]").value.trim(),
-        type: "number", unit: row.querySelector("[data-key=unit]").value.trim() || null, logging: { mode: "none" }
-      }
-    }))
-  };
-  event.actions = [...editor.querySelectorAll(".event-action-row")].map(row => {
-    const target = row.querySelector("[data-key=target]").value;
-    return { target, value: parseClauseValue(row.querySelector("[data-key=value]").value, fieldByName(target), "eq") };
-  });
-  event.web = {
-    notifyOnOpen: document.querySelector("#notify-open").checked,
-    notifyOnClose: document.querySelector("#notify-close").checked,
-    openMessage: document.querySelector("#open-message").value.trim(),
-    closeMessage: document.querySelector("#close-message").value.trim()
-  };
-}
-
 function operatorOptions(fieldName, selected) {
   const field = fieldByName(fieldName); const operators = state.capabilities.operators[field?.type] || [];
   return operators.map(operator => `<option value="${operator}"${operator === selected ? " selected" : ""}>${operator}</option>`).join("");
 }
 function valueText(clause) { return Array.isArray(clause.value) ? clause.value.join(", ") : clause.value === null ? "" : String(clause.value); }
-function conditionHtml(prefix, condition) {
-  const rows = condition.clauses.map((clause, index) => `<div class="${prefix}-clause-row condition-row" data-index="${index}"><select data-key="field">${fieldOptions(clause.field)}</select><select data-key="operator">${operatorOptions(clause.field, clause.operator)}</select><input data-key="value" value="${escapeHtml(valueText(clause))}" placeholder="value or low, high"><button class="row-delete" type="button" data-remove-clause="${prefix}:${index}">×</button></div>`).join("");
-  const timeLabel = prefix === "open" ? "Warm-up seconds" : "Cool-off seconds";
-  return `<div class="condition-controls"><label>Combine<select id="${prefix}-mode"><option value="all"${condition.mode === "all" ? " selected" : ""}>ALL — AND</option><option value="any"${condition.mode === "any" ? " selected" : ""}>ANY — OR</option></select></label><label>Consecutive observations<input id="${prefix}-count" type="number" min="1" step="1" value="${condition.observationCount}"></label><label>${timeLabel}<input id="${prefix}-seconds" type="number" min="0" step="any" value="${condition.minimumSeconds}"></label></div><div class="condition-list">${rows}</div><button class="secondary-button compact-button add-clause" type="button" data-add-clause="${prefix}">Add condition</button>`;
-}
-
-function closeConditionHtml(close) {
-  const basis = `<label class="close-basis-label">Closing basis<select id="close-basis"><option value="openingFalse"${close.basis === "openingFalse" ? " selected" : ""}>Opening condition no longer true</option><option value="custom"${close.basis === "custom" ? " selected" : ""}>Custom closing condition</option></select></label>`;
-  if (close.basis === "custom") return `${basis}${conditionHtml("close", close)}`;
-  return `${basis}<div class="condition-controls inverse-close-controls"><label>Consecutive observations<input id="close-count" type="number" min="1" step="1" value="${close.observationCount}"></label><label>Cool-off seconds<input id="close-seconds" type="number" min="0" step="any" value="${close.minimumSeconds}"></label></div><p class="form-help">The complete opening expression is reevaluated and negated. Missing telemetry does not qualify a close.</p>`;
-}
-
 function summaryHtml(summary) {
   const operations = selected => Object.entries(state.capabilities.summaryOperations).map(([id, label]) => `<option value="${id}"${id === selected ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
   const rows = summary.aggregates.map((aggregate, index) => `<div class="summary-row data-grid-row" data-index="${index}">
@@ -407,40 +334,11 @@ function summaryHtml(summary) {
     <div class="data-grid summary-grid"><div class="data-grid-head"><span>Source</span><span>Operation</span><span>Output name</span><span>Label</span><span>Unit</span><span>Scale</span><span></span></div>${rows}</div>`;
 }
 
-function renderEvent() {
-  const event = state.draft.events[state.selected.events];
-  if (!event) { editor.innerHTML = "<p class='empty-editor'>Add an event to begin.</p>"; return; }
-  const actions = event.actions.map((action, index) => `<div class="event-action-row condition-row" data-index="${index}"><select data-key="target">${writableFields().map(field => `<option value="${escapeHtml(field.systemName)}"${field.systemName === action.target ? " selected" : ""}>${escapeHtml(field.systemName)} · ${escapeHtml(field.write?.method || "unmapped")}</option>`).join("")}</select><span class="action-equals">=</span><input data-key="value" value="${escapeHtml(String(action.value))}"><button class="row-delete" type="button" data-remove-action="${index}">×</button></div>`).join("");
-  editor.innerHTML = `
-    <div class="engine-editor-heading"><div><p class="kicker">EVENT DEFINITION</p><h2>${escapeHtml(event.displayName)}</h2></div><div class="inline-switches"><label class="switch-label"><input id="event-enabled" type="checkbox"${event.enabled ? " checked" : ""}> Enabled</label><label class="switch-label"><input id="event-latched" type="checkbox"${event.latched ? " checked" : ""}> Latched</label><button class="secondary-button compact-button danger-button" id="remove-item" type="button">Remove</button></div></div>
-    <div class="form-grid compact-form"><label>Event ID<input id="event-id" value="${escapeHtml(event.id)}"></label><label>System name<input id="event-system-name" value="${escapeHtml(event.systemName)}"></label><label>Display name<input id="event-display-name" value="${escapeHtml(event.displayName)}"></label><label>Severity<select id="event-severity"><option${event.severity === "Info" ? " selected" : ""}>Info</option><option${event.severity === "Yellow" ? " selected" : ""}>Yellow</option><option${event.severity === "Red" ? " selected" : ""}>Red</option></select></label></div>
-    <div class="event-condition-grid"><section><div class="subsection-heading"><div><p class="kicker">EVENT OPEN</p><h2>Opening qualification</h2></div></div>${conditionHtml("open", event.open)}</section><section><div class="subsection-heading"><div><p class="kicker">EVENT CLOSE</p><h2>Closing qualification</h2></div></div>${closeConditionHtml(event.close)}</section></div>
-    <section class="event-summary-section"><div class="subsection-heading"><div><p class="kicker">STANDARD EVENT RECORDS</p><h2>Opening, closing, and summary values</h2></div><button class="secondary-button compact-button" id="add-summary-row" type="button">Add summary value</button></div><p class="form-help">Opening and closing observations are always queued as complete snapshots. Summary outputs are calculated at close and included in the closing record.</p>${summaryHtml(event.summary)}</section>
-    <div class="event-lower-grid"><section><div class="subsection-heading"><div><p class="kicker">TAB5 PROCESSING</p><h2>Active consequences</h2></div><button class="secondary-button compact-button" id="add-event-action" type="button">Add action</button></div><div class="event-actions">${actions || "<p class='form-help'>No device action; event is logging only.</p>"}</div><p class="form-help">An action applies while the event is active. When no active event requires it, the writable field returns to its device-defined normal value. A latched event stays active until a user requests clear and its closing condition qualifies. System Override suppresses Tab5 actions but never event evaluation or logging.</p></section>
-      <section><div class="subsection-heading"><div><p class="kicker">WEB PROCESSING</p><h2>Notifications</h2></div></div><div class="inline-switches notification-switches"><label class="switch-label"><input id="notify-open" type="checkbox"${event.web?.notifyOnOpen ? " checked" : ""}> Notify on open</label><label class="switch-label"><input id="notify-close" type="checkbox"${event.web?.notifyOnClose ? " checked" : ""}> Notify on close</label></div><div class="stacked-form"><label>Open message<textarea id="open-message" rows="3">${escapeHtml(event.web?.openMessage || "")}</textarea></label><label>Close message<textarea id="close-message" rows="3">${escapeHtml(event.web?.closeMessage || "")}</textarea></label></div></section></div>`;
-}
-
-function captureCurrent() {
-  if (!state.draft) return;
-  if (state.section === "devices") captureDevice();
-  if (state.section === "calculatedFields") captureCalculation();
-  if (state.section === "events") captureEvent();
-}
 function itemLabel(item) { return item.label || item.displayName || item.systemName || item.id || "Unnamed"; }
 function renderList() {
   const items = state.draft[state.section]; const selected = state.selected[state.section];
   list.innerHTML = items.map((item, index) => `<button type="button" class="engine-list-item${index === selected ? " selected" : ""}" data-select="${index}"><strong>${escapeHtml(itemLabel(item))}</strong><small>${escapeHtml(item.systemName || item.driver || item.functionId || item.id)}</small>${item.enabled === false ? "<i>OFF</i>" : ""}</button>`).join("");
 }
-function renderEditor() {
-  const [kicker, title] = sectionLabels[state.section];
-  document.querySelector("#browser-kicker").textContent = kicker; document.querySelector("#browser-title").textContent = title;
-  document.querySelectorAll(".engine-tile").forEach(button => button.classList.toggle("active", button.dataset.section === state.section));
-  renderList();
-  if (state.section === "devices") renderDevice();
-  if (state.section === "calculatedFields") renderCalculation();
-  if (state.section === "events") renderEvent();
-}
-
 async function loadDraft() {
   setStatus("Loading the Rules Engine draft…");
   try {
@@ -449,9 +347,10 @@ async function loadDraft() {
     document.querySelector("#engine-release").textContent = result.current ? `${result.current.releaseId} · version ${result.current.packageVersion}` : "No published parameter package";
     document.querySelector("#engine-hash").textContent = deliveryText(result.current);
     document.querySelector("#engine-tabs").hidden = false; document.querySelector("#engine-workspace").hidden = false;
-    ["engine-save", "engine-validate", "engine-publish"].forEach(id => document.querySelector(`#${id}`).disabled = false);
-    document.querySelector("#engine-deliver").disabled = !result.current || result.current.deliveryEnabled === true;
-    updateCounts(); renderEditor(); renderReleaseHistory(); setStatus("Draft loaded. All default events are OFF.", "ok");
+    document.querySelector("#engine-save").disabled = true;
+    document.querySelector("#engine-validate").disabled = false;
+    document.querySelector("#engine-publish").disabled = true;
+    updateCounts(); renderEditor(); renderReleaseHistory(); setStatus("V3 draft loaded. Immutable publication is available after validation; delivery is intentionally unavailable.", "ok");
   } catch (error) { if (error.message !== "cancelled") setStatus(`Could not load Rules Engine: ${error.body?.code || error.message}`, "error"); }
 }
 
@@ -477,7 +376,7 @@ async function validatePackage() {
     await saveAll(); const result = await api("POST", { action: "validate" });
     state.runtimePackage = result.runtimePackage;
     document.querySelector("#validation-state").textContent = "Passed"; document.querySelector("#validation-state").className = "ok-text";
-    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte MicroPython runtime package · publish before delivery`;
+    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte V3 runtime package · publish only`;
     document.querySelector("#engine-download").disabled = false; document.querySelector("#engine-publish").disabled = false;
     showFindings(result); setStatus("Validation passed. The draft can become the next immutable package version.", "ok");
   } catch (error) {
@@ -495,42 +394,17 @@ async function publishPackage() {
   try {
     const result = await api("POST", { action: "publish", basePackageVersion: state.current?.packageVersion || 0 });
     state.current = result.current; state.runtimePackage = result.runtimePackage;
-    state.releases = [{ ...result.current, schemaVersion: 2, runtimeBytes: result.runtimeBytes }, ...state.releases.filter(release => release.releaseId !== result.current.releaseId)];
+    state.releases = [{ ...result.current, schemaVersion: 3, runtimeBytes: result.runtimeBytes }, ...state.releases.filter(release => release.releaseId !== result.current.releaseId)];
     document.querySelector("#engine-release").textContent = `${result.current.releaseId} · version ${result.current.packageVersion}`;
     document.querySelector("#engine-hash").textContent = deliveryText(result.current);
-    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte MicroPython runtime package · ready for controlled RTDB delivery`;
-    document.querySelector("#engine-deliver").disabled = false;
-    renderReleaseHistory(); showFindings(result); setStatus("Immutable package published. Delivery remains an explicit, separately confirmed action.", "ok");
+    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte V3 runtime package · no delivery path in Checkpoint 1`;
+    renderReleaseHistory(); showFindings(result); setStatus("Immutable V3 package published. No delivery or Tab5 request was made.", "ok");
   } catch (error) { setStatus(`Publish failed: ${error.body?.code || error.message}`, "error"); }
-}
-async function deliverPackage() {
-  if (!state.current) return;
-  const confirmation = window.prompt(`Publish immutable version ${state.current.packageVersion} to the RTDB desired-release pointer? This does not bypass Tab5 validation or adoption. Type DELIVER to continue.`);
-  if (confirmation !== "DELIVER") return;
-  setStatus(`Publishing version ${state.current.packageVersion} as the desired Tab5 package…`);
-  try {
-    const result = await api("POST", { action: "deliver", releaseId: state.current.releaseId });
-    state.current = result.current;
-    document.querySelector("#engine-hash").textContent = deliveryText(state.current);
-    document.querySelector("#engine-deliver").disabled = true;
-    setStatus(`Version ${state.current.packageVersion} is now the RTDB desired package. Tab5 will still download, validate, and either adopt or reject it independently.`, "ok");
-  } catch (error) { setStatus(`Delivery failed: ${error.body?.code || error.message}`, "error"); }
 }
 function downloadRuntime() {
   if (!state.runtimePackage) return;
   const blob = new Blob([`${JSON.stringify(state.runtimePackage, null, 2)}\n`], { type: "application/json" });
   const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `${state.current?.releaseId || "rules-engine-runtime-preview"}.json`; link.click(); URL.revokeObjectURL(link.href);
-}
-
-function addItem() {
-  captureCurrent();
-  if (state.section === "devices") state.draft.devices.push({ id: `device-${state.draft.devices.length + 1}`, label: "New device", driver: "", address: "", enabled: false, fields: [{ systemName: "NewTelemetry", label: "New telemetry", object: "", type: "number", unit: null, access: "read", logging: { mode: "none" } }] });
-  if (state.section === "calculatedFields") {
-    const calculation = { id: `calculation-${state.draft.calculatedFields.length + 1}`, label: "New calculated value", kind: "expression", expression: "PumpWatts", output: { systemName: `CalculatedValue${state.draft.calculatedFields.length + 1}`, label: "Calculated value", type: "number", unit: null, logging: { mode: "delta", threshold: 1 } } };
-    state.draft.calculatedFields.push(calculation);
-  }
-  if (state.section === "events") state.draft.events.push({ id: `EV-${state.draft.events.length + 1}`, systemName: `NewEvent${state.draft.events.length + 1}`, displayName: "New event", enabled: false, severity: "Info", open: { mode: "all", clauses: [{ field: allFields()[0]?.systemName || "", operator: "gt", value: 0 }], observationCount: 1, minimumSeconds: 0 }, close: { basis: "openingFalse", observationCount: 1, minimumSeconds: 0 }, latched: false, summary: { durationOutput: null, aggregates: [] }, actions: [], web: { notifyOnOpen: false, notifyOnClose: false, openMessage: "", closeMessage: "" } });
-  state.selected[state.section] = state.draft[state.section].length - 1; markDirty(); updateCounts(); renderEditor();
 }
 
 function removeItem() {
@@ -544,11 +418,111 @@ function removeItem() {
   markDirty(); updateCounts(); renderEditor();
 }
 
+// Checkpoint 1 V3 editor layer. The device and calculation editors above are
+// retained; these definitions replace only V2 event capture/rendering.
+function occurrenceFields(source) { return (state.draft.systemFields || []).filter(field => field.source === source); }
+function typedValue(target, raw) { return parseClauseValue(raw, fieldByName(target), "eq"); }
+function defaultV3Clause() {
+  const field = directFields().find(item => item.type === "number" || item.type === "integer") || directFields()[0] || allFields()[0];
+  if (!field) return { field: "", operator: "eq", value: "" };
+  const operator = (state.capabilities.operators[field.type] || ["eq"])[0];
+  return { field: field.systemName, operator, value: operator === "occurs" ? null : field.type === "boolean" ? true : field.type === "number" || field.type === "integer" ? 0 : "" };
+}
+function v3ConditionHtml(prefix, condition, qualified = true) {
+  const rows = (condition?.clauses || []).map((clause, index) => `<div class="condition-row v3-${prefix}-clause"><select data-key="field">${fieldOptions(clause.field)}</select><select data-key="operator">${operatorOptions(clause.field, clause.operator)}</select><input data-key="value" value="${escapeHtml(valueText(clause))}"><button type="button" class="row-delete" data-v3-remove-clause="${prefix}:${index}">×</button></div>`).join("");
+  const qualification = qualified ? `<label>Observations<input id="v3-${prefix}-count" type="number" min="1" value="${condition?.observationCount ?? 1}"></label><label>Minimum seconds<input id="v3-${prefix}-seconds" type="number" min="0" value="${condition?.minimumSeconds ?? 0}"></label>` : "";
+  return `<div class="condition-controls"><label>Combine<select id="v3-${prefix}-mode"><option value="all"${condition?.mode === "all" ? " selected" : ""}>ALL</option><option value="any"${condition?.mode === "any" ? " selected" : ""}>ANY</option></select></label>${qualification}</div><div>${rows}</div><button type="button" class="secondary-button compact-button" data-v3-add-clause="${prefix}">Add condition</button>`;
+}
+function captureV3Condition(prefix) {
+  const condition = { mode: document.querySelector(`#v3-${prefix}-mode`).value, clauses: [...editor.querySelectorAll(`.v3-${prefix}-clause`)].map(row => { const field = row.querySelector("[data-key=field]").value; const operator = row.querySelector("[data-key=operator]").value; return { field, operator, value: parseClauseValue(row.querySelector("[data-key=value]").value, fieldByName(field), operator) }; }) };
+  const count = document.querySelector(`#v3-${prefix}-count`);
+  if (count) {
+    condition.observationCount = Number(count.value);
+    condition.minimumSeconds = Number(document.querySelector(`#v3-${prefix}-seconds`).value);
+  }
+  return condition;
+}
+function assignmentHtml(assignment, phase, index, group = null) {
+  return `<div class="event-action-row condition-row"><select data-key="target">${writableFields().map(field => optionHtml(field, assignment.target)).join("")}</select><input data-key="value" value="${escapeHtml(String(assignment.value))}"><select data-key="ownership"><option value="transition"${assignment.ownership === "transition" ? " selected" : ""}>transition</option><option value="whileOpen"${assignment.ownership === "whileOpen" ? " selected" : ""}>while open</option></select><button type="button" class="row-delete" data-v3-remove-assignment="${phase}:${group ?? "plain"}:${index}">×</button></div>`;
+}
+function phaseHtml(name, phase) {
+  const plain = (phase.assignments || []).map((item, index) => assignmentHtml(item, name, index)).join("");
+  const groups = (phase.guardedGroups || []).map((group, groupIndex) => `<details class="field-action-mapping"><summary>Guarded group ${groupIndex + 1}</summary>${v3ConditionHtml(`guard-${name}-${groupIndex}`, group.guard, false)}<div>${group.assignments.map((item, index) => assignmentHtml(item, name, index, groupIndex)).join("")}</div><button type="button" class="secondary-button compact-button" data-v3-add-assignment="${name}:${groupIndex}">Add guarded assignment</button><button type="button" class="secondary-button compact-button danger-button" data-v3-remove-group="${name}:${groupIndex}">Remove group</button></details>`).join("");
+  return `<section><div class="subsection-heading"><div><p class="kicker">${escapeHtml(name.toUpperCase())}</p><h2>Assignments and guards</h2></div><button type="button" class="secondary-button compact-button" data-v3-add-assignment="${name}:plain">Add assignment</button><button type="button" class="secondary-button compact-button" data-v3-add-group="${name}">Add guarded group</button></div>${plain || "<p class='form-help'>No unconditional assignment.</p>"}${groups}</section>`;
+}
+function capturePhase(name) {
+  const plain = [...editor.querySelectorAll(`[data-v3-remove-assignment^="${name}:plain:"]`)].map(button => { const row = button.closest(".event-action-row"); const target = row.querySelector("[data-key=target]").value; return { target, value: typedValue(target, row.querySelector("[data-key=value]").value), ownership: row.querySelector("[data-key=ownership]").value }; });
+  const groups = [...editor.querySelectorAll(`[data-v3-remove-group^="${name}:"]`)].map(button => { const groupIndex = button.dataset.v3RemoveGroup.split(":")[1]; const holder = button.closest("details"); const assignments = [...holder.querySelectorAll(`[data-v3-remove-assignment^="${name}:${groupIndex}:"]`)].map(action => { const row = action.closest(".event-action-row"); const target = row.querySelector("[data-key=target]").value; return { target, value: typedValue(target, row.querySelector("[data-key=value]").value), ownership: row.querySelector("[data-key=ownership]").value }; }); const capturedGuard = captureV3Condition(`guard-${name}-${groupIndex}`); return { guard: { mode: capturedGuard.mode, clauses: capturedGuard.clauses }, assignments }; });
+  return { assignments: plain, guardedGroups: groups };
+}
+function renderSystemField() {
+  const field = state.draft.systemFields[state.selected.systemFields]; if (!field) { editor.innerHTML = "<p class='empty-editor'>Add a system field to begin.</p>"; return; }
+  const session = field.source === "session";
+  editor.innerHTML = `<div class="engine-editor-heading"><div><p class="kicker">SYSTEM FIELD</p><h2>${escapeHtml(field.label)}</h2></div><button class="secondary-button compact-button danger-button" id="remove-item" type="button">Remove</button></div><div class="form-grid compact-form"><label>ID<input id="sf-id" value="${escapeHtml(field.id)}"></label><label>System name<input id="sf-name" value="${escapeHtml(field.systemName)}"></label><label>Label<input id="sf-label" value="${escapeHtml(field.label)}"></label><label>Source<select id="sf-source"><option value="session"${session ? " selected" : ""}>session</option><option value="manualOccurrence"${field.source === "manualOccurrence" ? " selected" : ""}>manual occurrence</option><option value="internalOccurrence"${field.source === "internalOccurrence" ? " selected" : ""}>internal occurrence</option></select></label></div>${session ? `<div class="form-grid compact-form"><label>Role<input value="operatingMode" readonly></label><label>Enum values<input id="sf-enum" value="${escapeHtml((field.enumValues || []).join(", "))}"></label><label>Initial value<input id="sf-initial" value="${escapeHtml(field.initialValue)}"></label><label>Logging<select id="sf-log">${logModeOptions(field.logging?.mode)}</select></label><label class="switch-label"><input id="sf-assignment" type="checkbox"${field.assignmentTarget ? " checked" : ""}> Assignment target</label></div>` : `<div class="form-grid compact-form"><label>Role<input value="occurrence" readonly></label><label>Occurrence key<input id="sf-occurrence" value="${escapeHtml(field.occurrenceKey || "")}"></label><label>Logging<select id="sf-log">${logModeOptions(field.logging?.mode)}</select></label><p class="form-help">Occurrence definitions name runtime signals; they do not invent telemetry.</p></div>`}`;
+}
+function captureSystemField(displayedSource = state.draft.systemFields[state.selected.systemFields]?.source) {
+  const index = state.selected.systemFields; const field = state.draft.systemFields[index]; if (!field || !document.querySelector("#sf-id")) return;
+  const common = { id: document.querySelector("#sf-id").value.trim(), systemName: document.querySelector("#sf-name").value.trim(), label: document.querySelector("#sf-label").value.trim(), source: displayedSource, unit: null, logging: { mode: document.querySelector("#sf-log").value } };
+  state.draft.systemFields[index] = displayedSource === "session"
+    ? { ...common, runtimeRole: "operatingMode", type: "enum", enumValues: document.querySelector("#sf-enum").value.split(",").map(value => value.trim()).filter(Boolean), initialValue: document.querySelector("#sf-initial").value.trim(), assignmentTarget: document.querySelector("#sf-assignment").checked }
+    : { ...common, runtimeRole: "occurrence", type: "signal", occurrenceKey: document.querySelector("#sf-occurrence").value.trim() };
+}
+function normalizeSystemFieldSource(index, source) {
+  const field = state.draft.systemFields[index];
+  const common = { id: field.id, systemName: field.systemName, label: field.label, source, unit: null, logging: field.logging || { mode: "none" } };
+  state.draft.systemFields[index] = source === "session"
+    ? { ...common, runtimeRole: "operatingMode", type: "enum", enumValues: ["Normal", "Monitor"], initialValue: "Normal", assignmentTarget: true }
+    : { ...common, runtimeRole: "occurrence", type: "signal", occurrenceKey: field.occurrenceKey || "newOccurrence" };
+}
+function renderEvent() {
+  const event = state.draft.events[state.selected.events]; if (!event) { editor.innerHTML = "<p class='empty-editor'>Add an event to begin.</p>"; return; }
+  const trigger = event.opening.trigger; const isCondition = trigger.type === "condition"; const openBody = isCondition ? v3ConditionHtml("open", trigger.condition) : `<div class="condition-controls"><label>Occurrence<select id="v3-occurrence">${occurrenceFields(trigger.type === "manual" ? "manualOccurrence" : "internalOccurrence").map(field => optionHtml(field, trigger.occurrenceField)).join("")}</select></label><label>Observations<input id="v3-open-count" type="number" min="1" value="${trigger.qualification.observationCount}"></label><label>Minimum seconds<input id="v3-open-seconds" type="number" min="0" value="${trigger.qualification.minimumSeconds}"></label></div>`; const close = event.closing.policy === "condition" ? v3ConditionHtml("close", event.closing.condition) : "<p class='form-help'>This policy has no closing condition.</p>";
+  const web = event.web || { notifyOnOpen: false, notifyOnClose: false, openMessage: "", closeMessage: "" };
+  editor.innerHTML = `<div class="engine-editor-heading"><div><p class="kicker">V3 EVENT DEFINITION</p><h2>${escapeHtml(event.displayName)}</h2></div><div class="inline-switches"><label class="switch-label"><input id="event-enabled" type="checkbox"${event.enabled ? " checked" : ""}> Enabled</label><button class="secondary-button compact-button danger-button" id="remove-item" type="button">Remove</button></div></div><div class="form-grid compact-form"><label>ID<input id="event-id" value="${escapeHtml(event.id)}"></label><label>System name<input id="event-system-name" value="${escapeHtml(event.systemName)}"></label><label>Display name<input id="event-display-name" value="${escapeHtml(event.displayName)}"></label><label>Severity<select id="event-severity"><option${event.severity === "Info" ? " selected" : ""}>Info</option><option${event.severity === "Yellow" ? " selected" : ""}>Yellow</option><option${event.severity === "Red" ? " selected" : ""}>Red</option></select></label><label>Class<select id="v3-class"><option value="transient"${event.eventClass === "transient" ? " selected" : ""}>transient</option><option value="latched"${event.eventClass === "latched" ? " selected" : ""}>latched</option><option value="monitor"${event.eventClass === "monitor" ? " selected" : ""}>Monitor</option></select></label></div><div class="event-condition-grid"><section><div class="subsection-heading"><div><p class="kicker">OPENING</p><h2>Trigger and qualification</h2></div></div><label>Trigger<select id="v3-trigger"><option value="condition"${isCondition ? " selected" : ""}>condition</option><option value="manual"${trigger.type === "manual" ? " selected" : ""}>manual occurrence</option><option value="internal"${trigger.type === "internal" ? " selected" : ""}>internal occurrence</option></select></label>${openBody}</section><section><div class="subsection-heading"><div><p class="kicker">CLOSING</p><h2>Policy</h2></div></div><label>Policy<select id="v3-close-policy"><option value="condition"${event.closing.policy === "condition" ? " selected" : ""}>condition</option><option value="clearEvents"${event.closing.policy === "clearEvents" ? " selected" : ""}>Clear Events</option><option value="immediate"${event.closing.policy === "immediate" ? " selected" : ""}>immediate</option></select></label>${close}</section></div><div class="event-lower-grid">${phaseHtml("onOpen", event.onOpen)}${phaseHtml("onClose", event.onClose)}</div><section class="event-summary-section"><div class="subsection-heading"><div><p class="kicker">SUMMARY</p><h2>Closing summary values</h2></div><button class="secondary-button compact-button" id="add-summary-row" type="button">Add summary value</button></div>${summaryHtml(event.summary)}</section><section><p class="kicker">AUTHORING NOTIFICATIONS</p><div class="inline-switches"><label class="switch-label"><input id="notify-open" type="checkbox"${web.notifyOnOpen ? " checked" : ""}> Notify on open</label><label class="switch-label"><input id="notify-close" type="checkbox"${web.notifyOnClose ? " checked" : ""}> Notify on close</label></div><label>Open message<textarea id="open-message">${escapeHtml(web.openMessage)}</textarea></label><label>Close message<textarea id="close-message">${escapeHtml(web.closeMessage)}</textarea></label><p class="form-help">Monitor and latched constraints are validated by the server when the package is checked.</p></section>`;
+}
+function captureEvent(displayedTriggerType, displayedClosingPolicy) {
+  const event = state.draft.events[state.selected.events];
+  if (!event || !document.querySelector("#v3-class")) return;
+  const triggerType = displayedTriggerType || event.opening.trigger.type;
+  const closingPolicy = displayedClosingPolicy || event.closing.policy;
+  event.id = document.querySelector("#event-id").value.trim();
+  event.systemName = document.querySelector("#event-system-name").value.trim();
+  event.displayName = document.querySelector("#event-display-name").value.trim();
+  event.severity = document.querySelector("#event-severity").value;
+  event.enabled = document.querySelector("#event-enabled").checked;
+  event.eventClass = document.querySelector("#v3-class").value;
+  event.opening = { trigger: triggerType === "condition" ? { type: triggerType, condition: captureV3Condition("open") } : { type: triggerType, occurrenceField: document.querySelector("#v3-occurrence").value, qualification: { observationCount: Number(document.querySelector("#v3-open-count").value), minimumSeconds: Number(document.querySelector("#v3-open-seconds").value) } } };
+  event.closing = closingPolicy === "condition" ? { policy: closingPolicy, condition: captureV3Condition("close") } : { policy: closingPolicy };
+  event.onOpen = capturePhase("onOpen");
+  event.onClose = capturePhase("onClose");
+  event.summary = { durationOutput: document.querySelector("#summary-duration-enabled").checked ? { systemName: document.querySelector("#summary-duration-name").value.trim(), label: document.querySelector("#summary-duration-label").value.trim(), type: "number", unit: "s", logging: { mode: "none" } } : null, aggregates: [...editor.querySelectorAll(".summary-row")].map(row => ({ source: row.querySelector("[data-key=source]").value, operation: row.querySelector("[data-key=operation]").value, scale: Number(row.querySelector("[data-key=scale]").value), output: { systemName: row.querySelector("[data-key=systemName]").value.trim(), label: row.querySelector("[data-key=label]").value.trim(), type: "number", unit: row.querySelector("[data-key=unit]").value.trim() || null, logging: { mode: "none" } } })) };
+  event.web = { notifyOnOpen: document.querySelector("#notify-open").checked, notifyOnClose: document.querySelector("#notify-close").checked, openMessage: document.querySelector("#open-message").value.trim(), closeMessage: document.querySelector("#close-message").value.trim() };
+}
+function setEventTrigger(event, type) {
+  if (type === "condition") event.opening = { trigger: { type, condition: { mode: "all", clauses: [defaultV3Clause()], observationCount: 1, minimumSeconds: 0 } } };
+  else {
+    const source = type === "manual" ? "manualOccurrence" : "internalOccurrence";
+    event.opening = { trigger: { type, occurrenceField: occurrenceFields(source)[0]?.systemName || "", qualification: { observationCount: 1, minimumSeconds: 0 } } };
+  }
+}
+function setEventClosingPolicy(event, policy) {
+  event.closing = policy === "condition" ? { policy, condition: { mode: "all", clauses: [defaultV3Clause()], observationCount: 1, minimumSeconds: 0 } } : { policy };
+}
+function captureCurrent() { if (!state.draft) return; if (state.section === "devices") captureDevice(); else if (state.section === "calculatedFields") captureCalculation(); else if (state.section === "systemFields") captureSystemField(); else captureEvent(); }
+function renderEditor() { const [kicker, title] = sectionLabels[state.section]; document.querySelector("#browser-kicker").textContent = kicker; document.querySelector("#browser-title").textContent = title; document.querySelectorAll(".engine-tile").forEach(button => button.classList.toggle("active", button.dataset.section === state.section)); renderList(); if (state.section === "devices") renderDevice(); else if (state.section === "calculatedFields") renderCalculation(); else if (state.section === "systemFields") renderSystemField(); else renderEvent(); }
+function addItem() {
+  captureCurrent();
+  if (state.section === "devices") state.draft.devices.push({ id: `device-${state.draft.devices.length + 1}`, label: "New device", driver: "", address: "", enabled: false, fields: [] });
+  else if (state.section === "calculatedFields") state.draft.calculatedFields.push({ id: `calculation-${state.draft.calculatedFields.length + 1}`, label: "New calculated value", kind: "expression", expression: "PumpWatts", output: { systemName: "CalculatedValue", label: "Calculated value", type: "number", unit: null, logging: { mode: "delta", threshold: 1 } } });
+  else if (state.section === "systemFields") state.draft.systemFields.push({ id: "system-field", systemName: "SystemField", label: "System field", source: "manualOccurrence", runtimeRole: "occurrence", type: "signal", unit: null, occurrenceKey: "newOccurrence", logging: { mode: "none" } });
+  else { const clause = defaultV3Clause(); state.draft.events.push({ id: "E100", systemName: "NewEvent", displayName: "New event", enabled: false, severity: "Info", eventClass: "transient", opening: { trigger: { type: "condition", condition: { mode: "all", clauses: [clause], observationCount: 1, minimumSeconds: 0 } } }, closing: { policy: "condition", condition: { mode: "all", clauses: [clone(clause)], observationCount: 1, minimumSeconds: 0 } }, onOpen: { assignments: [], guardedGroups: [] }, onClose: { assignments: [], guardedGroups: [] }, summary: { durationOutput: null, aggregates: [] }, web: { notifyOnOpen: false, notifyOnClose: false, openMessage: "", closeMessage: "" } }); }
+  state.selected[state.section] = state.draft[state.section].length - 1; markDirty(); updateCounts(); renderEditor();
+}
+
 document.querySelector("#engine-load").addEventListener("click", loadDraft);
 document.querySelector("#engine-save").addEventListener("click", async () => { try { const sections = await saveAll(); setStatus(`Saved ${sections.join(", ")} draft section(s).`, "ok"); } catch (error) { setStatus(`Save failed: ${error.body?.code || error.message}`, "error"); } });
 document.querySelector("#engine-validate").addEventListener("click", validatePackage);
 document.querySelector("#engine-publish").addEventListener("click", publishPackage);
-document.querySelector("#engine-deliver").addEventListener("click", deliverPackage);
 document.querySelector("#engine-download").addEventListener("click", downloadRuntime);
 document.querySelector("#release-view").addEventListener("click", viewRelease);
 document.querySelector("#release-download").addEventListener("click", downloadSelectedRelease);
@@ -577,9 +551,6 @@ editor.addEventListener("change", event => {
   if (event.target.id === "calculation-function") {
     captureCalculation(); const calculation = state.draft.calculatedFields[state.selected.calculatedFields]; normalizeCalculationFunction(calculation, event.target.value); renderEditor(); return;
   }
-  if (event.target.id === "close-basis") {
-    captureEvent(); renderEditor(); return;
-  }
   if (event.target.dataset.key === "access" || event.target.dataset.key === "logMode") {
     if (state.section === "devices") { captureDevice(); renderEditor(); return; }
   }
@@ -592,14 +563,69 @@ editor.addEventListener("click", event => {
   const fieldRemove = event.target.closest("[data-remove-field]");
   if (fieldRemove) { captureDevice(); state.draft.devices[state.selected.devices].fields.splice(Number(fieldRemove.dataset.removeField), 1); markDirty(); renderEditor(); return; }
   if (event.target.id === "add-device-field") { captureDevice(); state.draft.devices[state.selected.devices].fields.push({ systemName: "NewTelemetry", label: "New telemetry", object: "", type: "number", unit: null, access: "read", logging: { mode: "none" } }); markDirty(); renderEditor(); return; }
-  const clauseRemove = event.target.closest("[data-remove-clause]");
-  if (clauseRemove) { captureEvent(); const [side, index] = clauseRemove.dataset.removeClause.split(":"); state.draft.events[state.selected.events][side].clauses.splice(Number(index), 1); markDirty(); renderEditor(); return; }
-  const clauseAdd = event.target.closest("[data-add-clause]");
-  if (clauseAdd) { captureEvent(); const side = clauseAdd.dataset.addClause; const field = allFields()[0]; if (!field) { setStatus("Define at least one direct or calculated field first.", "warning"); return; } state.draft.events[state.selected.events][side].clauses.push({ field: field.systemName, operator: state.capabilities.operators[field.type][0], value: field.type === "boolean" ? true : 0 }); markDirty(); renderEditor(); return; }
-  const actionRemove = event.target.closest("[data-remove-action]");
-  if (actionRemove) { captureEvent(); state.draft.events[state.selected.events].actions.splice(Number(actionRemove.dataset.removeAction), 1); markDirty(); renderEditor(); return; }
   const summaryRemove = event.target.closest("[data-remove-summary]");
   if (summaryRemove) { captureEvent(); state.draft.events[state.selected.events].summary.aggregates.splice(Number(summaryRemove.dataset.removeSummary), 1); markDirty(); renderEditor(); return; }
   if (event.target.id === "add-summary-row") { captureEvent(); const source = allFields().find(field => field.type === "number" || field.type === "integer"); if (!source) return setStatus("No numeric direct or calculated field is defined.", "warning"); state.draft.events[state.selected.events].summary.aggregates.push({ source: source.systemName, operation: "end", scale: 1, output: { systemName: "EventSummaryValue", label: "Event summary value", type: "number", unit: source.unit || null, logging: { mode: "none" } } }); markDirty(); renderEditor(); return; }
-  if (event.target.id === "add-event-action") { captureEvent(); const target = writableFields()[0]; if (!target) return setStatus("No writable device field is defined.", "warning"); state.draft.events[state.selected.events].actions.push({ target: target.systemName, value: target.type === "boolean" ? false : 0 }); markDirty(); renderEditor(); }
+});
+
+// V3-only structural controls.  These change authoring definitions locally;
+// final lifecycle, ownership, and type enforcement remains in the server contract.
+editor.addEventListener("change", event => {
+  if (!state.draft) return;
+  if (event.target.id === "sf-source") {
+    captureSystemField(state.draft.systemFields[state.selected.systemFields].source);
+    normalizeSystemFieldSource(state.selected.systemFields, event.target.value);
+    markDirty(); renderEditor(); return;
+  }
+  if (event.target.id === "v3-trigger") {
+    const definition = state.draft.events[state.selected.events];
+    captureEvent(definition.opening.trigger.type, definition.closing.policy);
+    setEventTrigger(definition, event.target.value);
+    markDirty(); renderEditor(); return;
+  }
+  if (event.target.id === "v3-close-policy") {
+    const definition = state.draft.events[state.selected.events];
+    captureEvent(definition.opening.trigger.type, definition.closing.policy);
+    setEventClosingPolicy(definition, event.target.value);
+    markDirty(); renderEditor();
+  }
+});
+editor.addEventListener("click", event => {
+  const addClause = event.target.closest("[data-v3-add-clause]");
+  const removeClause = event.target.closest("[data-v3-remove-clause]");
+  const addAssignment = event.target.closest("[data-v3-add-assignment]");
+  const removeAssignment = event.target.closest("[data-v3-remove-assignment]");
+  const addGroup = event.target.closest("[data-v3-add-group]");
+  const removeGroup = event.target.closest("[data-v3-remove-group]");
+  if (!addClause && !removeClause && !addAssignment && !removeAssignment && !addGroup && !removeGroup) return;
+  captureEvent();
+  const eventDefinition = state.draft.events[state.selected.events];
+  const clauseList = prefix => {
+    if (prefix === "open") return eventDefinition.opening.trigger.condition.clauses;
+    if (prefix === "close") return eventDefinition.closing.condition.clauses;
+    const [, phase, groupIndex] = prefix.match(/^guard-(onOpen|onClose)-(\d+)$/) || [];
+    return eventDefinition[phase].guardedGroups[Number(groupIndex)].guard.clauses;
+  };
+  const defaultAssignment = () => {
+    const target = writableFields()[0];
+    return target ? { target: target.systemName, value: target.type === "boolean" ? false : target.type === "number" || target.type === "integer" ? 0 : target.initialValue || target.enumValues?.[0] || "", ownership: "transition" } : null;
+  };
+  if (addClause) clauseList(addClause.dataset.v3AddClause).push(defaultV3Clause());
+  if (removeClause) { const [prefix, index] = removeClause.dataset.v3RemoveClause.split(":"); clauseList(prefix).splice(Number(index), 1); }
+  if (addAssignment) {
+    const [phase, group] = addAssignment.dataset.v3AddAssignment.split(":"); const assignment = defaultAssignment();
+    if (assignment) (group === "plain" ? eventDefinition[phase].assignments : eventDefinition[phase].guardedGroups[Number(group)].assignments).push(assignment);
+    else setStatus("No writable device or assignment-target system field is defined.", "warning");
+  }
+  if (removeAssignment) {
+    const [phase, group, index] = removeAssignment.dataset.v3RemoveAssignment.split(":");
+    (group === "plain" ? eventDefinition[phase].assignments : eventDefinition[phase].guardedGroups[Number(group)].assignments).splice(Number(index), 1);
+  }
+  if (addGroup) {
+    const assignment = defaultAssignment();
+    eventDefinition[addGroup.dataset.v3AddGroup].guardedGroups.push({ guard: { mode: "all", clauses: [defaultV3Clause()] }, assignments: assignment ? [assignment] : [] });
+    if (!assignment) setStatus("Add an assignment target before validating this guarded group.", "warning");
+  }
+  if (removeGroup) { const [phase, index] = removeGroup.dataset.v3RemoveGroup.split(":"); eventDefinition[phase].guardedGroups.splice(Number(index), 1); }
+  markDirty(); renderEditor();
 });

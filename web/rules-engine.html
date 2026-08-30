@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#09111f">
   <title>Rules Engine — Well Pump Pilot</title>
-  <link rel="stylesheet" href="/styles.css?v=20260828-4">
-  <script src="/rules-engine.js?v=20260828-4" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=20260830-v3">
+  <script src="/rules-engine.js?v=20260830-v3" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -23,8 +23,8 @@
 
   <main class="engine-main">
     <section class="editor-notice">
-      <strong>Executable design pilot.</strong>
-      <span>Builds and versions a validated MicroPython-friendly package. Delivery updates RTDB only after an immutable release is rechecked; Tab5 adoption remains a separate device-side gate.</span>
+      <strong>Event V3 Checkpoint 1 — nondeploying package work.</strong>
+      <span>This editor creates immutable V3 releases only. It does not request RTDB delivery, Tab5 adoption, device writes, or hardware action.</span>
     </section>
 
     <section class="panel engine-toolbar">
@@ -44,7 +44,6 @@
         <button class="secondary-button" id="engine-validate" type="button" disabled>Validate package</button>
         <button class="secondary-button" id="engine-download" type="button" disabled>Download runtime JSON</button>
         <button class="primary-button" id="engine-publish" type="button" disabled>Publish next version</button>
-        <button class="primary-button" id="engine-deliver" type="button" disabled>Deliver current to Tab5</button>
       </div>
     </section>
 
@@ -72,8 +71,11 @@
       <button class="engine-tile" type="button" data-section="calculatedFields">
         <span class="tile-step">2</span><strong>Calculated Fields</strong><small id="calculations-count">0 configured</small>
       </button>
+      <button class="engine-tile" type="button" data-section="systemFields">
+        <span class="tile-step">3</span><strong>System Fields</strong><small id="system-fields-count">0 configured</small>
+      </button>
       <button class="engine-tile" type="button" data-section="events">
-        <span class="tile-step">3</span><strong>Events</strong><small id="events-count">0 configured</small>
+        <span class="tile-step">4</span><strong>Events</strong><small id="events-count">0 configured</small>
       </button>
     </nav>
 

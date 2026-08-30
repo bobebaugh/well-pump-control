@@ -17,7 +17,8 @@ const schemas = [
   "contracts/device-sync-v1.schema.json",
   "contracts/rules-release-metadata-v1.schema.json",
   "contracts/rules-package-v1.schema.json",
-  "contracts/rules-runtime-release-metadata-v2.schema.json"
+  "contracts/rules-runtime-release-metadata-v2.schema.json",
+  "contracts/rules-runtime-package-v3.schema.json"
 ];
 
 const examples = [
@@ -31,6 +32,7 @@ const examples = [
   ["contracts/rules-release-metadata-v1.schema.json", "contracts/examples/v1/rules-release-metadata.json"],
   ["contracts/rules-package-v1.schema.json", "contracts/examples/v1/rules-package.json"]
   ,["contracts/rules-runtime-release-metadata-v2.schema.json", "contracts/examples/v2/rules-runtime-release-metadata.json"]
+  ,["contracts/rules-runtime-package-v3.schema.json", "contracts/examples/v3/rules-runtime-package.json"]
 ];
 
 const schemaRegistry = new Map(schemas.flatMap(relative => {
@@ -100,7 +102,13 @@ function validate(schema, value, rootSchema = schema, location = "$") {
     if (schema.minItems !== undefined && value.length < schema.minItems) errors.push(`${location} has too few items`);
     if (schema.maxItems !== undefined && value.length > schema.maxItems) errors.push(`${location} has too many items`);
     if (schema.uniqueItems && new Set(value.map(item => JSON.stringify(item))).size !== value.length) errors.push(`${location} has duplicate items`);
-    if (schema.items) value.forEach((item, index) => errors.push(...validate(schema.items, item, rootSchema, `${location}[${index}]`)));
+    if (schema.prefixItems) schema.prefixItems.forEach((itemSchema, index) => {
+      if (index < value.length) errors.push(...validate(itemSchema, value[index], rootSchema, `${location}[${index}]`));
+    });
+    if (schema.items === false && schema.prefixItems && value.length > schema.prefixItems.length) errors.push(`${location} has too many tuple items`);
+    else if (schema.items && !Array.isArray(schema.items)) value.forEach((item, index) => {
+      if (!schema.prefixItems || index >= schema.prefixItems.length) errors.push(...validate(schema.items, item, rootSchema, `${location}[${index}]`));
+    });
   }
   if (isObject) {
     for (const required of schema.required || []) {
@@ -160,6 +168,23 @@ test("coordination contracts reject unsupported schema versions", () => {
     const example = { ...readJson(examplePath), schemaVersion: expectedVersion + 1 };
     assert.notDeepEqual(validate(schema, example), [], `${examplePath} accepted schemaVersion 2`);
   }
+});
+
+test("V3 runtime schema closes nested compiler output and excludes authoring notification policy", () => {
+  const schema = readJson("contracts/rules-runtime-package-v3.schema.json");
+  const runtime = readJson("contracts/examples/v3/rules-runtime-package.json");
+  const unexpectedWeb = structuredClone(runtime);
+  unexpectedWeb.events[0].web = { notifyOnOpen: false };
+  assert.notDeepEqual(validate(schema, unexpectedWeb), []);
+  const unexpectedField = structuredClone(runtime);
+  unexpectedField.devices[0].fields[0].unexpected = true;
+  assert.notDeepEqual(validate(schema, unexpectedField), []);
+  const malformedProgram = structuredClone(runtime);
+  malformedProgram.calculations[0].program[0] = ["script", "bad"];
+  assert.notDeepEqual(validate(schema, malformedProgram), []);
+  const boundedComparison = structuredClone(runtime);
+  boundedComparison.events[0].opening.trigger.condition.clauses[0] = { field: "SupplyVoltage", operator: "between", value: [240, 265] };
+  assert.deepEqual(validate(schema, boundedComparison), []);
 });
 
 test("protected pilot functions and telemetry contract match the reviewed baselines", () => {
