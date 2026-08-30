@@ -15,6 +15,7 @@ const state = {
 const editor = document.querySelector("#engine-editor");
 const list = document.querySelector("#engine-list");
 const statusBox = document.querySelector("#engine-status");
+const deliverButton = document.querySelector("#engine-deliver");
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]);
@@ -67,12 +68,27 @@ function updateCounts() {
 }
 function deliveryText(current) {
   if (!current) return "V3 defaults loaded into the isolated draft; no immutable package is published.";
-  return `SHA-256 ${current.contentHash} · immutable V3 package; delivery unavailable in Checkpoint 1`;
+  return `SHA-256 ${current.contentHash} · immutable V3 package; delivery can stage it execution-disabled for Tab5`;
+}
+const deliveryErrors = {
+  invalid_delivery_request: "Delivery request is invalid: the release id is missing or malformed.",
+  delivery_not_current: "This release is no longer the current published version. Reload before delivering.",
+  delivery_release_mismatch: "Delivery refused: the stored release disagrees with the published pointer.",
+  pointer_changed: "Delivery did not complete because another writer changed the RTDB pointer. Reload and try again.",
+  pointer_write_failed: "RTDB pointer write was rejected. The database security rules are most likely not deployed.",
+  publisher_auth_failed: "Delivery could not authenticate the V3 publisher token.",
+  configuration_missing: "Delivery is unavailable because Firebase environment configuration is missing.",
+  execution_must_remain_disabled: "Delivery was refused because the package was not execution-disabled."
+};
+function deliveryErrorText(error) {
+  const code = error.body?.code || error.message;
+  return deliveryErrors[code] || `Delivery failed: ${code}`;
 }
 function markDirty() {
   state.dirty.add(state.section);
   document.querySelector("#engine-save").disabled = false;
   document.querySelector("#engine-publish").disabled = true;
+  deliverButton.disabled = true;
   document.querySelector("#validation-state").textContent = "Draft changed";
   document.querySelector("#validation-state").className = "warning-text";
 }
@@ -350,7 +366,8 @@ async function loadDraft() {
     document.querySelector("#engine-save").disabled = true;
     document.querySelector("#engine-validate").disabled = false;
     document.querySelector("#engine-publish").disabled = true;
-    updateCounts(); renderEditor(); renderReleaseHistory(); setStatus("V3 draft loaded. Immutable publication is available after validation; delivery is intentionally unavailable.", "ok");
+    deliverButton.disabled = !state.current;
+    updateCounts(); renderEditor(); renderReleaseHistory(); setStatus("V3 draft loaded. A current immutable package can be staged execution-disabled for Tab5; it does not run rules or act on hardware.", "ok");
   } catch (error) { if (error.message !== "cancelled") setStatus(`Could not load Rules Engine: ${error.body?.code || error.message}`, "error"); }
 }
 
@@ -397,9 +414,32 @@ async function publishPackage() {
     state.releases = [{ ...result.current, schemaVersion: 3, runtimeBytes: result.runtimeBytes }, ...state.releases.filter(release => release.releaseId !== result.current.releaseId)];
     document.querySelector("#engine-release").textContent = `${result.current.releaseId} · version ${result.current.packageVersion}`;
     document.querySelector("#engine-hash").textContent = deliveryText(result.current);
-    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte V3 runtime package · no delivery path in Checkpoint 1`;
-    renderReleaseHistory(); showFindings(result); setStatus("Immutable V3 package published. No delivery or Tab5 request was made.", "ok");
+    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte V3 runtime package · ready to stage execution-disabled for Tab5`;
+    deliverButton.disabled = false;
+    renderReleaseHistory(); showFindings(result); setStatus("Immutable V3 package published. Delivery can only stage it execution-disabled; no rules run and no hardware action occurs.", "ok");
   } catch (error) { setStatus(`Publish failed: ${error.body?.code || error.message}`, "error"); }
+}
+async function deliverPackage() {
+  const releaseId = state.current?.releaseId;
+  if (!releaseId) {
+    setStatus("Publish a V3 package before requesting execution-disabled delivery.", "warning");
+    return;
+  }
+  const confirmation = window.prompt(`Stage ${releaseId} for Tab5 adoption? This delivery remains execution-disabled: no rules run and no hardware action occurs. Type DELIVER to continue.`);
+  if (confirmation !== "DELIVER") return;
+  deliverButton.disabled = true;
+  setStatus(`Requesting execution-disabled staging of ${releaseId} for Tab5…`);
+  try {
+    const result = await api("POST", { action: "deliver", releaseId: state.current.releaseId });
+    state.current = result.current || state.current;
+    document.querySelector("#engine-release").textContent = `${state.current.releaseId} · version ${state.current.packageVersion}`;
+    document.querySelector("#engine-hash").textContent = deliveryText(state.current);
+    setStatus(`Delivered ${releaseId}: staged execution-disabled for Tab5, not running. No hardware action occurred.`, "ok");
+  } catch (error) {
+    setStatus(deliveryErrorText(error), "error");
+  } finally {
+    deliverButton.disabled = !state.current || state.dirty.size > 0;
+  }
 }
 function downloadRuntime() {
   if (!state.runtimePackage) return;
@@ -565,6 +605,7 @@ document.querySelector("#engine-load").addEventListener("click", loadDraft);
 document.querySelector("#engine-save").addEventListener("click", async () => { try { const sections = await saveAll(); setStatus(`Saved ${sections.join(", ")} draft section(s).`, "ok"); } catch (error) { setStatus(`Save failed: ${error.body?.code || error.message}`, "error"); } });
 document.querySelector("#engine-validate").addEventListener("click", validatePackage);
 document.querySelector("#engine-publish").addEventListener("click", publishPackage);
+document.querySelector("#engine-deliver").addEventListener("click", deliverPackage);
 document.querySelector("#engine-download").addEventListener("click", downloadRuntime);
 document.querySelector("#release-view").addEventListener("click", viewRelease);
 document.querySelector("#release-download").addEventListener("click", downloadSelectedRelease);

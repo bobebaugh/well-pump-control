@@ -23,8 +23,8 @@
 
   <main class="engine-main">
     <section class="editor-notice">
-      <strong>Event V3 Checkpoint 1 — nondeploying package work.</strong>
-      <span>This editor creates immutable V3 releases only. It does not request RTDB delivery, Tab5 adoption, device writes, or hardware action.</span>
+      <strong>Event V3 Checkpoint 2 — execution-disabled delivery staging.</strong>
+      <span>This editor publishes immutable V3 releases. Delivery stages an execution-disabled package for the Tab5; no rules execute on the Tab5 and no hardware action occurs.</span>
     </section>
 
     <section class="panel engine-toolbar">
@@ -44,6 +44,7 @@
         <button class="secondary-button" id="engine-validate" type="button" disabled>Validate package</button>
         <button class="secondary-button" id="engine-download" type="button" disabled>Download runtime JSON</button>
         <button class="primary-button" id="engine-publish" type="button" disabled>Publish next version</button>
+        <button class="primary-button" id="engine-deliver" type="button" disabled>Deliver to Tab5</button>
       </div>
     </section>
 
