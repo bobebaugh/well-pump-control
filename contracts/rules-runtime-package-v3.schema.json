@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/rules-runtime-package-v3.schema.json",
+  "title": "Well Pump Event runtime package v3",
+  "description": "A V3-only package. A V2 package is not a V3 package and must be rejected at adoption rather than migrated or reinterpreted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "releaseId", "packageVersion", "adoption", "devices", "calculatedFields", "events"],
+  "properties": {
+    "schemaVersion": { "const": 3 },
+    "kind": { "const": "well-pump-event-runtime-v3" },
+    "releaseId": { "type": "string", "pattern": "^[0-9]{14}-event-v3-v[1-9][0-9]*$" },
+    "packageVersion": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+    "adoption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtimeSchemaVersion", "legacyPackagePolicy"],
+      "properties": {
+        "runtimeSchemaVersion": { "const": 3 },
+        "legacyPackagePolicy": { "const": "reject" }
+      }
+    },
+    "devices": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "description": "Uses the existing V2 device/field and writable-field binding model; compiler validation applies the driver catalog.",
+      "items": { "$ref": "#/$defs/device" }
+    },
+    "calculatedFields": {
+      "type": "array",
+      "maxItems": 64,
+      "description": "Uses the existing V2 bounded calculation model and function catalog.",
+      "items": { "oneOf": [{ "$ref": "#/$defs/expressionCalculation" }, { "$ref": "#/$defs/functionCalculation" }] }
+    },
+    "events": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/event" } }
+  },
+  "$defs": {
+    "logging": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["mode"], "properties": { "mode": { "const": "none" } } },
+        { "type": "object", "additionalProperties": false, "required": ["mode"], "properties": { "mode": { "const": "change" } } },
+        { "type": "object", "additionalProperties": false, "required": ["mode"], "properties": { "mode": { "const": "always" } } },
+        { "type": "object", "additionalProperties": false, "required": ["mode", "threshold"], "properties": { "mode": { "const": "delta" }, "threshold": { "type": "number", "exclusiveMinimum": 0 } } }
+      ]
+    },
+    "calculatedField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["systemName", "label", "type", "unit", "logging"],
+      "properties": {
+        "systemName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "type": { "enum": ["number", "integer", "boolean", "enum", "signal"] },
+        "unit": { "type": ["string", "null"] },
+        "enumValues": { "type": "array", "minItems": 2, "maxItems": 32, "items": { "type": "string" } },
+        "logging": { "$ref": "#/$defs/logging" }
+      },
+      "allOf": [{ "if": { "required": ["type"], "properties": { "type": { "const": "enum" } } }, "then": { "required": ["enumValues"] }, "else": { "not": { "required": ["enumValues"] } } }]
+    },
+    "writeMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "parameters", "normalValue"],
+      "properties": {
+        "method": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "valueParameter"],
+          "properties": { "id": { "type": "integer", "minimum": 0, "maximum": 255 }, "valueParameter": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$" } }
+        },
+        "normalValue": {}
+      }
+    },
+    "readField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["systemName", "label", "object", "type", "unit", "access", "logging"],
+      "properties": {
+        "systemName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "object": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "enum": ["number", "integer", "boolean", "enum", "signal"] },
+        "unit": { "type": ["string", "null"] },
+        "enumValues": { "type": "array", "minItems": 2, "maxItems": 32, "items": { "type": "string" } },
+        "access": { "const": "read" },
+        "logging": { "$ref": "#/$defs/logging" }
+      },
+      "allOf": [{ "if": { "required": ["type"], "properties": { "type": { "const": "enum" } } }, "then": { "required": ["enumValues"] }, "else": { "not": { "required": ["enumValues"] } } }]
+    },
+    "readWriteField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["systemName", "label", "object", "type", "unit", "access", "logging", "write"],
+      "properties": {
+        "systemName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "object": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "enum": ["number", "integer", "boolean", "enum", "signal"] },
+        "unit": { "type": ["string", "null"] },
+        "enumValues": { "type": "array", "minItems": 2, "maxItems": 32, "items": { "type": "string" } },
+        "access": { "const": "readWrite" },
+        "logging": { "$ref": "#/$defs/logging" },
+        "write": { "$ref": "#/$defs/writeMapping" }
+      },
+      "allOf": [{ "if": { "required": ["type"], "properties": { "type": { "const": "enum" } } }, "then": { "required": ["enumValues"] }, "else": { "not": { "required": ["enumValues"] } } }]
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "driver", "address", "enabled", "fields"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "driver": { "enum": ["shelly-gen1-em", "shelly-gen4-switch", "tab5-runtime"] },
+        "address": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "enabled": { "type": "boolean" },
+        "fields": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "oneOf": [{ "$ref": "#/$defs/readField" }, { "$ref": "#/$defs/readWriteField" }] } }
+      }
+    },
+    "programToken": {
+      "oneOf": [
+        { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{ "const": "number" }, { "type": "number" }] },
+        { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{ "const": "field" }, { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$" }] },
+        { "type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{ "const": "operator" }, { "enum": ["+", "-", "*", "/", "neg"] }] }
+      ]
+    },
+    "expressionCalculation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "kind", "expression", "output"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "kind": { "const": "expression" },
+        "expression": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "output": { "$ref": "#/$defs/calculatedField" },
+        "program": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/programToken" } }
+      }
+    },
+    "functionCalculation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "kind", "functionId", "inputs", "parameters", "outputs"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "kind": { "const": "function" },
+        "functionId": { "const": "boyle_tank" },
+        "inputs": { "type": "object", "additionalProperties": false, "required": ["pressure"], "properties": { "pressure": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$" } } },
+        "parameters": { "type": "object", "additionalProperties": false, "required": ["effectiveTankGallons", "prechargeGaugePsi", "atmosphericPressurePsi", "regressionWindowSeconds", "minimumSamples"], "properties": { "effectiveTankGallons": { "type": "number" }, "prechargeGaugePsi": { "type": "number" }, "atmosphericPressurePsi": { "type": "number" }, "regressionWindowSeconds": { "type": "number" }, "minimumSamples": { "type": "number" } } },
+        "outputs": { "type": "array", "minItems": 5, "maxItems": 5, "items": { "$ref": "#/$defs/calculatedField" } }
+      }
+    },
+    "qualifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observationCount", "minimumSeconds"],
+      "properties": {
+        "observationCount": { "type": "integer", "minimum": 1, "maximum": 86400 },
+        "minimumSeconds": { "type": "number", "minimum": 0, "maximum": 86400 }
+      }
+    },
+    "clause": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$" },
+        "operator": { "enum": ["eq", "neq", "lt", "lte", "gt", "gte", "between", "outside", "changes", "changes_from", "changes_to", "occurs"] },
+        "value": {}
+      }
+    },
+    "guard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "clauses"],
+      "properties": {
+        "mode": { "enum": ["all", "any"] },
+        "clauses": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/clause" } }
+      }
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "clauses", "observationCount", "minimumSeconds"],
+      "properties": {
+        "mode": { "enum": ["all", "any"] },
+        "clauses": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/clause" } },
+        "observationCount": { "type": "integer", "minimum": 1, "maximum": 86400 },
+        "minimumSeconds": { "type": "number", "minimum": 0, "maximum": 86400 }
+      }
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "value", "ownership"],
+      "properties": {
+        "target": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$" },
+        "value": {},
+        "ownership": { "enum": ["transition", "whileOpen"] }
+      }
+    },
+    "guardedGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["guard", "assignments"],
+      "properties": {
+        "guard": { "$ref": "#/$defs/guard" },
+        "assignments": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/assignment" } }
+      }
+    },
+    "phase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assignments", "guardedGroups"],
+      "properties": {
+        "assignments": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/assignment" } },
+        "guardedGroups": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/guardedGroup" } }
+      }
+    },
+    "conditionTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "condition"],
+      "properties": { "type": { "const": "condition" }, "condition": { "$ref": "#/$defs/condition" } }
+    },
+    "manualTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "request", "qualification"],
+      "properties": {
+        "type": { "const": "manual" },
+        "request": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$" },
+        "qualification": { "$ref": "#/$defs/qualifier" }
+      }
+    },
+    "internalTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "occurrence", "qualification"],
+      "properties": {
+        "type": { "const": "internal" },
+        "occurrence": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$" },
+        "qualification": { "$ref": "#/$defs/qualifier" }
+      }
+    },
+    "opening": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trigger"],
+      "properties": { "trigger": { "oneOf": [{ "$ref": "#/$defs/conditionTrigger" }, { "$ref": "#/$defs/manualTrigger" }, { "$ref": "#/$defs/internalTrigger" }] } }
+    },
+    "conditionClose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "condition"],
+      "properties": { "policy": { "const": "condition" }, "condition": { "$ref": "#/$defs/condition" } }
+    },
+    "clearEventsClose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy"],
+      "properties": { "policy": { "const": "clearEvents" } }
+    },
+    "immediateClose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy"],
+      "properties": { "policy": { "const": "immediate" } }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "systemName", "displayName", "severity", "enabled", "eventClass", "opening", "closing", "onOpen", "onClose"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$" },
+        "systemName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "severity": { "enum": ["Info", "Yellow", "Red"] },
+        "enabled": { "type": "boolean" },
+        "eventClass": { "enum": ["transient", "latched", "monitor"] },
+        "opening": { "$ref": "#/$defs/opening" },
+        "closing": { "oneOf": [{ "$ref": "#/$defs/conditionClose" }, { "$ref": "#/$defs/clearEventsClose" }, { "$ref": "#/$defs/immediateClose" }] },
+        "onOpen": { "$ref": "#/$defs/phase" },
+        "onClose": { "$ref": "#/$defs/phase" }
+      }
+    }
+  },
+  "x-well-pump-v3-semantics": {
+    "conditionRepresentation": "Condition triggers and condition closing policies preserve V2 mode/clauses/observationCount/minimumSeconds representation. Guards use the mode/clauses subset and are evaluated once against the frozen transition snapshot.",
+    "assignmentOrder": "Unconditional assignments are ordered first, followed by guarded groups and their assignments in array order. Guard results are all determined before any assignment is dispatched.",
+    "ownership": "onOpen whileOpen assignments add an event-instance owner. Closing removes that same owner. The final owner release is implicit; onClose cannot write a target that is held by any event. Type-correct transition assignments, including a writable field's normal value, remain host-only selections until the separately reviewed executor enforces device-specific gates.",
+    "operatingClasses": "transient closes by condition; latched closes by Clear Events; monitor owns the implicit Monitor resource while open and closes by condition or Clear Events.",
+    "bounds": "The compiler applies the stated collection bounds and also rejects duplicate phase targets, incompatible held values, malformed nested device/calculation structures, and type-incompatible writable-field values.",
+    "adoptionIdentity": "releaseId and packageVersion are immutable runtime-package identity inside the V3 body. RTDB pointer, storage, publication, and delivery envelopes remain out of scope for Unit 1."
+  }
+}

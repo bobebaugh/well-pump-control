@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 3,
+  "kind": "well-pump-event-runtime-v3",
+  "releaseId": "20260830000000-event-v3-v1",
+  "packageVersion": 1,
+  "adoption": { "runtimeSchemaVersion": 3, "legacyPackagePolicy": "reject" },
+  "devices": [
+    {
+      "id": "shelly-em-main",
+      "label": "Shelly EM",
+      "driver": "shelly-gen1-em",
+      "address": "192.168.50.141",
+      "enabled": true,
+      "fields": [
+        { "systemName": "PumpWatts", "label": "Pump real power", "object": "emeter/0.power", "type": "number", "unit": "W", "access": "read", "logging": { "mode": "delta", "threshold": 10 } },
+        { "systemName": "SupplyVoltage", "label": "Supply voltage", "object": "emeter/0.voltage", "type": "number", "unit": "V", "access": "read", "logging": { "mode": "delta", "threshold": 2 } },
+        { "systemName": "ShellyEMAvailable", "label": "Shelly EM available", "object": "$availability", "type": "boolean", "unit": null, "access": "read", "logging": { "mode": "change" } }
+      ]
+    },
+    {
+      "id": "shelly-1-main",
+      "label": "Shelly 1 Gen4",
+      "driver": "shelly-gen4-switch",
+      "address": "192.168.50.201",
+      "enabled": true,
+      "fields": [
+        { "systemName": "PumpEnable", "label": "Pump enable", "object": "RLY(0)", "type": "boolean", "unit": null, "access": "readWrite", "logging": { "mode": "change" }, "write": { "method": "Switch.Set", "parameters": { "id": 0, "valueParameter": "on" }, "normalValue": true } },
+        { "systemName": "Shelly1Available", "label": "Shelly 1 available", "object": "$availability", "type": "boolean", "unit": null, "access": "read", "logging": { "mode": "change" } }
+      ]
+    }
+  ],
+  "calculatedFields": [],
+  "events": [
+    {
+      "id": "E007",
+      "systemName": "UtilityVoltageHigh",
+      "displayName": "Utility voltage high",
+      "severity": "Red",
+      "enabled": true,
+      "eventClass": "transient",
+      "opening": { "trigger": { "type": "condition", "condition": { "mode": "all", "clauses": [{ "field": "SupplyVoltage", "operator": "gt", "value": 265 }, { "field": "ShellyEMAvailable", "operator": "eq", "value": true }], "observationCount": 2, "minimumSeconds": 0 } } },
+      "closing": { "policy": "condition", "condition": { "mode": "all", "clauses": [{ "field": "SupplyVoltage", "operator": "lt", "value": 260 }, { "field": "ShellyEMAvailable", "operator": "eq", "value": true }], "observationCount": 30, "minimumSeconds": 0 } },
+      "onOpen": { "assignments": [{ "target": "PumpEnable", "value": false, "ownership": "whileOpen" }], "guardedGroups": [] },
+      "onClose": { "assignments": [], "guardedGroups": [] }
+    },
+    {
+      "id": "E002",
+      "systemName": "PumpUnderload",
+      "displayName": "Pump running underload",
+      "severity": "Red",
+      "enabled": true,
+      "eventClass": "latched",
+      "opening": { "trigger": { "type": "condition", "condition": { "mode": "all", "clauses": [{ "field": "PumpWatts", "operator": "lt", "value": 500 }], "observationCount": 4, "minimumSeconds": 0 } } },
+      "closing": { "policy": "clearEvents" },
+      "onOpen": { "assignments": [{ "target": "PumpEnable", "value": false, "ownership": "whileOpen" }], "guardedGroups": [] },
+      "onClose": { "assignments": [], "guardedGroups": [] }
+    },
+    {
+      "id": "H001",
+      "systemName": "ElectricalSourceInvalid",
+      "displayName": "Electrical source invalid",
+      "severity": "Red",
+      "enabled": true,
+      "eventClass": "monitor",
+      "opening": { "trigger": { "type": "condition", "condition": { "mode": "all", "clauses": [{ "field": "ShellyEMAvailable", "operator": "eq", "value": false }], "observationCount": 1, "minimumSeconds": 0 } } },
+      "closing": { "policy": "condition", "condition": { "mode": "all", "clauses": [{ "field": "ShellyEMAvailable", "operator": "eq", "value": true }], "observationCount": 1, "minimumSeconds": 0 } },
+      "onOpen": { "assignments": [], "guardedGroups": [] },
+      "onClose": { "assignments": [], "guardedGroups": [] }
+    },
+    {
+      "id": "M001",
+      "systemName": "OperatorMonitor",
+      "displayName": "Operator monitor mode",
+      "severity": "Info",
+      "enabled": true,
+      "eventClass": "monitor",
+      "opening": { "trigger": { "type": "manual", "request": "operatorMonitor", "qualification": { "observationCount": 1, "minimumSeconds": 0 } } },
+      "closing": { "policy": "clearEvents" },
+      "onOpen": { "assignments": [], "guardedGroups": [] },
+      "onClose": { "assignments": [], "guardedGroups": [] }
+    },
+    {
+      "id": "H017",
+      "systemName": "Tab5Boot",
+      "displayName": "Tab5 boot",
+      "severity": "Info",
+      "enabled": true,
+      "eventClass": "transient",
+      "opening": { "trigger": { "type": "internal", "occurrence": "bootSession", "qualification": { "observationCount": 1, "minimumSeconds": 0 } } },
+      "closing": { "policy": "immediate" },
+      "onOpen": { "assignments": [], "guardedGroups": [] },
+      "onClose": { "assignments": [], "guardedGroups": [] }
+    }
+  ]
+}

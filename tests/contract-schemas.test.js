@@ -17,7 +17,8 @@ const schemas = [
   "contracts/device-sync-v1.schema.json",
   "contracts/rules-release-metadata-v1.schema.json",
   "contracts/rules-package-v1.schema.json",
-  "contracts/rules-runtime-release-metadata-v2.schema.json"
+  "contracts/rules-runtime-release-metadata-v2.schema.json",
+  "contracts/rules-runtime-package-v3.schema.json"
 ];
 
 const examples = [
@@ -31,6 +32,7 @@ const examples = [
   ["contracts/rules-release-metadata-v1.schema.json", "contracts/examples/v1/rules-release-metadata.json"],
   ["contracts/rules-package-v1.schema.json", "contracts/examples/v1/rules-package.json"]
   ,["contracts/rules-runtime-release-metadata-v2.schema.json", "contracts/examples/v2/rules-runtime-release-metadata.json"]
+  ,["contracts/rules-runtime-package-v3.schema.json", "contracts/examples/v3/rules-runtime-package.json"]
 ];
 
 const schemaRegistry = new Map(schemas.flatMap(relative => {
@@ -72,6 +74,10 @@ function validate(schema, value, rootSchema = schema, location = "$") {
   if (schema.if && validate(schema.if, value, rootSchema, location).length === 0 && schema.then) {
     errors.push(...validate(schema.then, value, rootSchema, location));
   }
+  if (schema.if && validate(schema.if, value, rootSchema, location).length !== 0 && schema.else) {
+    errors.push(...validate(schema.else, value, rootSchema, location));
+  }
+  if (schema.not && validate(schema.not, value, rootSchema, location).length === 0) errors.push(`${location} matched a disallowed schema`);
 
   const isObject = value !== null && typeof value === "object" && !Array.isArray(value);
   const types = {
@@ -90,6 +96,7 @@ function validate(schema, value, rootSchema = schema, location = "$") {
   if (schema.const !== undefined && !same(value, schema.const)) errors.push(`${location} is not the required constant`);
   if (schema.enum && !schema.enum.some(candidate => same(value, candidate))) errors.push(`${location} is not in enum`);
   if (typeof value === "number" && schema.minimum !== undefined && value < schema.minimum) errors.push(`${location} is below minimum`);
+  if (typeof value === "number" && schema.exclusiveMinimum !== undefined && value <= schema.exclusiveMinimum) errors.push(`${location} is not above exclusive minimum`);
   if (typeof value === "string") {
     if (schema.minLength !== undefined && value.length < schema.minLength) errors.push(`${location} is too short`);
     if (schema.maxLength !== undefined && value.length > schema.maxLength) errors.push(`${location} is too long`);
@@ -101,6 +108,7 @@ function validate(schema, value, rootSchema = schema, location = "$") {
     if (schema.maxItems !== undefined && value.length > schema.maxItems) errors.push(`${location} has too many items`);
     if (schema.uniqueItems && new Set(value.map(item => JSON.stringify(item))).size !== value.length) errors.push(`${location} has duplicate items`);
     if (schema.items) value.forEach((item, index) => errors.push(...validate(schema.items, item, rootSchema, `${location}[${index}]`)));
+    if (schema.prefixItems) schema.prefixItems.forEach((itemSchema, index) => { if (index < value.length) errors.push(...validate(itemSchema, value[index], rootSchema, `${location}[${index}]`)); });
   }
   if (isObject) {
     for (const required of schema.required || []) {
@@ -117,12 +125,36 @@ function validate(schema, value, rootSchema = schema, location = "$") {
   return errors;
 }
 
-test("all M2 examples validate against their versioned schemas", () => {
+test("all versioned examples validate against their schemas", () => {
   for (const [schemaPath, examplePath] of examples) {
     const schema = readJson(schemaPath);
     const example = readJson(examplePath);
     assert.deepEqual(validate(schema, example), [], examplePath);
   }
+});
+
+test("V3 schema closes nested device, write, calculation, and program-token shapes", () => {
+  const schema = readJson("contracts/rules-runtime-package-v3.schema.json");
+  const invalid = [];
+  const extraDevice = readJson("contracts/examples/v3/rules-runtime-package.json");
+  extraDevice.devices[0].unexpected = true;
+  invalid.push(extraDevice);
+  const extraField = readJson("contracts/examples/v3/rules-runtime-package.json");
+  extraField.devices[0].fields[0].unexpected = true;
+  invalid.push(extraField);
+  const extraWriteMapping = readJson("contracts/examples/v3/rules-runtime-package.json");
+  extraWriteMapping.devices[1].fields[0].write.unexpected = true;
+  invalid.push(extraWriteMapping);
+  const extraWriteParameter = readJson("contracts/examples/v3/rules-runtime-package.json");
+  extraWriteParameter.devices[1].fields[0].write.parameters.unexpected = true;
+  invalid.push(extraWriteParameter);
+  const extraCalculation = readJson("contracts/examples/v3/rules-runtime-package.json");
+  extraCalculation.calculatedFields = [{ id: "calc-test", label: "Test calculation", kind: "expression", expression: "PumpWatts", output: { systemName: "CalculatedWatts", label: "Calculated watts", type: "number", unit: "W", logging: { mode: "none" } }, unexpected: true }];
+  invalid.push(extraCalculation);
+  const invalidProgramToken = readJson("contracts/examples/v3/rules-runtime-package.json");
+  invalidProgramToken.calculatedFields = [{ id: "calc-test", label: "Test calculation", kind: "expression", expression: "PumpWatts", output: { systemName: "CalculatedWatts", label: "Calculated watts", type: "number", unit: "W", logging: { mode: "none" } }, program: [["number", "not-a-number"]] }];
+  invalid.push(invalidProgramToken);
+  invalid.forEach(value => assert.notDeepEqual(validate(schema, value), []));
 });
 
 test("observation contracts preserve unknown future fields", () => {
