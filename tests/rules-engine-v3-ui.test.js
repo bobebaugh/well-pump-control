@@ -43,6 +43,9 @@ test("Rules Engine browser can stage a current V3 package without enabling execu
   assert.match(source, /staged execution-disabled for Tab5, not running/);
   assert.doesNotMatch(source, /executionEnabled:\s*true/);
   assert.doesNotMatch(html, /executionEnabled:\s*true/);
+  assert.doesNotMatch(html, /id="engine-(?:enable|execution)"/);
+  assert.match(source, /deliverButton\.disabled = !state\.current/);
+  assert.match(source, /deliverButton\.disabled = true;/);
   for (const code of ["invalid_delivery_request", "delivery_not_current", "delivery_release_mismatch", "pointer_changed", "pointer_write_failed", "publisher_auth_failed", "configuration_missing", "execution_must_remain_disabled"]) {
     assert.match(source, new RegExp(code));
   }
