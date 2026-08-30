@@ -11,9 +11,11 @@
 # consequence. Rules can never command Output 0 ON. Battery charge control is
 # the separate exception: an automatic hysteresis policy keeps the pack between
 # BATTERY_LOW_PCT and BATTERY_HIGH_PCT - see the battery section below.
+# Unit 2 Event V3 is host-only semantic selection, intentionally disconnected from M6.27.
 
 import M5
 import __main__
+import math
 import os
 import time
 import uhashlib
@@ -917,6 +919,607 @@ def clear_runtime_event_board(event_board):
             if isinstance(state, dict) and state.get('active') is True:
                 transitions.append({'type': 'close', 'reason': 'rules_sync', 'eventId': event_id})
     return {}, transitions
+
+
+# --- Event V3 pure semantic kernel (not connected to the M6.27 evaluator) ---
+# This bounded kernel deliberately selects assignments only.  It does not call
+# requests, cloud, queues, flash, HMI, or the reviewed M6.27 STOP executor.
+
+
+def _v3_number(value):
+    return (isinstance(value, (int, float)) and not isinstance(value, bool) and
+            math.isfinite(value))
+
+
+def _v3_value_matches(value, field):
+    field_type = field.get('type') if isinstance(field, dict) else None
+    if field_type == 'boolean':
+        return isinstance(value, bool)
+    if field_type == 'number':
+        return _v3_number(value)
+    if field_type == 'integer':
+        return isinstance(value, int) and not isinstance(value, bool)
+    if field_type == 'enum':
+        choices = field.get('enumValues')
+        return (isinstance(value, str) and isinstance(choices, list) and
+                value in choices)
+    return False
+
+
+def _v3_validate_condition(condition, fields, qualified):
+    if not isinstance(condition, dict) or condition.get('mode') not in ('all', 'any'):
+        raise ValueError('invalid V3 condition')
+    clauses = condition.get('clauses')
+    if not isinstance(clauses, list) or not clauses or len(clauses) > 16:
+        raise ValueError('invalid V3 clauses')
+    required = ('observationCount', 'minimumSeconds') if qualified else ()
+    for name in required:
+        if name not in condition:
+            raise ValueError('missing V3 qualification')
+    if qualified:
+        if (not isinstance(condition['observationCount'], int) or
+                isinstance(condition['observationCount'], bool) or
+                condition['observationCount'] < 1 or
+                not _v3_number(condition['minimumSeconds']) or
+                condition['minimumSeconds'] < 0):
+            raise ValueError('invalid V3 qualification')
+    for clause in clauses:
+        if not isinstance(clause, dict):
+            raise ValueError('invalid V3 clause')
+        name = clause.get('field')
+        if not isinstance(name, str) or name not in fields:
+            raise ValueError('unknown V3 field')
+        if clause.get('operator') not in ('eq', 'neq', 'lt', 'lte', 'gt', 'gte',
+                                          'between', 'outside'):
+            raise ValueError('unsupported V3 condition operator')
+
+
+def _v3_condition_value(condition, snapshot):
+    """Evaluate one frozen-snapshot V3 condition; None is missing evidence."""
+    if not isinstance(condition, dict) or not isinstance(snapshot, dict):
+        return None
+    clauses = condition.get('clauses')
+    if condition.get('mode') not in ('all', 'any') or not isinstance(clauses, list):
+        return None
+    results = []
+    for clause in clauses:
+        if not isinstance(clause, dict):
+            return None
+        current = snapshot.get(clause.get('field'))
+        expected = clause.get('value')
+        operator = clause.get('operator')
+        if current is None:
+            return None
+        if operator == 'eq':
+            result = current == expected
+        elif operator == 'neq':
+            result = current != expected
+        elif not (_v3_number(current) and _v3_number(expected)):
+            return None
+        elif operator == 'lt':
+            result = current < expected
+        elif operator == 'lte':
+            result = current <= expected
+        elif operator == 'gt':
+            result = current > expected
+        elif operator == 'gte':
+            result = current >= expected
+        elif operator in ('between', 'outside'):
+            if (not isinstance(expected, list) or len(expected) != 2 or
+                    not _v3_number(expected[0]) or not _v3_number(expected[1])):
+                return None
+            inside = expected[0] <= current <= expected[1]
+            result = inside if operator == 'between' else not inside
+        else:
+            return None
+        results.append(result)
+    return all(results) if condition.get('mode') == 'all' else any(results)
+
+
+def _v3_validate_phase(phase, fields, writable, opening):
+    if not isinstance(phase, dict):
+        raise ValueError('invalid V3 phase')
+    assignments = phase.get('assignments')
+    groups = phase.get('guardedGroups')
+    if (not isinstance(assignments, list) or not isinstance(groups, list) or
+            len(assignments) > 32 or len(groups) > 16):
+        raise ValueError('invalid V3 phase')
+    all_assignments = list(assignments)
+    for group in groups:
+        if not isinstance(group, dict) or not isinstance(group.get('assignments'), list):
+            raise ValueError('invalid V3 guarded group')
+        _v3_validate_condition(group.get('guard'), fields, False)
+        if not group['assignments'] or len(group['assignments']) > 16:
+            raise ValueError('invalid V3 guarded assignments')
+        all_assignments.extend(group['assignments'])
+    seen = set()
+    for assignment in all_assignments:
+        if not isinstance(assignment, dict):
+            raise ValueError('invalid V3 assignment')
+        target = assignment.get('target')
+        if target in seen or target not in writable:
+            raise ValueError('invalid V3 assignment target')
+        seen.add(target)
+        if assignment.get('ownership') not in ('transition', 'whileOpen'):
+            raise ValueError('invalid V3 assignment ownership')
+        if not opening and assignment.get('ownership') != 'transition':
+            raise ValueError('invalid V3 close ownership')
+        if not _v3_value_matches(assignment.get('value'), writable[target]):
+            raise ValueError('invalid V3 assignment value')
+
+
+def _v3_validate_event(event, fields, writable):
+    if not isinstance(event, dict) or not isinstance(event.get('id'), str) or not event['id']:
+        raise ValueError('invalid V3 event')
+    if event.get('eventClass') not in ('transient', 'latched', 'monitor'):
+        raise ValueError('invalid V3 event class')
+    opening = event.get('opening')
+    if not isinstance(opening, dict) or not isinstance(opening.get('trigger'), dict):
+        raise ValueError('invalid V3 opening')
+    trigger = opening['trigger']
+    trigger_type = trigger.get('type')
+    if trigger_type == 'condition':
+        _v3_validate_condition(trigger.get('condition'), fields, True)
+    elif trigger_type in ('manual', 'internal'):
+        key = 'request' if trigger_type == 'manual' else 'occurrence'
+        qualifier = trigger.get('qualification')
+        if (not isinstance(trigger.get(key), str) or not trigger[key] or
+                not isinstance(qualifier, dict)):
+            raise ValueError('invalid V3 opening trigger')
+        _v3_validate_condition({'mode': 'all', 'clauses': [
+            {'field': next(iter(fields)), 'operator': 'eq',
+             'value': None}], 'observationCount': qualifier.get('observationCount'),
+            'minimumSeconds': qualifier.get('minimumSeconds')}, fields, True)
+    else:
+        raise ValueError('invalid V3 opening trigger')
+    closing = event.get('closing')
+    if not isinstance(closing, dict):
+        raise ValueError('invalid V3 closing')
+    policy = closing.get('policy')
+    if policy == 'condition':
+        _v3_validate_condition(closing.get('condition'), fields, True)
+    elif policy not in ('clearEvents', 'immediate'):
+        raise ValueError('invalid V3 closing policy')
+    if event['eventClass'] == 'latched' and policy != 'clearEvents':
+        raise ValueError('invalid V3 latch close policy')
+    if event['eventClass'] == 'monitor' and policy == 'immediate':
+        raise ValueError('invalid V3 monitor close policy')
+    _v3_validate_phase(event.get('onOpen'), fields, writable, True)
+    _v3_validate_phase(event.get('onClose'), fields, writable, False)
+
+
+def _v3_validate_program(program):
+    if not isinstance(program, list) or len(program) > 128:
+        raise ValueError('invalid V3 expression program')
+    for item in program:
+        if not isinstance(item, list) or len(item) != 2:
+            raise ValueError('invalid V3 expression program')
+        if item[0] == 'number' and _v3_number(item[1]):
+            continue
+        if item[0] == 'field' and isinstance(item[1], str):
+            continue
+        if item[0] == 'operator' and item[1] in ('+', '-', '*', '/', 'neg'):
+            continue
+        raise ValueError('invalid V3 expression program')
+
+
+def resolve_v3_package(package):
+    """Resolve one adoption-ready V3 body once; V2 is never reinterpreted."""
+    if (not isinstance(package, dict) or package.get('schemaVersion') != 3 or
+            package.get('kind') != 'well-pump-event-runtime-v3'):
+        raise ValueError('unsupported V3 package identity')
+    if set(package) != set(('schemaVersion', 'kind', 'releaseId', 'packageVersion',
+                            'adoption', 'devices', 'calculatedFields', 'events')):
+        raise ValueError('unsupported V3 package property')
+    release_id = package.get('releaseId')
+    release_prefix = release_id[:14] if isinstance(release_id, str) else ''
+    release_suffix = release_id[14:] if isinstance(release_id, str) else ''
+    if (not isinstance(release_id, str) or not release_prefix.isdigit() or
+            not release_suffix.startswith('-event-v3-v') or
+            not release_suffix[11:].isdigit() or int(release_suffix[11:] or 0) < 1):
+        raise ValueError('invalid V3 release identity')
+    if (not isinstance(package.get('packageVersion'), int) or
+            isinstance(package.get('packageVersion'), bool) or
+            package['packageVersion'] < 1 or package['packageVersion'] > 2147483647):
+        raise ValueError('invalid V3 package version')
+    adoption = package.get('adoption')
+    if (not isinstance(adoption, dict) or adoption.get('runtimeSchemaVersion') != 3 or
+            adoption.get('legacyPackagePolicy') != 'reject'):
+        raise ValueError('invalid V3 adoption policy')
+    devices = package.get('devices')
+    events = package.get('events')
+    calculations = package.get('calculatedFields')
+    if (not isinstance(devices, list) or not devices or len(devices) > 16 or
+            not isinstance(events, list) or len(events) > 64 or
+            not isinstance(calculations, list) or len(calculations) > 64):
+        raise ValueError('invalid V3 package shape')
+    fields, writable, device_fields, device_objects, writable_devices = {}, {}, {}, {}, {}
+    protected_targets = {}
+    device_ids = set()
+    for device in devices:
+        if (not isinstance(device, dict) or not isinstance(device.get('id'), str) or
+                device.get('driver') not in RUNTIME_DIRECT_BINDINGS or
+                device.get('enabled') not in (True, False) or
+                not isinstance(device.get('fields'), list) or not device['fields'] or
+                len(device['fields']) > 32):
+            raise ValueError('invalid V3 device')
+        if device['id'] in device_ids:
+            raise ValueError('duplicate V3 device')
+        device_ids.add(device['id'])
+        names, object_fields = [], {}
+        binding_catalog = RUNTIME_DIRECT_BINDINGS[device['driver']]
+        for field in device['fields']:
+            if not isinstance(field, dict) or not isinstance(field.get('systemName'), str):
+                raise ValueError('invalid V3 field')
+            binding = binding_catalog.get(field.get('object'))
+            if (binding is None or field.get('type') != binding[0] or
+                    field.get('unit') != binding[1] or field.get('access') != binding[2] or
+                    field['systemName'] in fields):
+                raise ValueError('invalid V3 field binding')
+            fields[field['systemName']] = field
+            names.append(field['systemName'])
+            object_fields[field['object']] = field
+            if field.get('access') == 'readWrite':
+                write = field.get('write')
+                if not isinstance(write, dict) or not _v3_value_matches(write.get('normalValue'), field):
+                    raise ValueError('invalid V3 writable field')
+                writable[field['systemName']] = field
+                writable_devices[field['systemName']] = device['id']
+        device_fields[device['id']] = names
+        device_objects[device['id']] = object_fields
+        protected = object_fields.get('RLY(0)')
+        if (device['driver'] == 'shelly-gen4-switch' and
+                isinstance(protected, dict) and protected.get('access') == 'readWrite'):
+            protected_targets[protected['systemName']] = device['id']
+    for calculation in calculations:
+        if not isinstance(calculation, dict):
+            raise ValueError('invalid V3 calculation')
+        if calculation.get('kind') == 'expression':
+            output = calculation.get('output')
+            _v3_validate_program(calculation.get('program'))
+            outputs = [output]
+        elif calculation.get('kind') == 'function':
+            outputs = calculation.get('outputs')
+        else:
+            raise ValueError('invalid V3 calculation')
+        if not isinstance(outputs, list):
+            raise ValueError('invalid V3 calculation outputs')
+        for output in outputs:
+            if (not isinstance(output, dict) or not isinstance(output.get('systemName'), str) or
+                    output['systemName'] in fields):
+                raise ValueError('invalid V3 calculated field')
+            fields[output['systemName']] = output
+    resolved_events, event_ids = [], set()
+    for event in events:
+        _v3_validate_event(event, fields, writable)
+        if event['id'] in event_ids:
+            raise ValueError('duplicate V3 event')
+        event_ids.add(event['id'])
+        resolved_events.append(event)
+    pump_target, held_values, transition_assignments = None, {}, []
+    for event in resolved_events:
+        for phase_index, phase in enumerate((event['onOpen'], event['onClose'])):
+            phase_assignments = list(phase['assignments'])
+            for group in phase['guardedGroups']:
+                phase_assignments.extend(group['assignments'])
+            for assignment in phase_assignments:
+                target = assignment['target']
+                if phase_index == 0 and assignment['ownership'] == 'whileOpen':
+                    if target in held_values and held_values[target] != assignment['value']:
+                        raise ValueError('incompatible V3 while-open ownership')
+                    held_values[target] = assignment['value']
+                elif assignment['ownership'] == 'transition':
+                    transition_assignments.append((target, assignment['value'], phase_index))
+                if target in protected_targets:
+                    if pump_target is not None and pump_target != target:
+                        raise ValueError('multiple protected V3 pump targets')
+                    pump_target = target
+    for target, value, phase_index in transition_assignments:
+        if target in held_values:
+            if phase_index == 1:
+                raise ValueError('explicit V3 close assignment conflicts with held target')
+            if held_values[target] != value:
+                raise ValueError('V3 transition assignment conflicts with held target')
+    if pump_target is not None:
+        target_device = protected_targets[pump_target]
+        lock_field = (device_objects.get(target_device, {}).get('UDF(IsLocked)')
+                      if target_device is not None else None)
+        if (lock_field is None or lock_field.get('type') != 'integer' or
+                lock_field.get('access') != 'read'):
+            raise ValueError('protected pump target requires same-device UDF(IsLocked) binding')
+    return {'resolvedV3': True, 'package': package, 'events': resolved_events,
+            'fields': fields, 'writable': writable, 'deviceFields': device_fields,
+            'writableDevices': writable_devices, 'deviceObjects': device_objects,
+            'pumpTarget': pump_target}
+
+
+def v3_accept_device_records(resolved, records):
+    """Accept complete configured device records atomically into one snapshot."""
+    if not isinstance(resolved, dict) or resolved.get('resolvedV3') is not True:
+        raise ValueError('unresolved V3 package')
+    records = records if isinstance(records, dict) else {}
+    snapshot, accepted, dropped = {}, [], []
+    for device_id, names in resolved['deviceFields'].items():
+        record = records.get(device_id)
+        complete = isinstance(record, dict)
+        if complete:
+            for name in names:
+                if name not in record or not _v3_value_matches(record[name], resolved['fields'][name]):
+                    complete = False
+                    break
+        if not complete:
+            dropped.append(device_id)
+            continue
+        accepted.append(device_id)
+        for name in names:
+            snapshot[name] = record[name]
+    return {'snapshot': snapshot, 'acceptedDevices': accepted, 'droppedDevices': dropped}
+
+
+def _v3_evaluate_program(program, values):
+    stack = []
+    for kind, value in program:
+        if kind == 'number':
+            stack.append(value)
+        elif kind == 'field':
+            current = values.get(value)
+            if not _v3_number(current):
+                return None
+            stack.append(current)
+        elif kind == 'operator':
+            if value == 'neg' and stack:
+                stack[-1] = -stack[-1]
+            elif len(stack) >= 2:
+                right, left = stack.pop(), stack.pop()
+                if value == '+': stack.append(left + right)
+                elif value == '-': stack.append(left - right)
+                elif value == '*': stack.append(left * right)
+                elif value == '/' and right != 0: stack.append(left / right)
+                else: return None
+            else:
+                return None
+        else:
+            return None
+    return stack[0] if len(stack) == 1 and _v3_number(stack[0]) else None
+
+
+def _v3_apply_calculations(resolved, snapshot):
+    values = dict(snapshot)
+    for calculation in resolved['package']['calculatedFields']:
+        if calculation.get('kind') == 'expression':
+            values[calculation['output']['systemName']] = _v3_evaluate_program(
+                calculation['program'], values)
+        else:
+            for output in calculation.get('outputs', []):
+                values[output['systemName']] = None
+    return values
+
+
+def _v3_new_event_state(event_id):
+    return {'eventId': event_id, 'active': False, 'openCount': 0,
+            'openElapsedMs': 0, 'openLastEvidenceMs': None, 'closeCount': 0,
+            'closeElapsedMs': 0, 'closeLastEvidenceMs': None,
+            'eventInstanceId': None}
+
+
+def _v3_advance_qualification(state, prefix, evidence, now_ms):
+    count_name, elapsed_name = prefix + 'Count', prefix + 'ElapsedMs'
+    last_name = prefix + 'LastEvidenceMs'
+    if evidence is None:
+        state[last_name] = None
+        return
+    if evidence is False:
+        state[count_name], state[elapsed_name], state[last_name] = 0, 0, None
+        return
+    if state[count_name] == 0:
+        state[count_name], state[elapsed_name] = 1, 0
+    else:
+        last = state.get(last_name)
+        if isinstance(last, int):
+            elapsed = time.ticks_diff(now_ms, last)
+            if elapsed > 0:
+                state[elapsed_name] += elapsed
+        state[count_name] += 1
+    state[last_name] = now_ms
+
+
+def _v3_is_qualified(state, prefix, condition):
+    return (state[prefix + 'Count'] >= condition['observationCount'] and
+            state[prefix + 'ElapsedMs'] >= int(condition['minimumSeconds'] * 1000))
+
+
+def _v3_phase_assignments(phase, snapshot):
+    """Evaluate every guard against one unchanged transition snapshot."""
+    guarded = []
+    for group in phase['guardedGroups']:
+        guarded.append(_v3_condition_value(group['guard'], snapshot))
+    selected = list(phase['assignments'])
+    for index, group in enumerate(phase['guardedGroups']):
+        if guarded[index] is True:
+            selected.extend(group['assignments'])
+    return selected
+
+
+def _v3_clone_kernel(kernel):
+    return {
+        'resolved': kernel['resolved'],
+        'board': {key: dict(value) for key, value in kernel['board'].items()},
+        'owners': {target: dict(members) for target, members in kernel['owners'].items()},
+        'monitorOwners': dict(kernel['monitorOwners']),
+        'instanceSequence': kernel.get('instanceSequence', 0),
+        'pumpInhibitDesired': kernel.get('pumpInhibitDesired') is True,
+        'pumpMonitorSuspended': kernel.get('pumpMonitorSuspended') is True,
+    }
+
+
+def new_v3_kernel(package):
+    resolved = package if isinstance(package, dict) and package.get('resolvedV3') else resolve_v3_package(package)
+    return {'resolved': resolved, 'board': {}, 'owners': {}, 'monitorOwners': {},
+            'instanceSequence': 0,
+            # A fresh session has not selected a Tab5 inhibit, so it must never
+            # manufacture a blind enable merely because no owner exists.
+            'pumpInhibitDesired': False, 'pumpMonitorSuspended': False}
+
+
+def _v3_add_open_ownership(kernel, event, state, snapshot, selected):
+    instance_id = state['eventInstanceId']
+    if event['eventClass'] == 'monitor':
+        kernel['monitorOwners'][instance_id] = event['id']
+    for assignment in _v3_phase_assignments(event['onOpen'], snapshot):
+        if assignment['ownership'] == 'whileOpen':
+            kernel['owners'].setdefault(assignment['target'], {})[instance_id] = assignment['value']
+        else:
+            selected.append(dict(assignment))
+
+
+def _v3_remove_ownership(kernel, event, state, snapshot, selected):
+    instance_id = state.get('eventInstanceId')
+    kernel['monitorOwners'].pop(instance_id, None)
+    for target in list(kernel['owners']):
+        kernel['owners'][target].pop(instance_id, None)
+        if not kernel['owners'][target]:
+            del kernel['owners'][target]
+    for assignment in _v3_phase_assignments(event['onClose'], snapshot):
+        selected.append(dict(assignment))
+
+
+def _v3_shelly_enable_allowed(resolved, acceptance, snapshot):
+    target = resolved.get('pumpTarget')
+    device_id = resolved.get('writableDevices', {}).get(target)
+    lock_field = resolved.get('deviceObjects', {}).get(device_id, {}).get('UDF(IsLocked)')
+    return (target is not None and device_id in acceptance['acceptedDevices'] and
+            isinstance(lock_field, dict) and snapshot.get(lock_field['systemName']) == 0)
+
+
+def _v3_reconcile_effective_targets(kernel, acceptance, snapshot):
+    assignments = []
+    monitor = bool(kernel['monitorOwners'])
+    pump_target = kernel['resolved'].get('pumpTarget')
+    pump_owners = kernel['owners'].get(pump_target, {}) if pump_target else {}
+    if monitor:
+        if kernel['pumpInhibitDesired'] and _v3_shelly_enable_allowed(
+                kernel['resolved'], acceptance, snapshot):
+            assignments.append({'target': pump_target, 'value': True,
+                                'reason': 'monitor_suspend_safe_release'})
+            kernel['pumpInhibitDesired'] = False
+            kernel['pumpMonitorSuspended'] = True
+        return monitor, assignments
+    if pump_owners:
+        # Disable is selectable without a current Shelly record.  Repeating it
+        # after a Shelly-local timed re-enable is intentional reconciliation.
+        assignments.append({'target': pump_target, 'value': False,
+                            'reason': 'active_inhibit_owner'})
+        kernel['pumpInhibitDesired'] = True
+        kernel['pumpMonitorSuspended'] = False
+    elif kernel['pumpInhibitDesired']:
+        # A release remains pending across a dropped/locked Shelly sample.
+        if _v3_shelly_enable_allowed(kernel['resolved'], acceptance, snapshot):
+            assignments.append({'target': pump_target, 'value': True,
+                                'reason': 'final_inhibit_release'})
+            kernel['pumpInhibitDesired'] = False
+            kernel['pumpMonitorSuspended'] = False
+    for target, owners in kernel['owners'].items():
+        if target != pump_target and owners:
+            assignments.append({'target': target, 'value': next(iter(owners.values())),
+                                'reason': 'active_owner'})
+    return monitor, assignments
+
+
+def v3_kernel_step(kernel, records, now_ms, commands=None):
+    """Pure one-cycle V3 selection: no device, network, queue, or HMI calls."""
+    if (not isinstance(kernel, dict) or not isinstance(kernel.get('resolved'), dict) or
+            not isinstance(now_ms, int) or isinstance(now_ms, bool)):
+        raise ValueError('invalid V3 kernel input')
+    next_kernel = _v3_clone_kernel(kernel)
+    acceptance = v3_accept_device_records(next_kernel['resolved'], records)
+    snapshot = _v3_apply_calculations(next_kernel['resolved'], acceptance['snapshot'])
+    commands = commands if isinstance(commands, dict) else {}
+    manual = commands.get('manualRequests', [])
+    internal = commands.get('internalOccurrences', [])
+    manual = manual if isinstance(manual, list) else []
+    internal = internal if isinstance(internal, list) else []
+    clear_events = commands.get('clearEvents') is True
+    normal_request = commands.get('normal') is True
+    transitions, transition_assignments = [], []
+    next_board = {}
+    for event in next_kernel['resolved']['events']:
+        event_id = event['id']
+        state = dict(next_kernel['board'].get(event_id, _v3_new_event_state(event_id)))
+        trigger = event['opening']['trigger']
+        trigger_type = trigger['type']
+        if trigger_type == 'condition':
+            opening_evidence = _v3_condition_value(trigger['condition'], snapshot)
+            qualifier = trigger['condition']
+        elif trigger_type == 'manual':
+            opening_evidence = trigger['request'] in manual
+            qualifier = trigger['qualification']
+        else:
+            opening_evidence = trigger['occurrence'] in internal
+            qualifier = trigger['qualification']
+        if event.get('enabled') is not True:
+            if state.get('active'):
+                _v3_remove_ownership(next_kernel, event, state, snapshot, transition_assignments)
+                transitions.append({'type': 'close', 'reason': 'rules_disabled', 'eventId': event_id,
+                                    'eventInstanceId': state['eventInstanceId']})
+            next_board[event_id] = _v3_new_event_state(event_id)
+            continue
+        if not state.get('active'):
+            _v3_advance_qualification(state, 'open', opening_evidence, now_ms)
+            if opening_evidence is True and _v3_is_qualified(state, 'open', qualifier):
+                state['active'] = True
+                next_kernel['instanceSequence'] += 1
+                state['eventInstanceId'] = 'v3-instance-' + str(next_kernel['instanceSequence'])
+                state['closeCount'], state['closeElapsedMs'], state['closeLastEvidenceMs'] = 0, 0, None
+                _v3_add_open_ownership(next_kernel, event, state, snapshot, transition_assignments)
+                transitions.append({'type': 'open', 'reason': 'opening_qualified', 'eventId': event_id,
+                                    'eventInstanceId': state['eventInstanceId']})
+                if event['closing']['policy'] == 'immediate':
+                    _v3_remove_ownership(next_kernel, event, state, snapshot, transition_assignments)
+                    transitions.append({'type': 'close', 'reason': 'immediate_policy', 'eventId': event_id,
+                                        'eventInstanceId': state['eventInstanceId']})
+                    state = _v3_new_event_state(event_id)
+            next_board[event_id] = state
+            continue
+        close = False
+        close_reason = None
+        if (normal_request and trigger_type == 'manual' and
+                trigger.get('request') == 'operatorMonitor'):
+            close, close_reason = True, 'normal_request'
+        elif clear_events and event['closing']['policy'] == 'clearEvents':
+            close, close_reason = True, 'clear_events'
+        elif event['closing']['policy'] == 'condition':
+            if trigger_type == 'condition' and opening_evidence is True:
+                _v3_advance_qualification(state, 'close', False, now_ms)
+            else:
+                close_evidence = (None if trigger_type == 'condition' and
+                                  opening_evidence is None else
+                                  _v3_condition_value(event['closing']['condition'], snapshot))
+                _v3_advance_qualification(state, 'close', close_evidence, now_ms)
+                if close_evidence is True and _v3_is_qualified(
+                        state, 'close', event['closing']['condition']):
+                    close, close_reason = True, 'closing_qualified'
+        if close:
+            _v3_remove_ownership(next_kernel, event, state, snapshot, transition_assignments)
+            transitions.append({'type': 'close', 'reason': close_reason, 'eventId': event_id,
+                                'eventInstanceId': state['eventInstanceId']})
+            state = _v3_new_event_state(event_id)
+        next_board[event_id] = state
+    next_kernel['board'] = next_board
+    monitor, effective_assignments = _v3_reconcile_effective_targets(
+        next_kernel, acceptance, snapshot)
+    if monitor:
+        # Monitor mode suppresses every selected protected pump-disable,
+        # including onOpen/onClose transition assignments. Ownership remains.
+        pump_target = next_kernel['resolved'].get('pumpTarget')
+        transition_assignments = [assignment for assignment in transition_assignments
+                                  if not (assignment.get('target') == pump_target and
+                                          assignment.get('value') is False)]
+    return next_kernel, {
+        'snapshot': snapshot, 'acceptedDevices': acceptance['acceptedDevices'],
+        'droppedDevices': acceptance['droppedDevices'], 'transitions': transitions,
+        'assignments': transition_assignments + effective_assignments,
+        'mode': 'Monitor' if monitor else 'Normal',
+    }
 
 
 def new_rule_event_state(rule_id):
