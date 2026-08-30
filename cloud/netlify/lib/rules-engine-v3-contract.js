@@ -231,6 +231,7 @@ function validateEvents(events, fields, writable, errors) {
   const ids = new Set();
   const names = new Set();
   const held = new Map();
+  const openTransitions = [];
   const closeAssignments = [];
   events.forEach((event, index) => {
     const path = `events[${index}]`;
@@ -260,7 +261,12 @@ function validateEvents(events, fields, writable, errors) {
       if (existing && !equalValue(existing.value, assignment.value)) errors.push(issue(assignment.path, "ownership_value_conflict", `${assignment.target} has incompatible whileOpen ownership values.`));
       else held.set(assignment.target, assignment);
     });
+    openTransitions.push(...onOpen.filter(assignment => assignment.ownership === "transition"));
     closeAssignments.push(...onClose);
+  });
+  openTransitions.forEach(assignment => {
+    const heldAssignment = held.get(assignment.target);
+    if (heldAssignment && !equalValue(heldAssignment.value, assignment.value)) errors.push(issue(assignment.path, "transition_assignment_conflicts_with_ownership", `${assignment.target} has incompatible transition and whileOpen values.`));
   });
   closeAssignments.forEach(assignment => {
     if (held.has(assignment.target)) errors.push(issue(assignment.path, "close_assignment_conflicts_with_ownership", `${assignment.target} is released through ownership and cannot also be explicitly assigned on close.`));

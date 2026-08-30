@@ -52,6 +52,25 @@ test("V3 fixture compiles deterministically with explicit lifecycle and adoption
   assert.equal(first.runtimePackage.events[4].closing.policy, "immediate");
 });
 
+test("V3 source-health fixture represents a dropped poll as an internal occurrence, not false availability", () => {
+  const draft = fixture();
+  const sourceMonitor = draft.events.find(event => event.id === "H001");
+  assert.deepEqual(sourceMonitor.opening.trigger, {
+    type: "internal",
+    occurrence: "shellyEmUnavailable",
+    qualification: { observationCount: 1, minimumSeconds: 0 }
+  });
+  assert.equal(sourceMonitor.opening.trigger.condition, undefined);
+  assert.deepEqual(sourceMonitor.closing.condition.clauses, [
+    { field: "ShellyEMAvailable", operator: "eq", value: true }
+  ]);
+  const shellyFields = draft.devices.find(device => device.id === "shelly-1-main").fields;
+  assert.deepEqual(shellyFields.find(field => field.object === "UDF(IsLocked)"), {
+    systemName: "IsLocked", label: "Shelly script lock remaining", object: "UDF(IsLocked)",
+    type: "integer", unit: "s", access: "read", logging: { mode: "delta", threshold: 10 }
+  });
+});
+
 test("V3 preserves condition structure and rejects invalid field references and typed values", () => {
   const draft = fixture();
   draft.events[0].opening.trigger.condition.clauses[0].field = "NoSuchField";
@@ -96,14 +115,23 @@ test("V3 rejects unsupported class and close-policy combinations", () => {
   assert.ok(codes(result).includes("immediate_condition_event"));
 });
 
-test("V3 ownership is target-specific and rejects incompatible held values or explicit release writes", () => {
+test("V3 ownership is target-specific and rejects incompatible held, transition, or explicit release writes", () => {
   const draft = fixture();
   draft.events[1].onOpen.assignments[0].value = true;
+  draft.events[2].onOpen.assignments.push({ target: "PumpEnable", value: true, ownership: "transition" });
   draft.events[0].onClose.assignments.push({ target: "PumpEnable", value: false, ownership: "transition" });
   const result = validateAndCompileV3(draft);
   assert.equal(result.valid, false);
   assert.ok(codes(result).includes("ownership_value_conflict"));
+  assert.ok(codes(result).includes("transition_assignment_conflicts_with_ownership"));
   assert.ok(codes(result).includes("close_assignment_conflicts_with_ownership"));
+});
+
+test("V3 permits a compatible opening transition assignment to a held target", () => {
+  const draft = fixture();
+  draft.events[2].onOpen.assignments.push({ target: "PumpEnable", value: false, ownership: "transition" });
+  const result = validateAndCompileV3(draft);
+  assert.equal(result.valid, true);
 });
 
 test("V3 compiler and adopter reject closed nested base shapes", () => {

@@ -25,6 +25,7 @@
       "enabled": true,
       "fields": [
         { "systemName": "PumpEnable", "label": "Pump enable", "object": "RLY(0)", "type": "boolean", "unit": null, "access": "readWrite", "logging": { "mode": "change" }, "write": { "method": "Switch.Set", "parameters": { "id": 0, "valueParameter": "on" }, "normalValue": true } },
+        { "systemName": "IsLocked", "label": "Shelly script lock remaining", "object": "UDF(IsLocked)", "type": "integer", "unit": "s", "access": "read", "logging": { "mode": "delta", "threshold": 10 } },
         { "systemName": "Shelly1Available", "label": "Shelly 1 available", "object": "$availability", "type": "boolean", "unit": null, "access": "read", "logging": { "mode": "change" } }
       ]
     }
@@ -62,7 +63,7 @@
       "severity": "Red",
       "enabled": true,
       "eventClass": "monitor",
-      "opening": { "trigger": { "type": "condition", "condition": { "mode": "all", "clauses": [{ "field": "ShellyEMAvailable", "operator": "eq", "value": false }], "observationCount": 1, "minimumSeconds": 0 } } },
+      "opening": { "trigger": { "type": "internal", "occurrence": "shellyEmUnavailable", "qualification": { "observationCount": 1, "minimumSeconds": 0 } } },
       "closing": { "policy": "condition", "condition": { "mode": "all", "clauses": [{ "field": "ShellyEMAvailable", "operator": "eq", "value": true }], "observationCount": 1, "minimumSeconds": 0 } },
       "onOpen": { "assignments": [], "guardedGroups": [] },
       "onClose": { "assignments": [], "guardedGroups": [] }
