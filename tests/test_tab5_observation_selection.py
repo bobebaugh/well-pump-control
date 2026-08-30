@@ -62,6 +62,30 @@ FUNCTIONS = {
     "validate_runtime_release",
     "load_runtime_package",
     "adopt_runtime_release",
+    "_v3_closed",
+    "_v3_number",
+    "_v3_integer",
+    "_v3_name",
+    "_v3_id",
+    "_v3_scalar",
+    "_v3_logging",
+    "_v3_typed_value",
+    "_v3_enum_values",
+    "_v3_field",
+    "_v3_output",
+    "_v3_system_field",
+    "_v3_clause",
+    "_v3_condition",
+    "_v3_phase",
+    "_v3_dependencies_acyclic",
+    "_rules_v3_package_valid",
+    "_check_rules_v3_pointer",
+    "validate_rules_v3_pointer",
+    "rules_v3_pointer_rejection_reason",
+    "validate_rules_v3_staged_release",
+    "load_rules_v3_staged_package",
+    "stage_rules_v3_release",
+    "rules_v3_state_report",
 }
 CONSTANTS = {
     "SITE_ID",
@@ -92,6 +116,11 @@ CONSTANTS = {
     "RUNTIME_SCHEMA_VERSION",
     "RUNTIME_DIRECT_BINDINGS",
     "RUNTIME_OBJECT_PATHS",
+    "RULES_V3_STAGED_FILE",
+    "RULES_V3_STAGED_TEMP_FILE",
+    "RULES_V3_SCHEMA_VERSION",
+    "RULES_V3_POINTER_KIND",
+    "RULES_V3_PACKAGE_KIND",
 }
 
 
@@ -639,6 +668,155 @@ class ObservationSelectionTests(unittest.TestCase):
             self.logic["runtime_pointer_key_summary"](None),
             "not-an-object",
         )
+
+    def v3_runtime_body(self, release_id="20260830000000-event-v3-v1", version=1):
+        return json.dumps({
+            "schemaVersion": 3, "kind": "well-pump-event-runtime-v3",
+            "releaseId": release_id, "packageVersion": version,
+            "adoption": {"runtimeSchemaVersion": 3, "legacyPackagePolicy": "reject"},
+            "lifecycle": {"qualification": {"observationCount": "consecutive",
+                          "minimumSeconds": "continuous", "countAndTimeBothRequired": True,
+                          "missingEvidence": "freezes_qualification"},
+                          "ownership": "event_instance_set",
+                          "monitor": {"resource": "declared_operating_mode"}},
+            "devices": [{"id": "tab5-main", "driver": "tab5-runtime", "address": "local",
+                         "enabled": True, "fields": [{"systemName": "PumpWatts", "type": "number",
+                         "unit": "W", "logging": {"mode": "delta", "threshold": 10},
+                         "object": "values.power", "access": "read"}]}],
+            "calculations": [],
+            "systemFields": [{"id": "system-operating-mode", "systemName": "OperatingMode",
+                              "label": "Operating mode", "source": "session",
+                              "runtimeRole": "operatingMode", "type": "enum", "unit": None,
+                              "enumValues": ["Normal", "Monitor"], "initialValue": "Normal",
+                              "logging": {"mode": "change"}, "assignmentTarget": True}],
+            "events": [],
+        }, separators=(",", ":"))
+
+    def v3_pointer(self, raw, release_id="20260830000000-event-v3-v1", version=1):
+        return {
+            "schemaVersion": 3, "kind": "well-pump-event-v3-staging-pointer",
+            "siteId": "well-main", "releaseId": release_id, "packageVersion": version,
+            "runtimeSchemaVersion": 3, "contentHash": self.logic["_sha256_hex"](raw),
+            "hashAlgorithm": "sha256", "byteLength": len(raw.encode("utf-8")),
+            "publishedAtMs": 1788048000000,
+            "downloadPath": "/.netlify/functions/rules-engine-release?version=3&releaseId=" + release_id,
+            "executionEnabled": False,
+        }
+
+    def test_v3_staging_requires_exact_pointer_bytes_identity_and_disabled_execution(self):
+        raw = self.v3_runtime_body()
+        pointer = self.v3_pointer(raw)
+        checked, reason = self.logic["validate_rules_v3_staged_release"](raw, pointer)
+        self.assertIsNone(reason)
+        self.assertFalse(checked["reference"]["executionEnabled"])
+        pointer["executionEnabled"] = True
+        self.assertIsNone(self.logic["validate_rules_v3_pointer"](pointer))
+        pointer = self.v3_pointer(raw)
+        pointer["extra"] = False
+        self.assertEqual(self.logic["rules_v3_pointer_rejection_reason"](pointer), "pointer-closure")
+        pointer = self.v3_pointer(raw)
+        pointer["byteLength"] += 1
+        self.assertEqual(
+            self.logic["validate_rules_v3_staged_release"](raw, pointer)[1],
+            "release-integrity-mismatch")
+
+    def test_v3_staging_rejects_closed_schema_unknown_reference_and_bad_bounds(self):
+        raw = json.loads(self.v3_runtime_body())
+        raw["unexpected"] = True
+        raw_text = json.dumps(raw, separators=(",", ":"))
+        self.assertEqual(
+            self.logic["validate_rules_v3_staged_release"](raw_text, self.v3_pointer(raw_text))[1],
+            "release-runtime-unsupported")
+        raw = json.loads(self.v3_runtime_body())
+        raw["devices"][0]["fields"] *= 33
+        raw_text = json.dumps(raw, separators=(",", ":"))
+        self.assertEqual(
+            self.logic["validate_rules_v3_staged_release"](raw_text, self.v3_pointer(raw_text))[1],
+            "release-runtime-unsupported")
+        raw = json.loads(self.v3_runtime_body())
+        raw["calculations"] = [{
+            "id": "calc-self", "kind": "expression", "expression": "SelfValue",
+            "program": [["field", "SelfValue"]],
+            "output": {"systemName": "SelfValue", "type": "number", "unit": None,
+                       "logging": {"mode": "none"}},
+        }]
+        raw_text = json.dumps(raw, separators=(",", ":"))
+        self.assertEqual(
+            self.logic["validate_rules_v3_staged_release"](raw_text, self.v3_pointer(raw_text))[1],
+            "release-runtime-unsupported")
+        raw = json.loads(self.v3_runtime_body())
+        raw["events"] = [{
+            "id": "E001", "systemName": "BadReference", "displayName": "Bad reference",
+            "severity": "Info", "enabled": False, "eventClass": "transient",
+            "opening": {"trigger": {"type": "condition", "condition": {"mode": "all",
+                "clauses": [{"field": "Unknown", "operator": "eq", "value": True}],
+                "observationCount": 1, "minimumSeconds": 0}}},
+            "closing": {"policy": "immediate"},
+            "onOpen": {"assignments": [], "guardedGroups": []},
+            "onClose": {"assignments": [], "guardedGroups": []},
+            "summary": {"durationOutput": None, "aggregates": []},
+        }]
+        raw_text = json.dumps(raw, separators=(",", ":"))
+        self.assertEqual(
+            self.logic["validate_rules_v3_staged_release"](raw_text, self.v3_pointer(raw_text))[1],
+            "release-runtime-unsupported")
+
+    def test_v3_staging_is_atomic_and_reloads_offline_without_v2_state(self):
+        raw = self.v3_runtime_body()
+        pointer = self.v3_pointer(raw)
+        with tempfile.TemporaryDirectory() as directory:
+            v2_path = pathlib.Path(directory) / "rules-runtime-v2.json"
+            staged_path = pathlib.Path(directory) / "rules-runtime-v3-staged.json"
+            temporary_path = pathlib.Path(directory) / ".rules-runtime-v3-staged.download"
+            v2_path.write_text("v2-unchanged", encoding="utf-8")
+            staged, outcome = self.logic["stage_rules_v3_release"](
+                {"metadata": pointer, "release": raw}, None,
+                str(staged_path), str(temporary_path))
+            self.assertEqual(outcome, "staged")
+            self.assertEqual(staged_path.read_text(encoding="utf-8"), raw)
+            self.assertEqual(v2_path.read_text(encoding="utf-8"), "v2-unchanged")
+            reloaded, reason = self.logic["load_rules_v3_staged_package"](str(staged_path))
+            self.assertIsNone(reason)
+            self.assertEqual(reloaded["reference"], staged["reference"])
+            rejected, reason = self.logic["stage_rules_v3_release"](
+                {"metadata": pointer, "release": raw + " "}, staged["reference"],
+                str(staged_path), str(temporary_path))
+            self.assertIsNone(rejected)
+            self.assertEqual(reason, "release-integrity-mismatch")
+            self.assertEqual(staged_path.read_text(encoding="utf-8"), raw)
+
+    def test_exact_checkpoint1_v3_fixture_validates_stages_and_reloads(self):
+        fixture = (PILOT_PATH.parent.parent / "tests" / "fixtures" /
+                   "rules-runtime-package-v3-checkpoint1.json")
+        raw = fixture.read_text(encoding="utf-8")
+        self.assertEqual(
+            hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+            "f07d332e7566ec0b73d9ef97af243a33d157205fc7505f0d4c1b7cdfa5ede6b9")
+        pointer = self.v3_pointer(raw)
+        with tempfile.TemporaryDirectory() as directory:
+            staged_path = pathlib.Path(directory) / "rules-runtime-v3-staged.json"
+            temporary_path = pathlib.Path(directory) / ".rules-runtime-v3-staged.download"
+            staged, outcome = self.logic["stage_rules_v3_release"](
+                {"metadata": pointer, "release": raw}, None,
+                str(staged_path), str(temporary_path))
+            self.assertEqual(outcome, "staged")
+            self.assertFalse(staged["reference"]["executionEnabled"])
+            reloaded, reason = self.logic["load_rules_v3_staged_package"](str(staged_path))
+            self.assertIsNone(reason)
+            self.assertEqual(reloaded["reference"], staged["reference"])
+
+    def test_v3_state_is_separate_and_v3_validator_has_no_runtime_calls(self):
+        state = self.logic["rules_v3_state_report"](
+            {"releaseId": "desired"}, {"releaseId": "staged"}, {"reason": "bad"})
+        self.assertFalse(state["executionEnabled"])
+        self.assertEqual(state["desired"]["releaseId"], "desired")
+        source = PILOT_PATH.read_text(encoding="utf-8")
+        v3_block = source[source.index("def _v3_closed"):source.index("def _is_number")]
+        for forbidden in ("evaluate_runtime_", "advance_runtime_", "issue_runtime_stop",
+                          "runtime_direct_field_values", "cloud."):
+            self.assertNotIn(forbidden, v3_block)
+        self.assertIn("RULES_RUNTIME_FILE = 'rules-runtime-v2.json'", source)
+        self.assertIn("RULES_V3_STAGED_FILE = 'rules-runtime-v3-staged.json'", source)
 
     def assert_m4_durable_observation_contract(self, record):
         """Check the deployed M4 validator invariants used by Tab5."""

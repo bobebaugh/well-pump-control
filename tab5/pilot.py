@@ -1,4 +1,4 @@
-# Release: 2026-08-28 M6.27 — use verified Shelly RPC transport for STOP-only rules.
+# Release: 2026-08-30 M6.28 — validate and stage V3 packages without execution.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -85,11 +85,16 @@ MATERIAL_CHANGE_LABELS = {
 }
 RULES_RUNTIME_FILE = 'rules-runtime-v2.json'
 RULES_RUNTIME_TEMP_FILE = '.rules-runtime-v2.download'
+RULES_V3_STAGED_FILE = 'rules-runtime-v3-staged.json'
+RULES_V3_STAGED_TEMP_FILE = '.rules-runtime-v3-staged.download'
 RULES_FETCH_RETRY_MS = 60000
 MAX_RULES_RELEASE_BYTES = 65536
 RUNTIME_PACKAGE_KIND = 'well-pump-parameter-runtime'
 RUNTIME_POINTER_KIND = 'well-pump-runtime-release-pointer'
 RUNTIME_SCHEMA_VERSION = 2
+RULES_V3_SCHEMA_VERSION = 3
+RULES_V3_POINTER_KIND = 'well-pump-event-v3-staging-pointer'
+RULES_V3_PACKAGE_KIND = 'well-pump-event-runtime-v3'
 RUNTIME_DIRECT_BINDINGS = {
     'shelly-gen1-em': {
         'emeter/0.power': ('number', 'W', 'read'),
@@ -1535,6 +1540,552 @@ def adopt_runtime_release(candidate, active_reference,
     return checked, 'adopted'
 
 
+# V3 Gate 1 is intentionally a closed-schema staging validator, not a
+# semantic runtime.  It must remain independent of every V2 evaluator and
+# device adapter until a later reviewed work unit explicitly connects one.
+def _v3_closed(value, required, allowed=None):
+    if not isinstance(value, dict):
+        return False
+    keys = set(value.keys())
+    allowed = set(required if allowed is None else allowed)
+    return set(required).issubset(keys) and keys.issubset(allowed)
+
+
+def _v3_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _v3_integer(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _v3_name(value):
+    if not isinstance(value, str) or len(value) < 2 or len(value) > 64:
+        return False
+    if not (('A' <= value[0] <= 'Z') or ('a' <= value[0] <= 'z')):
+        return False
+    return all(('A' <= char <= 'Z') or ('a' <= char <= 'z') or
+               ('0' <= char <= '9') or char == '_' for char in value[1:])
+
+
+def _v3_id(value):
+    if not isinstance(value, str) or len(value) < 2 or len(value) > 64:
+        return False
+    return all(('A' <= char <= 'Z') or ('a' <= char <= 'z') or
+               ('0' <= char <= '9') or char in '_-' for char in value)
+
+
+def _v3_scalar(value):
+    return value is None or isinstance(value, (str, bool)) or _v3_number(value)
+
+
+def _v3_logging(value):
+    if not isinstance(value, dict):
+        return False
+    if value.get('mode') == 'delta':
+        return (_v3_closed(value, ('mode', 'threshold')) and
+                _v3_number(value.get('threshold')) and value['threshold'] > 0)
+    return (_v3_closed(value, ('mode',)) and
+            value.get('mode') in ('none', 'change', 'always'))
+
+
+def _v3_typed_value(value, field_type, enum_values=None):
+    if field_type == 'number':
+        return _v3_number(value)
+    if field_type == 'integer':
+        return _v3_integer(value)
+    if field_type == 'boolean':
+        return isinstance(value, bool)
+    if field_type == 'enum':
+        return isinstance(value, str) and isinstance(enum_values, list) and value in enum_values
+    if field_type == 'signal':
+        return value is None
+    return False
+
+
+def _v3_enum_values(value):
+    return (isinstance(value, list) and 2 <= len(value) <= 32 and
+            all(isinstance(item, str) and item for item in value) and
+            len(set(value)) == len(value))
+
+
+def _v3_field(value):
+    required = ('systemName', 'type', 'unit', 'logging', 'object', 'access')
+    if not _v3_closed(value, required, required + ('enumValues', 'write')):
+        return None
+    field_type = value.get('type')
+    if (not _v3_name(value.get('systemName')) or field_type not in
+            ('number', 'integer', 'boolean', 'enum', 'signal') or
+            not isinstance(value.get('unit'), (str, type(None))) or
+            not _v3_logging(value.get('logging')) or
+            not isinstance(value.get('object'), str) or not value['object'] or
+            len(value['object']) > 128 or value.get('access') not in ('read', 'readWrite')):
+        return None
+    enums = value.get('enumValues')
+    if field_type == 'enum':
+        if not _v3_enum_values(enums):
+            return None
+    elif enums is not None:
+        return None
+    write = value.get('write')
+    if value['access'] == 'readWrite':
+        if (not _v3_closed(write, ('method', 'parameters', 'normalValue')) or
+                not isinstance(write.get('method'), str) or not write['method'] or
+                not _v3_closed(write.get('parameters'), ('id', 'valueParameter')) or
+                not _v3_integer(write['parameters'].get('id')) or
+                not 0 <= write['parameters']['id'] <= 255 or
+                not _v3_name(write['parameters'].get('valueParameter')) or
+                not _v3_typed_value(write.get('normalValue'), field_type, enums)):
+            return None
+    elif write is not None:
+        return None
+    return {'type': field_type, 'enumValues': enums, 'assignmentTarget': value['access'] == 'readWrite'}
+
+
+def _v3_output(value):
+    required = ('systemName', 'type', 'unit', 'logging')
+    if not _v3_closed(value, required, required + ('enumValues',)):
+        return None
+    field_type = value.get('type')
+    enums = value.get('enumValues')
+    if (not _v3_name(value.get('systemName')) or
+            field_type not in ('number', 'integer', 'boolean', 'enum', 'signal') or
+            not isinstance(value.get('unit'), (str, type(None))) or
+            not _v3_logging(value.get('logging'))):
+        return None
+    if field_type == 'enum':
+        if not _v3_enum_values(enums):
+            return None
+    elif enums is not None:
+        return None
+    return {'type': field_type, 'enumValues': enums, 'assignmentTarget': False}
+
+
+def _v3_system_field(value):
+    common = ('id', 'systemName', 'label', 'source', 'runtimeRole', 'type', 'unit', 'logging')
+    if not _v3_closed(value, common, common + ('enumValues', 'initialValue',
+                                                'assignmentTarget', 'occurrenceKey')):
+        return None
+    if (not _v3_id(value.get('id')) or not _v3_name(value.get('systemName')) or
+            not isinstance(value.get('label'), str) or not value['label'] or
+            not isinstance(value.get('unit'), (str, type(None))) or
+            not _v3_logging(value.get('logging'))):
+        return None
+    role = value.get('runtimeRole')
+    if role == 'operatingMode':
+        exact = common + ('enumValues', 'initialValue', 'assignmentTarget')
+        if (not _v3_closed(value, exact) or value.get('source') != 'session' or
+                value.get('type') != 'enum' or value.get('enumValues') != ['Normal', 'Monitor'] or
+                value.get('initialValue') != 'Normal' or value.get('assignmentTarget') is not True):
+            return None
+    elif role == 'working':
+        exact = common + ('initialValue', 'assignmentTarget')
+        if value.get('type') == 'enum':
+            exact += ('enumValues',)
+        if (not _v3_closed(value, exact) or value.get('source') != 'session' or
+                value.get('type') not in ('number', 'integer', 'boolean', 'enum') or
+                not isinstance(value.get('assignmentTarget'), bool) or
+                not _v3_typed_value(value.get('initialValue'), value.get('type'),
+                                    value.get('enumValues'))):
+            return None
+        if value.get('type') == 'enum' and not _v3_enum_values(value.get('enumValues')):
+            return None
+    elif role == 'occurrence':
+        exact = common + ('occurrenceKey',)
+        if (not _v3_closed(value, exact) or value.get('source') not in
+                ('manualOccurrence', 'internalOccurrence') or value.get('type') != 'signal' or
+                not _v3_name(value.get('occurrenceKey'))):
+            return None
+    else:
+        return None
+    return {'type': value['type'], 'enumValues': value.get('enumValues'),
+            'assignmentTarget': value.get('assignmentTarget') is True,
+            'role': role, 'source': value['source']}
+
+
+def _v3_clause(value, fields):
+    if not _v3_closed(value, ('field', 'operator', 'value')):
+        return False
+    field = fields.get(value.get('field'))
+    operator = value.get('operator')
+    if field is None or operator not in ('lt', 'lte', 'gt', 'gte', 'eq', 'neq',
+                                         'between', 'outside', 'changes',
+                                         'changes_from', 'changes_to', 'occurs'):
+        return False
+    field_type = field['type']
+    compared = value.get('value')
+    if operator in ('lt', 'lte', 'gt', 'gte'):
+        return field_type in ('number', 'integer') and _v3_number(compared)
+    if operator in ('between', 'outside'):
+        return (field_type in ('number', 'integer') and isinstance(compared, list) and
+                len(compared) == 2 and all(_v3_number(item) for item in compared))
+    if operator == 'occurs':
+        return field_type == 'signal' and compared is None
+    return _v3_typed_value(compared, field_type, field.get('enumValues'))
+
+
+def _v3_condition(value, fields, qualified):
+    required = ('mode', 'clauses') + (('observationCount', 'minimumSeconds') if qualified else ())
+    if not _v3_closed(value, required):
+        return False
+    clauses = value.get('clauses')
+    if (value.get('mode') not in ('all', 'any') or not isinstance(clauses, list) or
+            not 1 <= len(clauses) <= 16 or not all(_v3_clause(item, fields) for item in clauses)):
+        return False
+    if qualified:
+        return (_v3_integer(value.get('observationCount')) and
+                1 <= value['observationCount'] <= 86400 and _v3_number(value.get('minimumSeconds')) and
+                0 <= value['minimumSeconds'] <= 86400)
+    return True
+
+
+def _v3_phase(value, fields, event_class, close_phase):
+    if not _v3_closed(value, ('assignments', 'guardedGroups')):
+        return False
+    assignments = value.get('assignments')
+    groups = value.get('guardedGroups')
+    if (not isinstance(assignments, list) or len(assignments) > 32 or
+            not isinstance(groups, list) or len(groups) > 16):
+        return False
+    all_assignments = list(assignments)
+    for group in groups:
+        if (not _v3_closed(group, ('guard', 'assignments')) or
+                not _v3_condition(group.get('guard'), fields, False) or
+                not isinstance(group.get('assignments'), list) or
+                not 1 <= len(group['assignments']) <= 32):
+            return False
+        all_assignments.extend(group['assignments'])
+    for assignment in all_assignments:
+        if not _v3_closed(assignment, ('target', 'value', 'ownership')):
+            return False
+        target = fields.get(assignment.get('target'))
+        if (target is None or target.get('assignmentTarget') is not True or
+                assignment.get('ownership') not in ('transition', 'whileOpen') or
+                not _v3_typed_value(assignment.get('value'), target['type'],
+                                    target.get('enumValues'))):
+            return False
+        if close_phase and assignment['ownership'] != 'transition':
+            return False
+        if target.get('role') == 'operatingMode':
+            if (event_class != 'monitor' or assignment['value'] != 'Monitor' or
+                    assignment['ownership'] != 'whileOpen'):
+                return False
+        elif event_class == 'monitor':
+            return False
+    return True
+
+
+def _v3_dependencies_acyclic(dependencies):
+    """Check declared calculated-name references without evaluating anything."""
+    visiting = set()
+    completed = set()
+
+    def visit(name):
+        if name in completed:
+            return True
+        if name in visiting:
+            return False
+        visiting.add(name)
+        for dependency in dependencies.get(name, ()):
+            if not visit(dependency):
+                return False
+        visiting.remove(name)
+        completed.add(name)
+        return True
+
+    return all(visit(name) for name in dependencies)
+
+
+def _rules_v3_package_valid(package):
+    root = ('schemaVersion', 'kind', 'releaseId', 'packageVersion', 'adoption',
+            'lifecycle', 'devices', 'calculations', 'systemFields', 'events')
+    if not _v3_closed(package, root):
+        return False
+    if (package.get('schemaVersion') != RULES_V3_SCHEMA_VERSION or
+            package.get('kind') != RULES_V3_PACKAGE_KIND or
+            not _v3_integer(package.get('packageVersion')) or package['packageVersion'] < 1 or
+            not isinstance(package.get('releaseId'), str) or
+            package['releaseId'] != '{}-event-v3-v{}'.format(
+                package['releaseId'][:14], package['packageVersion']) or
+            not package['releaseId'][:14].isdigit()):
+        return False
+    if (not _v3_closed(package.get('adoption'), ('runtimeSchemaVersion', 'legacyPackagePolicy')) or
+            package['adoption'].get('runtimeSchemaVersion') != 3 or
+            package['adoption'].get('legacyPackagePolicy') != 'reject'):
+        return False
+    lifecycle = package.get('lifecycle')
+    if (not _v3_closed(lifecycle, ('qualification', 'ownership', 'monitor')) or
+            lifecycle.get('ownership') != 'event_instance_set' or
+            not _v3_closed(lifecycle.get('qualification'),
+                           ('observationCount', 'minimumSeconds', 'countAndTimeBothRequired',
+                            'missingEvidence')) or
+            lifecycle['qualification'] != {'observationCount': 'consecutive',
+                                           'minimumSeconds': 'continuous',
+                                           'countAndTimeBothRequired': True,
+                                           'missingEvidence': 'freezes_qualification'} or
+            not _v3_closed(lifecycle.get('monitor'), ('resource',)) or
+            lifecycle['monitor'].get('resource') != 'declared_operating_mode'):
+        return False
+    devices = package.get('devices')
+    if not isinstance(devices, list) or not 1 <= len(devices) <= 16:
+        return False
+    fields = {}
+    ids = set()
+    for device in devices:
+        if (not _v3_closed(device, ('id', 'driver', 'address', 'enabled', 'fields')) or
+                not _v3_id(device.get('id')) or device['id'] in ids or
+                not isinstance(device.get('driver'), str) or not device['driver'] or
+                not isinstance(device.get('address'), str) or not device['address'] or
+                not isinstance(device.get('enabled'), bool) or
+                not isinstance(device.get('fields'), list) or not 1 <= len(device['fields']) <= 32):
+            return False
+        ids.add(device['id'])
+        for field in device['fields']:
+            checked = _v3_field(field)
+            if checked is None or field['systemName'] in fields:
+                return False
+            fields[field['systemName']] = checked
+    system_fields = package.get('systemFields')
+    if not isinstance(system_fields, list) or not 1 <= len(system_fields) <= 32:
+        return False
+    for field in system_fields:
+        checked = _v3_system_field(field)
+        if checked is None or field['systemName'] in fields:
+            return False
+        fields[field['systemName']] = checked
+    if not any(item.get('role') == 'operatingMode' for item in fields.values()):
+        return False
+    calculations = package.get('calculations')
+    if not isinstance(calculations, list) or len(calculations) > 64:
+        return False
+    calculation_ids = set()
+    calculated_output_owner = {}
+    for item in calculations:
+        if not isinstance(item, dict) or not _v3_id(item.get('id')) or item['id'] in calculation_ids:
+            return False
+        calculation_ids.add(item['id'])
+        outputs = ([item.get('output')] if item.get('kind') == 'expression'
+                   else item.get('outputs'))
+        if not isinstance(outputs, list):
+            outputs = [outputs]
+        for output in outputs:
+            checked = _v3_output(output)
+            if checked is None or output['systemName'] in fields:
+                return False
+            fields[output['systemName']] = checked
+            calculated_output_owner[output['systemName']] = item['id']
+    dependencies = {item['id']: set() for item in calculations}
+    for item in calculations:
+        if item.get('kind') == 'expression':
+            if (not _v3_closed(item, ('id', 'kind', 'expression', 'program', 'output')) or
+                    not isinstance(item.get('expression'), str) or len(item['expression']) > 512 or
+                    not isinstance(item.get('program'), list) or not item['program'] or len(item['program']) > 128):
+                return False
+            for token in item['program']:
+                if (not isinstance(token, list) or len(token) != 2 or token[0] not in
+                        ('number', 'field', 'operator') or
+                        (token[0] == 'number' and not _v3_number(token[1])) or
+                        (token[0] == 'field' and token[1] not in fields) or
+                        (token[0] == 'operator' and token[1] not in ('+', '-', '*', '/'))):
+                    return False
+                if token[0] == 'field' and token[1] in calculated_output_owner:
+                    dependencies[item['id']].add(calculated_output_owner[token[1]])
+        elif item.get('kind') == 'function':
+            required = ('id', 'kind', 'functionId', 'inputs', 'parameters', 'outputs')
+            if (not _v3_closed(item, required) or item.get('functionId') != 'boyle_tank' or
+                    not _v3_closed(item.get('inputs'), ('pressure',)) or
+                    item['inputs'].get('pressure') not in fields or
+                    not _v3_closed(item.get('parameters'),
+                                   ('effectiveTankGallons', 'prechargeGaugePsi',
+                                    'atmosphericPressurePsi', 'regressionWindowSeconds',
+                                    'minimumSamples')) or
+                    not all(_v3_number(value) for value in item['parameters'].values()) or
+                    not isinstance(item.get('outputs'), list) or len(item['outputs']) != 5):
+                return False
+            input_name = item['inputs']['pressure']
+            if input_name in calculated_output_owner:
+                dependencies[item['id']].add(calculated_output_owner[input_name])
+        else:
+            return False
+    if not _v3_dependencies_acyclic(dependencies):
+        return False
+    events = package.get('events')
+    if not isinstance(events, list) or len(events) > 64:
+        return False
+    event_ids = set()
+    event_names = set()
+    for event in events:
+        required = ('id', 'systemName', 'displayName', 'severity', 'enabled', 'eventClass',
+                    'opening', 'closing', 'onOpen', 'onClose', 'summary')
+        if (not _v3_closed(event, required) or not _v3_id(event.get('id')) or
+                event['id'] in event_ids or not _v3_name(event.get('systemName')) or
+                event['systemName'] in event_names or not isinstance(event.get('displayName'), str) or
+                not 1 <= len(event['displayName']) <= 160 or event.get('severity') not in
+                ('Info', 'Yellow', 'Red') or not isinstance(event.get('enabled'), bool) or
+                event.get('eventClass') not in ('transient', 'latched', 'monitor') or
+                not _v3_closed(event.get('opening'), ('trigger',))):
+            return False
+        event_ids.add(event['id'])
+        event_names.add(event['systemName'])
+        trigger = event['opening'].get('trigger')
+        if not isinstance(trigger, dict) or trigger.get('type') not in ('condition', 'manual', 'internal'):
+            return False
+        if trigger['type'] == 'condition':
+            if not _v3_closed(trigger, ('type', 'condition')) or not _v3_condition(trigger.get('condition'), fields, True):
+                return False
+        else:
+            if (not _v3_closed(trigger, ('type', 'occurrenceField', 'qualification')) or
+                    fields.get(trigger.get('occurrenceField'), {}).get('role') != 'occurrence' or
+                    fields[trigger['occurrenceField']].get('source') !=
+                    ('manualOccurrence' if trigger['type'] == 'manual' else 'internalOccurrence') or
+                    not _v3_closed(trigger.get('qualification'), ('observationCount', 'minimumSeconds')) or
+                    not _v3_integer(trigger['qualification'].get('observationCount')) or
+                    not 1 <= trigger['qualification']['observationCount'] <= 86400 or
+                    not _v3_number(trigger['qualification'].get('minimumSeconds')) or
+                    not 0 <= trigger['qualification']['minimumSeconds'] <= 86400):
+                return False
+        closing = event.get('closing')
+        if not isinstance(closing, dict) or closing.get('policy') not in ('condition', 'clearEvents', 'immediate'):
+            return False
+        if closing['policy'] == 'condition':
+            if not _v3_closed(closing, ('policy', 'condition')) or not _v3_condition(closing.get('condition'), fields, True):
+                return False
+        elif not _v3_closed(closing, ('policy',)):
+            return False
+        if ((event['eventClass'] == 'latched' and closing['policy'] != 'clearEvents') or
+                (event['eventClass'] == 'transient' and closing['policy'] not in ('condition', 'immediate')) or
+                (event['eventClass'] == 'monitor' and closing['policy'] not in ('condition', 'clearEvents')) or
+                not _v3_phase(event.get('onOpen'), fields, event['eventClass'], False) or
+                not _v3_phase(event.get('onClose'), fields, event['eventClass'], True)):
+            return False
+        summary = event.get('summary')
+        if not _v3_closed(summary, ('durationOutput', 'aggregates')) or not isinstance(summary.get('aggregates'), list) or len(summary['aggregates']) > 32:
+            return False
+        if summary['durationOutput'] is not None and _v3_output(summary['durationOutput']) is None:
+            return False
+        for aggregate in summary['aggregates']:
+            if (not _v3_closed(aggregate, ('source', 'operation', 'scale', 'output')) or
+                    aggregate.get('source') not in fields or aggregate.get('operation') not in
+                    ('start', 'end', 'delta', 'average', 'minimum', 'maximum') or
+                    not _v3_number(aggregate.get('scale')) or _v3_output(aggregate.get('output')) is None):
+                return False
+    return True
+
+
+def _check_rules_v3_pointer(pointer):
+    required = ('schemaVersion', 'kind', 'siteId', 'releaseId', 'packageVersion',
+                'runtimeSchemaVersion', 'contentHash', 'hashAlgorithm', 'byteLength',
+                'publishedAtMs', 'downloadPath', 'executionEnabled')
+    if not _v3_closed(pointer, required):
+        return None, 'pointer-closure'
+    version = pointer.get('packageVersion')
+    release_id = pointer.get('releaseId')
+    expected_path = '/.netlify/functions/rules-engine-release?version=3&releaseId={}'.format(release_id)
+    if (pointer.get('schemaVersion') != 3 or pointer.get('kind') != RULES_V3_POINTER_KIND or
+            pointer.get('siteId') != SITE_ID or not _v3_integer(version) or version < 1 or
+            not isinstance(release_id, str) or release_id != '{}-event-v3-v{}'.format(release_id[:14], version) or
+            not release_id[:14].isdigit() or pointer.get('runtimeSchemaVersion') != 3 or
+            not _valid_rules_hash(pointer.get('contentHash')) or pointer.get('hashAlgorithm') != 'sha256' or
+            not _v3_integer(pointer.get('byteLength')) or
+            not 1 <= pointer['byteLength'] <= MAX_RULES_RELEASE_BYTES or
+            not _v3_integer(pointer.get('publishedAtMs')) or pointer['publishedAtMs'] < 0 or
+            pointer.get('downloadPath') != expected_path or pointer.get('executionEnabled') is not False):
+        return None, 'pointer-invalid'
+    return dict(pointer), None
+
+
+def validate_rules_v3_pointer(pointer):
+    checked, _reason = _check_rules_v3_pointer(pointer)
+    return checked
+
+
+def rules_v3_pointer_rejection_reason(pointer):
+    _checked, reason = _check_rules_v3_pointer(pointer)
+    return reason
+
+
+def validate_rules_v3_staged_release(raw_release, pointer=None):
+    """Validate exact bytes and V3 schema only; do not create a runtime."""
+    if not isinstance(raw_release, str) or not raw_release:
+        return None, 'release-empty'
+    try:
+        byte_length = len(raw_release.encode('utf-8'))
+    except Exception:
+        return None, 'release-encoding'
+    if byte_length > MAX_RULES_RELEASE_BYTES:
+        return None, 'release-size'
+    content_hash = _sha256_hex(raw_release)
+    if content_hash is None:
+        return None, 'release-hash-unavailable'
+    normalized = validate_rules_v3_pointer(pointer) if pointer is not None else None
+    if pointer is not None and normalized is None:
+        return None, 'pointer-invalid'
+    if normalized is not None and (content_hash != normalized['contentHash'] or
+                                   byte_length != normalized['byteLength']):
+        return None, 'release-integrity-mismatch'
+    try:
+        package = ujson.loads(raw_release)
+    except Exception:
+        return None, 'release-json-invalid'
+    if not _rules_v3_package_valid(package):
+        return None, 'release-runtime-unsupported'
+    if normalized is not None and (package.get('releaseId') != normalized['releaseId'] or
+                                   package.get('packageVersion') != normalized['packageVersion']):
+        return None, 'release-pointer-mismatch'
+    reference = {'releaseId': package['releaseId'], 'packageVersion': package['packageVersion'],
+                 'runtimeSchemaVersion': 3, 'contentHash': content_hash,
+                 'executionEnabled': False}
+    return {'package': package, 'reference': reference, 'pointer': normalized}, None
+
+
+def load_rules_v3_staged_package(path=RULES_V3_STAGED_FILE):
+    try:
+        with open(path, 'r') as handle:
+            raw_release = handle.read()
+    except Exception:
+        return None, 'runtime-unavailable'
+    return validate_rules_v3_staged_release(raw_release)
+
+
+def stage_rules_v3_release(candidate, staged_reference,
+                           path=RULES_V3_STAGED_FILE,
+                           temporary_path=RULES_V3_STAGED_TEMP_FILE):
+    if not isinstance(candidate, dict):
+        return None, 'candidate-invalid'
+    checked, reason = validate_rules_v3_staged_release(
+        candidate.get('release'), candidate.get('metadata'))
+    if checked is None:
+        return None, reason
+    if staged_reference == checked['reference']:
+        return checked, 'already-staged'
+    try:
+        with open(temporary_path, 'w') as handle:
+            handle.write(candidate['release'])
+            try:
+                handle.flush()
+            except Exception:
+                pass
+        os.rename(temporary_path, path)
+    except Exception:
+        try:
+            os.remove(temporary_path)
+        except Exception:
+            pass
+        return None, 'atomic-replace-failed'
+    return checked, 'staged'
+
+
+def rules_v3_state_report(desired=None, staged=None, rejected=None):
+    """Describe staging only; V3 execution is permanently disabled at Gate 1."""
+    return {
+        'kind': 'rules-v3-staging-state',
+        'executionEnabled': False,
+        'desired': dict(desired) if isinstance(desired, dict) else None,
+        'staged': dict(staged) if isinstance(staged, dict) else None,
+        'rejected': dict(rejected) if isinstance(rejected, dict) else None,
+    }
+
+
 def _is_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
@@ -2778,6 +3329,23 @@ else:
     # intact v2 runtime package has been adopted.
     log('Rules runtime unavailable: {}'.format(_runtime_error))
 
+# Gate 1 reloads an already staged V3 file after an offline reboot, but does
+# not construct a semantic runtime or attach it to any observation/action path.
+_staged_rules_v3, _rules_v3_error = load_rules_v3_staged_package()
+rules_v3_desired_reference = None
+rules_v3_staged_reference = None
+rules_v3_rejected = None
+if _staged_rules_v3 is not None:
+    rules_v3_staged_reference = _staged_rules_v3['reference']
+    log('V3 rules staged file reloaded: release={}, hash={}'.format(
+        rules_v3_staged_reference['releaseId'],
+        rules_v3_staged_reference['contentHash'][:12]))
+else:
+    rules_v3_rejected = {'reason': _rules_v3_error}
+    log('V3 rules staged file unavailable: {}'.format(_rules_v3_error))
+cloud.set_rules_v3_state(rules_v3_state_report(
+    rules_v3_desired_reference, rules_v3_staged_reference, rules_v3_rejected))
+
 # Assume charging is permitted until the first battery poll below says otherwise -
 # M5.Power has no getter for the enable pin itself (only isCharging(), which reflects
 # active current flow, not permission), so this is a starting guess that self-corrects
@@ -2808,6 +3376,7 @@ shelly1_availability_confirmation = new_shelly_availability_confirmation()
 last_durable_observation = None
 last_durable_observation_ms = None
 next_rules_request_ms = 0
+next_rules_v3_request_ms = 0
 published_rules_reference = None
 event_board = {}
 
@@ -2831,6 +3400,58 @@ while True:
     if wifi_connected and not was_connected:
         shelly_resume_confirmation_pending = True
         shelly1_resume_confirmation_pending = True
+
+    # V3 staging is a sealed path.  These bytes are never supplied to V2 and
+    # never reach field resolution, qualification, events, ownership, Monitor,
+    # guarded actions, records, or device writes in this Gate 1 release.
+    rules_v3_pointer = cloud.take_rules_v3_pointer()
+    if rules_v3_pointer is not None:
+        v3_metadata = validate_rules_v3_pointer(rules_v3_pointer)
+        if v3_metadata is None:
+            rules_v3_rejected = {'reason': rules_v3_pointer_rejection_reason(rules_v3_pointer)}
+            log('V3 staging pointer ignored: {}'.format(rules_v3_rejected['reason']))
+        else:
+            rules_v3_desired_reference = {
+                'releaseId': v3_metadata['releaseId'],
+                'packageVersion': v3_metadata['packageVersion'],
+                'runtimeSchemaVersion': 3,
+                'contentHash': v3_metadata['contentHash'],
+                'executionEnabled': False,
+            }
+            rules_v3_rejected = None
+            if (rules_v3_staged_reference is None or
+                    rules_v3_staged_reference.get('contentHash') !=
+                    rules_v3_desired_reference.get('contentHash')) and \
+                    time.ticks_diff(now, next_rules_v3_request_ms) >= 0:
+                if cloud.request_rules_v3_release(v3_metadata):
+                    next_rules_v3_request_ms = time.ticks_add(now, RULES_FETCH_RETRY_MS)
+                    log('V3 staging release request queued: {}'.format(
+                        v3_metadata['releaseId']))
+        cloud.set_rules_v3_state(rules_v3_state_report(
+            rules_v3_desired_reference, rules_v3_staged_reference, rules_v3_rejected))
+    v3_candidate = cloud.take_rules_v3_release()
+    if v3_candidate is not None:
+        staged_v3, v3_outcome = stage_rules_v3_release(
+            v3_candidate, rules_v3_staged_reference)
+        if staged_v3 is not None:
+            rules_v3_staged_reference = staged_v3['reference']
+            rules_v3_rejected = None
+            log('V3 release staged only: release={}, hash={}'.format(
+                rules_v3_staged_reference['releaseId'],
+                rules_v3_staged_reference['contentHash'][:12]))
+        elif v3_outcome != 'already-staged':
+            rejected_pointer = (v3_candidate.get('metadata')
+                                if isinstance(v3_candidate, dict) else None)
+            rejected_reference = validate_rules_v3_pointer(rejected_pointer)
+            rules_v3_rejected = {
+                'reason': v3_outcome,
+                'releaseId': (rejected_reference or {}).get('releaseId'),
+                'packageVersion': (rejected_reference or {}).get('packageVersion'),
+                'contentHash': (rejected_reference or {}).get('contentHash'),
+            }
+            log('V3 staging release rejected: {}'.format(v3_outcome))
+        cloud.set_rules_v3_state(rules_v3_state_report(
+            rules_v3_desired_reference, rules_v3_staged_reference, rules_v3_rejected))
 
     # CPU B exposes the RTDB pointer and later an exact downloaded body. CPU A
     # decides whether it is safe to request, validate, and adopt the release;
