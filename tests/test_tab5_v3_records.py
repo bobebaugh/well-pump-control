@@ -225,6 +225,8 @@ class V3RecordTests(unittest.TestCase):
         for name in ("new_v3_record_stream", "v3_build_event_records",
                      "v3_apply_event_records_projection", "v3_interpret_control"):
             self.assertEqual(source.count("def " + name + "("), 1)
+        for name in ("new_v3_record_stream", "v3_build_event_records",
+                     "v3_apply_event_records_projection"):
             self.assertEqual(source.count(name + "("), 1)
 
 

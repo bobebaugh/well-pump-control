@@ -1,4 +1,4 @@
-# Release: 2026-08-30 Unit 4B — host-only V3 event records, controls, and projection remain disconnected.
+# Release: 2026-08-30 Unit 4D — host-only V3 records, controls, and command adapter remain disconnected.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -1800,6 +1800,191 @@ def v3_interpret_control(control, actor, command_id=None):
     else:
         raise ValueError('unsupported V3 control')
     return result
+
+
+# --- Event V3 pending-command adapter (not connected to M6.27) ---
+# This validates only the reviewed Unit 4C2 pending envelope and selects pure
+# kernel/maintenance intent.  A caller remains responsible for application,
+# durable acknowledgement, and advancing any external applied sequence.
+
+
+def _v3_command_requested_at(value):
+    """Validate the bounded RFC3339 date-time accepted by the V3 command contract."""
+    if (not isinstance(value, str) or len(value) < 20 or len(value) > 40 or
+            value[4] != '-' or value[7] != '-' or value[10] != 'T' or
+            value[13] != ':' or value[16] != ':'):
+        return False
+    date_part = value[:19]
+    if not (date_part[:4] + date_part[5:7] + date_part[8:10] +
+            date_part[11:13] + date_part[14:16] + date_part[17:19]).isdigit():
+        return False
+    year, month, day = int(value[:4]), int(value[5:7]), int(value[8:10])
+    hour, minute, second = int(value[11:13]), int(value[14:16]), int(value[17:19])
+    if month < 1 or month > 12 or hour > 23 or minute > 59 or second > 59:
+        return False
+    month_days = (31, 29 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 28,
+                  31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    if day < 1 or day > month_days[month - 1]:
+        return False
+    suffix = value[19:]
+    if suffix.startswith('.'):
+        position = 1
+        while position < len(suffix) and suffix[position].isdigit():
+            position += 1
+        if position == 1:
+            return False
+        suffix = suffix[position:]
+    if suffix == 'Z':
+        return True
+    if (len(suffix) != 6 or suffix[0] not in '+-' or suffix[3] != ':' or
+            not (suffix[1:3] + suffix[4:6]).isdigit()):
+        return False
+    return int(suffix[1:3]) <= 23 and int(suffix[4:6]) <= 59
+
+
+def _v3_pending_command_sequence(value):
+    return (isinstance(value, int) and not isinstance(value, bool) and
+            value >= 1 and value <= 9999999999)
+
+
+def _v3_command_rejection(command, reason):
+    """Return a bounded diagnostic without retaining a mutable raw command."""
+    rejected = {'reason': reason}
+    if isinstance(command, dict):
+        if _v3_pending_command_sequence(command.get('commandSequence')):
+            rejected['commandSequence'] = command['commandSequence']
+        if isinstance(command.get('commandId'), str) and len(command['commandId']) <= 98:
+            rejected['commandId'] = command['commandId']
+    return rejected
+
+
+def v3_adapt_pending_command(command):
+    """Validate one exact Unit 4C2 V3 pending command and map it to pure intent."""
+    expected = set(('schemaVersion', 'runtimeSchemaVersion', 'commandId', 'commandSequence',
+                    'siteId', 'targetDeviceId', 'commandType', 'requestedAt', 'requestedBy',
+                    'status', 'payload'))
+    if not isinstance(command, dict) or set(command) != expected:
+        raise ValueError('invalid V3 command envelope')
+    if (command.get('schemaVersion') != 1 or command.get('runtimeSchemaVersion') != 3 or
+            command.get('siteId') != 'well-main' or
+            command.get('targetDeviceId') != 'tab5-well-main' or
+            command.get('status') != 'pending' or
+            type(command.get('payload')) is not dict or command['payload'] != {} or
+            not _v3_pending_command_sequence(command.get('commandSequence')) or
+            not _v3_command_requested_at(command.get('requestedAt'))):
+        raise ValueError('invalid V3 command envelope')
+    try:
+        command_id = _v3_record_command_id(command['commandId'])
+    except ValueError:
+        raise ValueError('invalid V3 command envelope')
+    if (command_id[23:-11] != 'web_control' or
+            command_id[-10:] != '{:010d}'.format(command['commandSequence'])):
+        raise ValueError('invalid V3 command envelope')
+    if command.get('requestedBy') != {'type': 'user', 'id': 'pilot-web'}:
+        raise ValueError('invalid V3 command envelope')
+    controls = {
+        'clear-events': 'Clear Events', 'monitor': 'Monitor', 'normal': 'Normal',
+        'restart-tab5': 'Restart Tab5', 'restart-shelly1': 'Restart Shelly',
+    }
+    control = controls.get(command.get('commandType'))
+    if control is None:
+        raise ValueError('invalid V3 command envelope')
+    interpreted = v3_interpret_control(control, command['requestedBy'], command_id)
+    return {
+        'commandId': command_id, 'commandSequence': command['commandSequence'],
+        'commandType': command['commandType'], 'requestedAt': command['requestedAt'],
+        'kernelCommands': dict(interpreted['kernelCommands']),
+        'context': {'actor': dict(interpreted['context']['actor']), 'commandId': command_id},
+        'maintenanceSelections': [dict(item) for item in interpreted['maintenanceSelections']],
+    }
+
+
+def v3_select_pending_commands(last_applied_sequence, commands):
+    """Purely select ordered V3 commands; invalid newer entries fail-stop the batch.
+
+    A caller may advance its applied sequence only through candidateHighWater after
+    it has actually applied every returned selection.  An invalid/unorderable
+    sequence stops the entire batch before selection (failStopSequence is None);
+    an invalid/conflicting ordered sequence stops at that sequence.  Neither path
+    advances candidateHighWater past a command that must remain retriable.
+    """
+    if (isinstance(last_applied_sequence, bool) or
+            (not _v3_pending_command_sequence(last_applied_sequence) and
+             last_applied_sequence != 0)):
+        raise ValueError('invalid V3 applied command sequence')
+    if not isinstance(commands, list) or len(commands) > 128:
+        raise ValueError('invalid V3 command batch')
+    selections, rejections, ordered, unorderable = [], [], [], []
+    for index, command in enumerate(commands):
+        sequence = command.get('commandSequence') if isinstance(command, dict) else None
+        if not _v3_pending_command_sequence(sequence):
+            unorderable.append((index, command))
+        elif sequence <= last_applied_sequence:
+            ordered.append((sequence, index, command, True))
+        else:
+            ordered.append((sequence, index, command, False))
+    if unorderable:
+        for index, command in unorderable:
+            rejections.append(_v3_command_rejection(command, 'invalid_command_sequence'))
+        for sequence, index, command, stale in ordered:
+            rejections.append(_v3_command_rejection(command, 'blocked_by_unorderable_sequence'))
+        return {'selections': [], 'rejections': rejections,
+                'candidateHighWater': last_applied_sequence,
+                'failStopSequence': None}
+    stale = []
+    candidates = []
+    for sequence, index, command, is_stale in ordered:
+        if is_stale:
+            stale.append((sequence, index, command))
+        else:
+            candidates.append((sequence, index, command))
+    for sequence, index, command in stale:
+        rejections.append(_v3_command_rejection(command, 'stale_sequence'))
+    ordered = candidates
+    ordered.sort(key=lambda item: (item[0], item[1]))
+    by_sequence, by_id = {}, {}
+    for sequence, index, command in ordered:
+        by_sequence.setdefault(sequence, []).append((index, command))
+        command_id = command.get('commandId') if isinstance(command, dict) else None
+        if isinstance(command_id, str):
+            by_id.setdefault(command_id, []).append((sequence, index, command))
+    candidate_high_water = last_applied_sequence
+    fail_stop_sequence = None
+    processed_sequences = set()
+    rejected_indexes = set()
+    for sequence, index, command in ordered:
+        if sequence in processed_sequences:
+            continue
+        processed_sequences.add(sequence)
+        same_sequence = by_sequence[sequence]
+        if len(same_sequence) != 1:
+            for ignored_index, ignored in same_sequence:
+                rejections.append(_v3_command_rejection(ignored, 'duplicate_sequence_conflict'))
+                rejected_indexes.add(ignored_index)
+            fail_stop_sequence = sequence
+            break
+        command_id = command.get('commandId') if isinstance(command, dict) else None
+        if isinstance(command_id, str) and len(by_id.get(command_id, ())) != 1:
+            for ignored_sequence, ignored_index, ignored in by_id[command_id]:
+                rejections.append(_v3_command_rejection(ignored, 'duplicate_command_id_conflict'))
+                rejected_indexes.add(ignored_index)
+            fail_stop_sequence = sequence
+            break
+        try:
+            selections.append(v3_adapt_pending_command(command))
+        except ValueError:
+            rejections.append(_v3_command_rejection(command, 'invalid_command_envelope'))
+            rejected_indexes.add(index)
+            fail_stop_sequence = sequence
+            break
+        candidate_high_water = sequence
+    if fail_stop_sequence is not None:
+        for sequence, index, command in ordered:
+            if sequence > fail_stop_sequence and index not in rejected_indexes:
+                rejections.append(_v3_command_rejection(command, 'blocked_by_fail_stop'))
+    return {'selections': selections, 'rejections': rejections,
+            'candidateHighWater': candidate_high_water,
+            'failStopSequence': fail_stop_sequence}
 
 
 # --- Event V3 host-only writable-field executor (not connected to M6.27) ---
