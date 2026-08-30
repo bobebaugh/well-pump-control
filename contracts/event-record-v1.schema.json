@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://well-pump-control.local/contracts/event-record-v1.schema.json",
-  "title": "Event open or close Firestore record v1",
+  "title": "Event open or close Firestore record v1 (with optional Event V3 runtime extension)",
   "type": "object",
   "additionalProperties": true,
   "required": ["schemaVersion", "recordType", "recordId", "eventId", "siteId", "deviceId", "sessionId", "sequence", "observedAt", "ruleId", "rulesRelease", "condition", "actor"],
@@ -9,22 +9,27 @@
     "schemaVersion": { "const": 1 },
     "recordType": { "type": "string", "enum": ["event-open", "event-close"] },
     "recordId": { "type": "string", "pattern": "^[0-9]{14}-event-(open|close)-[A-Za-z0-9_-]{8,64}-[0-9]{10}$" },
-    "eventId": { "type": "string", "pattern": "^[0-9]{14}-[a-z0-9][a-z0-9-]{0,63}-[A-Za-z0-9_-]{8,64}-[0-9]{10}$" },
+    "runtimeSchemaVersion": { "const": 3, "description": "Optional V3 runtime discriminator. When present, V3 event identity and transition fields are required." },
+    "eventId": { "type": "string", "maxLength": 155, "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,154}$" },
     "siteId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
     "deviceId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
     "sessionId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
     "sequence": { "type": "integer", "minimum": 0 },
     "observedAt": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?(?:Z|[+-]\\d{2}:\\d{2})$" },
     "receivedAt": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?(?:Z|[+-]\\d{2}:\\d{2})$", "description": "Cloud-owned receipt time. Omitted from ingest requests; present as an ISO string when a stored Firestore Timestamp is serialized." },
-    "ruleId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
-    "severity": { "type": "string", "enum": ["yellow", "red"] },
+    "ruleId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" },
+    "severity": { "type": "string", "enum": ["yellow", "red", "Info", "Yellow", "Red"] },
     "latched": { "type": "boolean" },
-    "consequence": { "type": "string", "enum": ["log-only", "inhibit"] },
+    "consequence": { "type": "string", "enum": ["log-only", "inhibit", "monitor"] },
     "rulesRelease": { "$ref": "#/$defs/rulesReference" },
     "condition": { "type": "object", "additionalProperties": true },
     "actor": { "$ref": "#/$defs/actor" },
     "closeReason": { "type": "string", "enum": ["condition-cleared", "user-request", "rules-updated", "rule-disabled", "rule-removed", "restart-reconciliation"] },
-    "commandId": { "type": "string", "pattern": "^[0-9]{14}-command-[A-Za-z0-9_-]{8,64}-[0-9]{10}$" }
+    "commandId": { "type": "string", "pattern": "^[0-9]{14}-command-[A-Za-z0-9_-]{8,64}-[0-9]{10}$" },
+    "eventInstanceId": { "type": "string", "pattern": "^v3-instance-[1-9][0-9]*$" },
+    "eventClass": { "type": "string", "enum": ["transient", "latched", "monitor"] },
+    "transitionReason": { "type": "string", "enum": ["opening_qualified", "closing_qualified", "clear_events", "normal_request", "rules_disabled", "immediate_policy"] },
+    "mode": { "type": "string", "enum": ["Normal", "Monitor"] }
   },
   "allOf": [
     {
@@ -35,11 +40,46 @@
       }
     },
     {
-      "if": { "properties": { "recordType": { "const": "event-close" } }, "required": ["recordType"] },
+      "if": { "properties": { "recordType": { "const": "event-close" } }, "required": ["recordType"], "not": { "required": ["runtimeSchemaVersion"] } },
       "then": {
         "required": ["closeReason"],
         "properties": { "closeReason": true }
       }
+    },
+    {
+      "if": { "not": { "required": ["runtimeSchemaVersion"] } },
+      "then": {
+        "properties": {
+          "eventId": { "pattern": "^[0-9]{14}-[a-z0-9][a-z0-9-]{0,63}-[A-Za-z0-9_-]{8,64}-[0-9]{10}$" },
+          "ruleId": { "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+          "severity": { "enum": ["yellow", "red"] },
+          "consequence": { "enum": ["log-only", "inhibit"] }
+        }
+      }
+    },
+    {
+      "if": { "required": ["runtimeSchemaVersion"] },
+      "then": {
+        "required": ["eventInstanceId", "eventClass", "transitionReason", "mode"],
+        "properties": {
+          "eventId": { "pattern": "^[0-9]{14}-[A-Za-z0-9][A-Za-z0-9_-]{1,63}-[A-Za-z0-9_-]{8,64}-[0-9]{10}$" },
+          "ruleId": { "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$" },
+          "severity": { "enum": ["Info", "Yellow", "Red"] },
+          "consequence": { "enum": ["log-only", "inhibit", "monitor"] }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "runtimeSchemaVersion": { "const": 3 }, "recordType": { "const": "event-open" } }, "required": ["runtimeSchemaVersion", "recordType"] },
+      "then": { "properties": { "transitionReason": { "const": "opening_qualified" } } }
+    },
+    {
+      "if": { "properties": { "runtimeSchemaVersion": { "const": 3 }, "recordType": { "const": "event-close" } }, "required": ["runtimeSchemaVersion", "recordType"] },
+      "then": { "properties": { "transitionReason": { "enum": ["closing_qualified", "clear_events", "normal_request", "rules_disabled", "immediate_policy"] } } }
+    },
+    {
+      "if": { "properties": { "runtimeSchemaVersion": { "const": 3 }, "eventClass": { "const": "monitor" } }, "required": ["runtimeSchemaVersion", "eventClass"] },
+      "then": { "required": ["consequence"], "properties": { "consequence": { "const": "monitor" } } }
     }
   ],
   "$defs": {

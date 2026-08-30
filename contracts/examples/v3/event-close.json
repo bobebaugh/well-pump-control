@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "runtimeSchemaVersion": 3,
+  "recordType": "event-close",
+  "recordId": "20260830000037-event-close-boot_A7f93k2Q-0000000037",
+  "eventId": "20260830000007-E007-boot_A7f93k2Q-0000000007",
+  "eventInstanceId": "v3-instance-7",
+  "siteId": "well-main",
+  "deviceId": "tab5-well-main",
+  "sessionId": "boot_A7f93k2Q",
+  "sequence": 37,
+  "observedAt": "2026-08-30T00:00:37Z",
+  "ruleId": "E007",
+  "eventClass": "transient",
+  "transitionReason": "closing_qualified",
+  "mode": "Normal",
+  "rulesRelease": {
+    "version": 1,
+    "contentHash": "ee0220eebdd0fa9b3b9751435180c17a16d3c93cb5f7325f1ab74d8d132e410a"
+  },
+  "condition": { "SupplyVoltage": 250 },
+  "actor": { "type": "device", "id": "tab5-well-main" }
+}

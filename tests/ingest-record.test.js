@@ -12,6 +12,8 @@ const readJson = relative => JSON.parse(readFileSync(path.join(root, relative), 
 const observation = readJson("contracts/examples/v1/durable-observation.json");
 const eventOpen = readJson("contracts/examples/v1/event-open.json");
 const eventClose = readJson("contracts/examples/v1/event-close.json");
+const v3EventOpen = readJson("contracts/examples/v3/event-open.json");
+const v3EventClose = readJson("contracts/examples/v3/event-close.json");
 const ruleAdoption = {
   schemaVersion: 1,
   recordType: "rule-adoption",
@@ -110,6 +112,17 @@ test("stores event openings and closings as separate records sharing eventId", a
   const closed = JSON.parse((await handler(request(eventClose))).body);
   assert.equal(records.get(opened.document).eventId, eventOpen.eventId);
   assert.equal(records.get(closed.document).eventId, eventOpen.eventId);
+  assert.notEqual(opened.recordId, closed.recordId);
+});
+
+test("stores V3 event openings and closings with one durable identity and one local instance", async () => {
+  const { handler, records } = makeHandler();
+  const opened = JSON.parse((await handler(request(v3EventOpen))).body);
+  const closed = JSON.parse((await handler(request(v3EventClose))).body);
+  assert.equal(records.get(opened.document).eventId, v3EventOpen.eventId);
+  assert.equal(records.get(closed.document).eventId, v3EventOpen.eventId);
+  assert.equal(records.get(opened.document).eventInstanceId, "v3-instance-7");
+  assert.equal(records.get(closed.document).eventInstanceId, "v3-instance-7");
   assert.notEqual(opened.recordId, closed.recordId);
 });
 
@@ -222,6 +235,72 @@ test("identifier components must agree with observation time, session, type, and
     { ...eventOpen, ruleId: "other-rule" },
     { ...eventClose, ruleId: "other-rule" },
     { ...eventClose, recordType: "event-open" }
+  ]) {
+    assert.throws(() => validateIngestRecord(value), error => error instanceof IngestRecordError);
+  }
+});
+
+test("V3 event IDs are durable recurrence identities while instance IDs remain session-local", () => {
+  const recurrence = {
+    ...v3EventOpen,
+    recordId: "20260830000008-event-open-boot_A7f93k2Q-0000000008",
+    eventId: "20260830000008-E007-boot_A7f93k2Q-0000000008",
+    eventInstanceId: "v3-instance-8",
+    sequence: 8,
+    observedAt: "2026-08-30T00:00:08Z"
+  };
+  assert.doesNotThrow(() => validateIngestRecord(v3EventOpen));
+  assert.doesNotThrow(() => validateIngestRecord(recurrence));
+  assert.doesNotThrow(() => validateIngestRecord({
+    ...v3EventOpen,
+    eventId: "20260830000007-e7-A-boot_A7f93k2Q-0000000007",
+    ruleId: "e7-A"
+  }));
+  assert.doesNotThrow(() => validateIngestRecord({
+    ...v3EventOpen,
+    recordId: "20260830000007-event-open-boot-A7f93k2Q-0000000007",
+    eventId: "20260830000007-e7-A-boot-A7f93k2Q-0000000007",
+    ruleId: "e7-A",
+    sessionId: "boot-A7f93k2Q"
+  }));
+  assert.notEqual(recurrence.eventId, v3EventOpen.eventId);
+  assert.notEqual(recurrence.eventInstanceId, v3EventOpen.eventInstanceId);
+
+  for (const value of [
+    { ...v3EventOpen, eventId: "E007" },
+    { ...v3EventOpen, eventId: "20260830000007-E008-boot_A7f93k2Q-0000000007" },
+    { ...v3EventClose, eventId: "20260830000007-E007-otherSess-0000000007" },
+    { ...v3EventClose, eventId: "20260830000007-E007-junk-boot_A7f93k2Q-0000000007" },
+    { ...v3EventOpen, eventInstanceId: "v3-instance-0" }
+  ]) {
+    assert.throws(() => validateIngestRecord(value), error => error instanceof IngestRecordError);
+  }
+});
+
+test("V3 transition records require their discriminator fields and exact kernel reasons", () => {
+  const monitorOpen = {
+    ...v3EventOpen,
+    eventId: "20260830000007-H001-boot_A7f93k2Q-0000000007",
+    ruleId: "H001",
+    eventClass: "monitor",
+    severity: "Info",
+    consequence: "monitor",
+    mode: "Monitor"
+  };
+  assert.doesNotThrow(() => validateIngestRecord(monitorOpen));
+  for (const transitionReason of ["closing_qualified", "clear_events", "normal_request", "rules_disabled", "immediate_policy"]) {
+    assert.doesNotThrow(() => validateIngestRecord({ ...v3EventClose, transitionReason }));
+  }
+
+  const missingInstance = { ...v3EventOpen };
+  delete missingInstance.eventInstanceId;
+  for (const value of [
+    missingInstance,
+    { ...v3EventOpen, transitionReason: "closing_qualified" },
+    { ...v3EventClose, transitionReason: "opening_qualified" },
+    { ...monitorOpen, consequence: "inhibit" },
+    { ...v3EventOpen, ruleId: "x" },
+    { ...observation, runtimeSchemaVersion: 3 }
   ]) {
     assert.throws(() => validateIngestRecord(value), error => error instanceof IngestRecordError);
   }

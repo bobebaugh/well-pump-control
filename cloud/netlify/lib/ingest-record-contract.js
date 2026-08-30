@@ -13,6 +13,9 @@ const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const SESSION_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const EVENT_ID_PATTERN = /^[0-9]{14}-[a-z0-9][a-z0-9-]{0,63}-[A-Za-z0-9_-]{8,64}-[0-9]{10}$/;
+const V3_RULE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$/;
+const V3_EVENT_ID_PATTERN = /^[0-9]{14}-[A-Za-z0-9_-]{1,129}-[0-9]{10}$/;
+const V3_EVENT_INSTANCE_PATTERN = /^v3-instance-[1-9][0-9]*$/;
 const COMMAND_ID_PATTERN = /^[0-9]{14}-command-[A-Za-z0-9_-]{8,64}-[0-9]{10}$/;
 const RULE_RELEASE_ID_PATTERN = /^[0-9]{14}-rules-v[0-9]+$/;
 const RFC3339_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})$/;
@@ -20,6 +23,9 @@ const PUBLISH_REASONS = new Set(["material-change", "maximum-interval", "event-b
 const CLOSE_REASONS = new Set([
   "condition-cleared", "user-request", "rules-updated", "rule-disabled",
   "rule-removed", "restart-reconciliation"
+]);
+const V3_CLOSE_TRANSITION_REASONS = new Set([
+  "closing_qualified", "clear_events", "normal_request", "rules_disabled", "immediate_policy"
 ]);
 const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -102,6 +108,10 @@ function validateCommon(value) {
   requireCondition(isPlainObject(value), "body");
   validateSafeTree(value);
   requireCondition(value.schemaVersion === 1, "schemaVersion", "unsupported_schema_version");
+  if (value.runtimeSchemaVersion !== undefined) {
+    requireCondition(value.runtimeSchemaVersion === 3, "runtimeSchemaVersion");
+    requireCondition(["event-open", "event-close"].includes(value.recordType), "runtimeSchemaVersion");
+  }
   requireCondition(["observation", "event-open", "event-close", "rule-adoption", "rule-rejection"].includes(value.recordType), "recordType");
   requireCondition(typeof value.recordId === "string", "recordId");
   requireCondition(typeof value.siteId === "string" && ID_PATTERN.test(value.siteId), "siteId");
@@ -133,14 +143,20 @@ function validateActor(value) {
 
 function validateEvent(value) {
   ["eventId", "ruleId", "condition", "actor"].forEach(field => requireCondition(Object.hasOwn(value, field), field));
-  requireCondition(typeof value.eventId === "string" && EVENT_ID_PATTERN.test(value.eventId), "eventId");
-  requireCondition(typeof value.ruleId === "string" && ID_PATTERN.test(value.ruleId), "ruleId");
-  requireCondition(value.eventId.slice(15).startsWith(`${value.ruleId}-`), "eventId");
+  const v3 = value.runtimeSchemaVersion === 3;
+  requireCondition(typeof value.eventId === "string" && (v3 ? V3_EVENT_ID_PATTERN.test(value.eventId) : EVENT_ID_PATTERN.test(value.eventId)), "eventId");
+  requireCondition(typeof value.ruleId === "string" && (v3 ? V3_RULE_ID_PATTERN.test(value.ruleId) : ID_PATTERN.test(value.ruleId)), "ruleId");
+  // Rule and session IDs both allow hyphens, so do not split eventId into
+  // ambiguous capture groups. Reconstruct the durable V3 identity from its
+  // fixed timestamp and sequence components instead.
+  requireCondition(v3
+    ? value.eventId === `${value.eventId.slice(0, 14)}-${value.ruleId}-${value.sessionId}-${value.eventId.slice(-10)}`
+    : value.eventId.slice(15).startsWith(`${value.ruleId}-`), "eventId");
   requireCondition(isPlainObject(value.condition), "condition");
   validateActor(value.actor);
-  if (value.severity !== undefined) requireCondition(["yellow", "red"].includes(value.severity), "severity");
+  if (value.severity !== undefined) requireCondition((v3 ? ["Info", "Yellow", "Red"] : ["yellow", "red"]).includes(value.severity), "severity");
   if (value.latched !== undefined) requireCondition(typeof value.latched === "boolean", "latched");
-  if (value.consequence !== undefined) requireCondition(["log-only", "inhibit"].includes(value.consequence), "consequence");
+  if (value.consequence !== undefined) requireCondition((v3 ? ["log-only", "inhibit", "monitor"] : ["log-only", "inhibit"]).includes(value.consequence), "consequence");
   if (value.closeReason !== undefined) requireCondition(CLOSE_REASONS.has(value.closeReason), "closeReason");
   if (value.commandId !== undefined) {
     requireCondition(typeof value.commandId === "string" && COMMAND_ID_PATTERN.test(value.commandId), "commandId");
@@ -149,14 +165,24 @@ function validateEvent(value) {
   const expected = `${utcPrefix(value.observedAt)}-event-${transition}-${value.sessionId}-${sequenceText(value.sequence)}`;
   requireCondition(value.recordId === expected, "recordId");
 
+  if (v3) {
+    ["eventInstanceId", "eventClass", "transitionReason", "mode"].forEach(field => requireCondition(Object.hasOwn(value, field), field));
+    requireCondition(typeof value.eventInstanceId === "string" && V3_EVENT_INSTANCE_PATTERN.test(value.eventInstanceId), "eventInstanceId");
+    requireCondition(["transient", "latched", "monitor"].includes(value.eventClass), "eventClass");
+    requireCondition(["Normal", "Monitor"].includes(value.mode), "mode");
+    if (value.recordType === "event-open") requireCondition(value.transitionReason === "opening_qualified", "transitionReason");
+    else requireCondition(V3_CLOSE_TRANSITION_REASONS.has(value.transitionReason), "transitionReason");
+    if (value.eventClass === "monitor") requireCondition(value.consequence === "monitor", "consequence");
+  }
+
   if (value.recordType === "event-open") {
-    requireCondition(["yellow", "red"].includes(value.severity), "severity");
+    requireCondition((v3 ? ["Info", "Yellow", "Red"] : ["yellow", "red"]).includes(value.severity), "severity");
     requireCondition(typeof value.latched === "boolean", "latched");
-    requireCondition(["log-only", "inhibit"].includes(value.consequence), "consequence");
+    requireCondition((v3 ? ["log-only", "inhibit", "monitor"] : ["log-only", "inhibit"]).includes(value.consequence), "consequence");
     const expectedEventId = `${utcPrefix(value.observedAt)}-${value.ruleId}-${value.sessionId}-${sequenceText(value.sequence)}`;
     requireCondition(value.eventId === expectedEventId, "eventId");
   } else {
-    requireCondition(CLOSE_REASONS.has(value.closeReason), "closeReason");
+    if (!v3) requireCondition(CLOSE_REASONS.has(value.closeReason), "closeReason");
   }
 }
 

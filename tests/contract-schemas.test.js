@@ -26,6 +26,8 @@ const examples = [
   ["contracts/durable-observation-v1.schema.json", "contracts/examples/v1/durable-observation.json"],
   ["contracts/event-record-v1.schema.json", "contracts/examples/v1/event-open.json"],
   ["contracts/event-record-v1.schema.json", "contracts/examples/v1/event-close.json"],
+  ["contracts/event-record-v1.schema.json", "contracts/examples/v3/event-open.json"],
+  ["contracts/event-record-v1.schema.json", "contracts/examples/v3/event-close.json"],
   ["contracts/device-command-v1.schema.json", "contracts/examples/v1/device-command.json"],
   ["contracts/device-sync-v1.schema.json", "contracts/examples/v1/device-sync-request.json"],
   ["contracts/device-sync-v1.schema.json", "contracts/examples/v1/device-sync-response.json"],
@@ -133,6 +135,25 @@ test("all versioned examples validate against their schemas", () => {
   }
 });
 
+test("V3 event extension requires kernel identity and transition fields without changing V1", () => {
+  const schema = readJson("contracts/event-record-v1.schema.json");
+  const v3Open = readJson("contracts/examples/v3/event-open.json");
+  const v3Close = readJson("contracts/examples/v3/event-close.json");
+  const missingInstance = { ...v3Open };
+  delete missingInstance.eventInstanceId;
+  const invalid = [
+    missingInstance,
+    { ...v3Open, eventId: "E007" },
+    { ...v3Open, eventInstanceId: "v3-instance-0" },
+    { ...v3Open, transitionReason: "closing_qualified" },
+    { ...v3Close, transitionReason: "opening_qualified" },
+    { ...v3Open, eventClass: "monitor", consequence: "inhibit" }
+  ];
+  invalid.forEach(value => assert.notDeepEqual(validate(schema, value), []));
+  assert.deepEqual(validate(schema, readJson("contracts/examples/v1/event-open.json")), []);
+  assert.deepEqual(validate(schema, readJson("contracts/examples/v1/event-close.json")), []);
+});
+
 test("V3 schema closes nested device, write, calculation, and program-token shapes", () => {
   const schema = readJson("contracts/rules-runtime-package-v3.schema.json");
   const invalid = [];
@@ -176,7 +197,9 @@ test("durable ingest contracts allow cloud-owned receipt time to be omitted", ()
   for (const [schemaPath, examplePath] of [
     ["contracts/durable-observation-v1.schema.json", "contracts/examples/v1/durable-observation.json"],
     ["contracts/event-record-v1.schema.json", "contracts/examples/v1/event-open.json"],
-    ["contracts/event-record-v1.schema.json", "contracts/examples/v1/event-close.json"]
+    ["contracts/event-record-v1.schema.json", "contracts/examples/v1/event-close.json"],
+    ["contracts/event-record-v1.schema.json", "contracts/examples/v3/event-open.json"],
+    ["contracts/event-record-v1.schema.json", "contracts/examples/v3/event-close.json"]
   ]) {
     const example = readJson(examplePath);
     delete example.receivedAt;
