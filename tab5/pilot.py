@@ -27,6 +27,7 @@ import cloud
 SHELLY_EM_URL = 'http://192.168.50.141/emeter/0'
 SHELLY_1_STATUS_URL = 'http://192.168.50.201/rpc/Shelly.GetStatus'
 SHELLY_1_STOP_URL = 'http://192.168.50.201/rpc/Switch.Set?id=0&on=false'
+SHELLY_1_SWITCH_URL = 'http://192.168.50.201/rpc/Switch.Set?id={}&on={}'
 SAMPLE_PERIOD_MS = 1000
 SHELLY_TIMEOUT_S = 1  # requests has whole-second granularity; C++ used 750ms
 STALE_AFTER_MS = 3000
@@ -581,6 +582,7 @@ RUNTIME_OBJECT_PATHS = {
     },
     'shelly-gen4-switch': {
         'SW(0)': 'values.shelly1_sw0', 'RLY(0)': 'values.shelly1_rly0',
+        'UDF(IsLocked)': 'values.shelly1_lock',
         '$availability': 'status.shelly1_available',
     },
 }
@@ -774,6 +776,69 @@ def issue_runtime_stop(observation):
         return 'requested' if isinstance(data, dict) else 'invalid-response'
     except Exception as error:
         return 'request-failed:{}'.format(error)
+
+
+def issue_rules_v3_action(resolved, action, observation):
+    """Issue one kernel-selected write to the installed Shelly (GET-only RPC)."""
+    target = action.get('target')
+    value = action.get('value')
+    spec = resolved.get('writableTargets', {}).get(target)
+    if not isinstance(spec, dict):
+        return 'no-write-definition'
+    if spec.get('method') != 'Switch.Set':
+        return 'unsupported-method:{}'.format(spec.get('method'))
+    if not isinstance(value, bool):
+        return 'unsupported-value:{}'.format(value)
+    if observation.get('status', {}).get('shelly1_available') is not True:
+        return 'shelly-unavailable'
+    switch_id = spec.get('parameters', {}).get('id', 0)
+    url = SHELLY_1_SWITCH_URL.format(switch_id, 'true' if value else 'false')
+    try:
+        reply = requests.get(url, timeout=SHELLY_TIMEOUT_S)
+        data = reply.json()
+        reply.close()
+        return 'issued' if isinstance(data, dict) else 'invalid-response'
+    except Exception as error:
+        return 'request-failed:{}'.format(error)
+
+
+def rules_v3_field_values(resolved, observation):
+    """Resolve declared V3 device fields from the complete observation."""
+    values = {}
+    for device_id, device in resolved.get('devices', {}).items():
+        if device.get('enabled') is not True:
+            continue
+        driver = device.get('driver')
+        for field in device.get('fields', []):
+            name = field.get('systemName')
+            if driver == 'tab5-runtime':
+                path = field.get('object')
+            else:
+                path = RUNTIME_OBJECT_PATHS.get(driver, {}).get(field.get('object'))
+            values[name] = (runtime_observation_path_value(observation, path)
+                            if isinstance(path, str) else None)
+    return values
+
+
+def rules_v3_collapse_actions(resolved, actions):
+    """One write per target per cycle; a disabling write wins any conflict."""
+    chosen = {}
+    dropped = []
+    for action in actions:
+        target = action.get('target')
+        existing = chosen.get(target)
+        if existing is None:
+            chosen[target] = action
+            continue
+        normal = resolved.get('writableTargets', {}).get(target, {}).get('normalValue')
+        if existing.get('value') != normal and action.get('value') == normal:
+            dropped.append(action)
+        elif existing.get('value') == normal and action.get('value') != normal:
+            dropped.append(existing)
+            chosen[target] = action
+        else:
+            dropped.append(action)
+    return list(chosen.values()), dropped
 
 
 def runtime_condition_value(condition, fields):
@@ -2112,9 +2177,13 @@ def resolve_rules_v3_package(package):
                 writable[field['systemName']] = {
                     'type': field['type'], 'enumValues': field.get('enumValues'),
                     'normalValue': field['write']['normalValue'],
+                    'method': field['write'].get('method'),
+                    'parameters': field['write'].get('parameters') or {},
+                    'deviceId': device['id'], 'object': field['object'],
                 }
         devices[device['id']] = {
-            'enabled': device['enabled'], 'fields': resolved_fields}
+            'enabled': device['enabled'], 'fields': resolved_fields,
+            'driver': device['driver']}
     initial_fields = {}
     operating_mode_target = None
     for field in package['systemFields']:
@@ -3770,9 +3839,12 @@ else:
     # intact v2 runtime package has been adopted.
     log('Rules runtime unavailable: {}'.format(_runtime_error))
 
-# Gate 1 reloads an already staged V3 file after an offline reboot, but does
-# not construct a semantic runtime or attach it to any observation/action path.
+# The staged V3 file is reloaded and ADOPTED into a live semantic kernel.
 _staged_rules_v3, _rules_v3_error = load_rules_v3_staged_package()
+rules_v3_resolved = None
+rules_v3_kernel_state = None
+rules_v3_last_actions = []
+rules_v3_last_mode = 'Normal'
 rules_v3_desired_reference = None
 rules_v3_staged_reference = None
 rules_v3_rejected = None
@@ -3781,6 +3853,21 @@ if _staged_rules_v3 is not None:
     log('V3 rules staged file reloaded: release={}, hash={}'.format(
         rules_v3_staged_reference['releaseId'],
         rules_v3_staged_reference['contentHash'][:12]))
+    rules_v3_resolved = resolve_rules_v3_package(_staged_rules_v3['package'])
+    if rules_v3_resolved is None:
+        log('V3 ENGINE: resolve FAILED - package will not run')
+    else:
+        rules_v3_kernel_state = new_rules_v3_kernel(rules_v3_resolved)
+        _v3_enabled = [e['id'] for e in rules_v3_resolved['events']
+                       if e.get('enabled') is True]
+        log('V3 ENGINE ACTIVE: release={} version={}'.format(
+            rules_v3_resolved['releaseId'], rules_v3_resolved['packageVersion']))
+        log('V3 ENGINE: enabled events={} pumpTarget={} lockField={} modeTarget={}'.format(
+            _v3_enabled, rules_v3_resolved.get('pumpTarget'),
+            rules_v3_resolved.get('lockField'),
+            rules_v3_resolved.get('operatingModeTarget')))
+        log('V3 ENGINE: writable targets={}'.format(
+            list(rules_v3_resolved.get('writableTargets', {}).keys())))
 else:
     rules_v3_rejected = {'reason': _rules_v3_error}
     log('V3 rules staged file unavailable: {}'.format(_rules_v3_error))
@@ -4056,6 +4143,51 @@ while True:
             runtime_logging_changes = runtime_logging_change_details(
                 runtime_values, last_durable_observation.get('values', {}),
                 runtime_logging_policies(active_rules))
+    # --- V3 semantic kernel: evaluate and act -------------------------------
+    if rules_v3_resolved is not None and rules_v3_kernel_state is not None:
+        # No Shelly lockout script is installed yet, so there is no UDF to read.
+        # Report 0 (not locked) whenever the Shelly answered, and leave it
+        # absent when it did not, so missing evidence stays missing.
+        if observation['status'].get('shelly1_available') is True:
+            observation['values']['shelly1_lock'] = 0
+        v3_fields = rules_v3_field_values(rules_v3_resolved, observation)
+        v3_actions = []
+        v3_records = []
+        try:
+            rules_v3_kernel_state, v3_actions, v3_records = advance_rules_v3_kernel(
+                rules_v3_resolved, rules_v3_kernel_state, v3_fields,
+                observation_ticks_ms)
+        except Exception as v3_error:
+            log('V3 ENGINE ERROR: {}'.format(v3_error))
+        for record in v3_records:
+            log('V3 EVENT {}: id={} instance={} reason={}'.format(
+                str(record.get('type')).upper(), record.get('eventId'),
+                record.get('eventInstanceId'), record.get('reason')))
+        mode_now = rules_v3_effective_mode(rules_v3_resolved, rules_v3_kernel_state)
+        if mode_now != rules_v3_last_mode:
+            log('V3 MODE: {} -> {}'.format(rules_v3_last_mode, mode_now))
+            rules_v3_last_mode = mode_now
+        if v3_actions:
+            keep, dropped = rules_v3_collapse_actions(rules_v3_resolved, v3_actions)
+            for action in dropped:
+                log('V3 ACTION DROPPED (conflict): {}={} reason={}'.format(
+                    action.get('target'), action.get('value'), action.get('reason')))
+            for action in keep:
+                signature = (action.get('target'), action.get('value'))
+                if signature in rules_v3_last_actions:
+                    continue  # already issued and unchanged; stay quiet
+                log('V3 ACTION SELECTED: {}={} reason={} event={}'.format(
+                    action.get('target'), action.get('value'),
+                    action.get('reason'), action.get('eventId')))
+                outcome = issue_rules_v3_action(
+                    rules_v3_resolved, action, observation)
+                log('V3 ACTION ISSUED: {}={} -> {}'.format(
+                    signature[0], signature[1], outcome))
+                if outcome == 'issued':
+                    rules_v3_last_actions = [signature]
+        else:
+            rules_v3_last_actions = []
+
     last_observation = observation
     append_event_history(event_history, observation)
     shelly_availability_pending = shelly_availability_change_pending(

@@ -355,7 +355,13 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
         self.assertIn(("GuardResult", True), selected)
         self.assertEqual([item["type"] for item in records], ["open"])
 
-    def test_kernel_is_selection_only_and_not_connected_to_device_loop(self):
+    def test_kernel_stays_pure_while_the_executor_does_the_acting(self):
+        """The kernel selects and never performs I/O; a separate executor acts.
+
+        The engine is now deliberately connected to the device loop, so the
+        earlier "not connected" assertion has been inverted. What still must
+        hold is the separation: selection logic stays free of device calls.
+        """
         source = PILOT_PATH.read_text(encoding="utf-8")
         tree = ast.parse(source)
         names = set(FUNCTIONS)
@@ -365,8 +371,31 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
         for forbidden in ("requests.", "cloud.", "Switch.Set", "issue_runtime_stop",
                           "SHELLY_1_STOP_URL", "socket."):
             self.assertNotIn(forbidden, kernel_source)
+        # The engine is wired in, and issuing is a separate call from selecting.
         loop_source = source[source.index("while True:"):]
-        self.assertNotIn("advance_rules_v3_kernel", loop_source)
+        self.assertIn("advance_rules_v3_kernel", loop_source)
+        self.assertIn("issue_rules_v3_action", loop_source)
+        self.assertNotIn("issue_rules_v3_action", kernel_source)
+
+    def test_conflicting_actions_collapse_to_the_non_normal_value(self):
+        source = PILOT_PATH.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        nodes = [node for node in tree.body
+                 if isinstance(node, ast.FunctionDef)
+                 and node.name == "rules_v3_collapse_actions"]
+        namespace = {}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]),
+                     str(PILOT_PATH), "exec"), namespace)
+        collapse = namespace["rules_v3_collapse_actions"]
+        resolved = {"writableTargets": {"PumpEnable": {"normalValue": True}}}
+        keep, dropped = collapse(resolved, [
+            {"target": "PumpEnable", "value": True, "reason": "owner-release"},
+            {"target": "PumpEnable", "value": False, "reason": "active-ownership"},
+        ])
+        self.assertEqual([(a["target"], a["value"]) for a in keep],
+                         [("PumpEnable", False)])
+        self.assertEqual([(a["target"], a["value"]) for a in dropped],
+                         [("PumpEnable", True)])
 
 
 if __name__ == "__main__":
