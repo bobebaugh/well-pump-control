@@ -1,4 +1,4 @@
-# Release: 2026-08-28 M6.27 — use verified Shelly RPC transport for STOP-only rules.
+# Release: 2026-08-30 Unit 4B — host-only V3 event records, controls, and projection remain disconnected.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -1530,6 +1530,276 @@ def v3_kernel_step(kernel, records, now_ms, commands=None):
         'assignments': transition_assignments + effective_assignments,
         'mode': 'Monitor' if monitor else 'Normal',
     }
+
+
+# --- Event V3 durable transition records and controls (not connected to M6.27) ---
+# These functions only create immutable CPU A messages and kernel/maintenance
+# selections. CPU B transport and any actual maintenance action remain separate.
+
+
+def _v3_record_copy(value, depth=0):
+    """Copy one bounded JSON-safe value so callers cannot mutate a record."""
+    if depth > 16:
+        raise ValueError('V3 record value too deep')
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError('V3 record value is not finite')
+        return value
+    if isinstance(value, list):
+        if len(value) > 128:
+            raise ValueError('V3 record list too large')
+        return [_v3_record_copy(item, depth + 1) for item in value]
+    if isinstance(value, dict):
+        if len(value) > 128:
+            raise ValueError('V3 record object too large')
+        copied = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or key in ('__proto__', 'constructor', 'prototype'):
+                raise ValueError('invalid V3 record key')
+            copied[key] = _v3_record_copy(item, depth + 1)
+        return copied
+    raise ValueError('invalid V3 record value')
+
+
+def _v3_record_compact_time(value):
+    if (not isinstance(value, str) or len(value) != 20 or value[4] != '-' or
+            value[7] != '-' or value[10] != 'T' or value[13] != ':' or
+            value[16] != ':' or value[19] != 'Z'):
+        raise ValueError('invalid V3 record observed time')
+    compact = value[:4] + value[5:7] + value[8:10] + value[11:13] + value[14:16] + value[17:19]
+    if not compact.isdigit():
+        raise ValueError('invalid V3 record observed time')
+    year, month, day = int(value[:4]), int(value[5:7]), int(value[8:10])
+    hour, minute, second = int(value[11:13]), int(value[14:16]), int(value[17:19])
+    if month < 1 or month > 12 or hour > 23 or minute > 59 or second > 59:
+        raise ValueError('invalid V3 record observed time')
+    month_days = (31, 29 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 28,
+                  31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    if day < 1 or day > month_days[month - 1]:
+        raise ValueError('invalid V3 record observed time')
+    return compact
+
+
+def _v3_record_name(value, minimum, maximum, lower_only=False, first_alnum=False):
+    if not isinstance(value, str) or len(value) < minimum or len(value) > maximum:
+        return False
+    for char in value:
+        if lower_only:
+            valid = ('a' <= char <= 'z') or ('0' <= char <= '9') or char == '-'
+        else:
+            valid = (('a' <= char <= 'z') or ('A' <= char <= 'Z') or
+                     ('0' <= char <= '9') or char in '_-')
+        if not valid:
+            return False
+    if first_alnum:
+        first = value[0]
+        if not (('a' <= first <= 'z') or ('A' <= first <= 'Z') or ('0' <= first <= '9')):
+            return False
+    return True
+
+
+def _v3_record_actor(actor):
+    if (not isinstance(actor, dict) or set(actor) != set(('type', 'id')) or
+            actor.get('type') not in ('device', 'user', 'system') or
+            not isinstance(actor.get('id'), str) or not actor['id'] or
+            len(actor['id']) > 128):
+        raise ValueError('invalid V3 record actor')
+    return {'type': actor['type'], 'id': actor['id']}
+
+
+def _v3_record_command_id(command_id):
+    if command_id is None:
+        return None
+    if (not isinstance(command_id, str) or len(command_id) < 42 or len(command_id) > 98 or
+            not command_id[:14].isdigit() or command_id[14:23] != '-command-' or
+            command_id[-11] != '-' or not command_id[-10:].isdigit() or
+            not _v3_record_name(command_id[23:-11], 8, 64)):
+        raise ValueError('invalid V3 record command context')
+    return command_id
+
+
+def _v3_record_rules_reference(reference):
+    if (not isinstance(reference, dict) or set(reference) != set(('version', 'contentHash')) or
+            not isinstance(reference.get('version'), int) or isinstance(reference['version'], bool) or
+            reference['version'] < 1 or not isinstance(reference.get('contentHash'), str) or
+            len(reference['contentHash']) != 64 or
+            any(char not in '0123456789abcdef' for char in reference['contentHash'])):
+        raise ValueError('invalid V3 record rules reference')
+    return {'version': reference['version'], 'contentHash': reference['contentHash']}
+
+
+def _v3_record_event_consequence(event):
+    if event.get('eventClass') == 'monitor':
+        return 'monitor'
+    for assignment in event.get('onOpen', {}).get('assignments', []):
+        if isinstance(assignment, dict):
+            return 'inhibit'
+    for group in event.get('onOpen', {}).get('guardedGroups', []):
+        if isinstance(group, dict) and group.get('assignments'):
+            return 'inhibit'
+    return 'log-only'
+
+
+def new_v3_record_stream(package, site_id, device_id, session_id, rules_reference):
+    """Create a fresh bounded durable-record state for one Tab5 session."""
+    resolved = package if isinstance(package, dict) and package.get('resolvedV3') else resolve_v3_package(package)
+    if (not _v3_record_name(site_id, 1, 64, True, True) or
+            not _v3_record_name(device_id, 1, 64, True, True) or
+            not _v3_record_name(session_id, 8, 64)):
+        raise ValueError('invalid V3 record stream identity')
+    return {'resolved': resolved, 'siteId': site_id, 'deviceId': device_id,
+            'sessionId': session_id, 'rulesRelease': _v3_record_rules_reference(rules_reference),
+            'nextSequence': 0, 'openInstances': {}}
+
+
+def _v3_clone_record_stream(stream):
+    if (not isinstance(stream, dict) or not isinstance(stream.get('resolved'), dict) or
+            not isinstance(stream.get('nextSequence'), int) or isinstance(stream['nextSequence'], bool) or
+            stream['nextSequence'] < 0 or stream['nextSequence'] > 9999999999 or
+            not isinstance(stream.get('openInstances'), dict)):
+        raise ValueError('invalid V3 record stream')
+    return {'resolved': stream['resolved'], 'siteId': stream['siteId'],
+            'deviceId': stream['deviceId'], 'sessionId': stream['sessionId'],
+            'rulesRelease': _v3_record_rules_reference(stream['rulesRelease']),
+            'nextSequence': stream['nextSequence'],
+            'openInstances': {key: dict(value) for key, value in stream['openInstances'].items()}}
+
+
+def v3_build_event_records(stream, outcome, observed_at, actor, command_id=None):
+    """Convert ordered V3 kernel transitions to immutable CPU A event records."""
+    next_stream = _v3_clone_record_stream(stream)
+    compact_time = _v3_record_compact_time(observed_at)
+    record_actor = _v3_record_actor(actor)
+    command_id = _v3_record_command_id(command_id)
+    if not isinstance(outcome, dict) or outcome.get('mode') not in ('Normal', 'Monitor'):
+        raise ValueError('invalid V3 record outcome')
+    transitions = outcome.get('transitions')
+    snapshot = outcome.get('snapshot')
+    if not isinstance(transitions, list) or len(transitions) > 64 or not isinstance(snapshot, dict):
+        raise ValueError('invalid V3 record transitions')
+    event_by_id = {event['id']: event for event in next_stream['resolved']['events']}
+    records, rejected = [], []
+    for transition in transitions:
+        if not isinstance(transition, dict):
+            raise ValueError('invalid V3 transition')
+        transition_type = transition.get('type')
+        rule_id = transition.get('eventId')
+        instance_id = transition.get('eventInstanceId')
+        event = event_by_id.get(rule_id)
+        if (transition_type not in ('open', 'close') or event is None or
+                not _v3_record_name(rule_id, 2, 64, False, True) or
+                not isinstance(instance_id, str) or not instance_id.startswith('v3-instance-') or
+                not instance_id[12:].isdigit() or int(instance_id[12:] or 0) < 1):
+            raise ValueError('invalid V3 transition identity')
+        reason = transition.get('reason')
+        if ((transition_type == 'open' and reason != 'opening_qualified') or
+                (transition_type == 'close' and reason not in (
+                    'closing_qualified', 'clear_events', 'normal_request',
+                    'rules_disabled', 'immediate_policy'))):
+            raise ValueError('invalid V3 transition reason')
+        if next_stream['nextSequence'] > 9999999999:
+            raise ValueError('V3 record sequence exhausted')
+        if transition_type == 'open':
+            if instance_id in next_stream['openInstances']:
+                rejected.append({'eventInstanceId': instance_id, 'reason': 'duplicate_open_identity'})
+                continue
+            sequence = next_stream['nextSequence']
+            next_stream['nextSequence'] += 1
+            durable_event_id = '{}-{}-{}-{:010d}'.format(
+                compact_time, rule_id, next_stream['sessionId'], sequence)
+            next_stream['openInstances'][instance_id] = {
+                'eventId': durable_event_id, 'ruleId': rule_id}
+        else:
+            identity = next_stream['openInstances'].get(instance_id)
+            if identity is None or identity.get('ruleId') != rule_id:
+                rejected.append({'eventInstanceId': instance_id, 'ruleId': rule_id,
+                                 'reason': 'missing_open_identity'})
+                continue
+            sequence = next_stream['nextSequence']
+            next_stream['nextSequence'] += 1
+            durable_event_id = identity['eventId']
+            del next_stream['openInstances'][instance_id]
+        record = {
+            'schemaVersion': 1, 'runtimeSchemaVersion': 3,
+            'recordType': 'event-' + transition_type,
+            'recordId': '{}-event-{}-{}-{:010d}'.format(
+                compact_time, transition_type, next_stream['sessionId'], sequence),
+            'eventId': durable_event_id, 'eventInstanceId': instance_id,
+            'siteId': next_stream['siteId'], 'deviceId': next_stream['deviceId'],
+            'sessionId': next_stream['sessionId'], 'sequence': sequence,
+            'observedAt': observed_at, 'ruleId': rule_id,
+            'severity': event['severity'], 'latched': event['eventClass'] == 'latched',
+            'eventClass': event['eventClass'],
+            'consequence': _v3_record_event_consequence(event),
+            'transitionReason': reason, 'mode': outcome['mode'],
+            'rulesRelease': _v3_record_rules_reference(next_stream['rulesRelease']),
+            'condition': _v3_record_copy(snapshot), 'actor': dict(record_actor),
+        }
+        if command_id is not None:
+            record['commandId'] = command_id
+        records.append(record)
+    return next_stream, {'records': records, 'rejected': rejected}
+
+
+def new_v3_session_projection(session_id):
+    """A new session replaces the online board without emitting local closes."""
+    if not _v3_record_name(session_id, 8, 64):
+        raise ValueError('invalid V3 projection session')
+    return {'sessionId': session_id, 'mode': 'Normal', 'openEvents': {}}
+
+
+def v3_apply_event_records_projection(projection, records, mode):
+    """Apply this session's immutable records to a pure online-board view."""
+    if (not isinstance(projection, dict) or not isinstance(projection.get('openEvents'), dict) or
+            projection.get('mode') not in ('Normal', 'Monitor') or mode not in ('Normal', 'Monitor') or
+            not isinstance(records, list)):
+        raise ValueError('invalid V3 projection input')
+    next_projection = {'sessionId': projection['sessionId'], 'mode': mode,
+                       'openEvents': {key: dict(value) for key, value in projection['openEvents'].items()}}
+    for record in records:
+        if (not isinstance(record, dict) or record.get('runtimeSchemaVersion') != 3 or
+                record.get('sessionId') != next_projection['sessionId'] or
+                record.get('recordType') not in ('event-open', 'event-close')):
+            raise ValueError('invalid V3 projection record')
+        if record['recordType'] == 'event-open':
+            next_projection['openEvents'][record['eventId']] = {
+                'eventId': record['eventId'], 'eventInstanceId': record['eventInstanceId'],
+                'ruleId': record['ruleId'], 'eventClass': record['eventClass']}
+        else:
+            next_projection['openEvents'].pop(record['eventId'], None)
+    return next_projection
+
+
+def v3_current_event_projection(projection):
+    if (not isinstance(projection, dict) or projection.get('mode') not in ('Normal', 'Monitor') or
+            not isinstance(projection.get('openEvents'), dict)):
+        raise ValueError('invalid V3 projection')
+    return {'sessionId': projection['sessionId'], 'mode': projection['mode'],
+            'openEventIds': sorted(projection['openEvents'])}
+
+
+def v3_interpret_control(control, actor, command_id=None):
+    """Translate reviewed controls into pure kernel or maintenance selections."""
+    context = {'actor': _v3_record_actor(actor)}
+    command_id = _v3_record_command_id(command_id)
+    if command_id is not None:
+        context['commandId'] = command_id
+    result = {'kernelCommands': {}, 'context': context, 'maintenanceSelections': []}
+    if control == 'Clear Events':
+        result['kernelCommands']['clearEvents'] = True
+    elif control == 'Monitor':
+        result['kernelCommands']['manualRequests'] = ['operatorMonitor']
+    elif control == 'Normal':
+        result['kernelCommands']['normal'] = True
+    elif control == 'Restart Tab5':
+        result['maintenanceSelections'].append({'target': 'tab5', 'action': 'restart'})
+    elif control == 'Restart Shelly':
+        result['maintenanceSelections'].append({'target': 'shelly1', 'action': 'restart'})
+    else:
+        raise ValueError('unsupported V3 control')
+    return result
 
 
 # --- Event V3 host-only writable-field executor (not connected to M6.27) ---

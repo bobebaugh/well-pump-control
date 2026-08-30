@@ -1,4 +1,4 @@
-# Release: 2026-08-28 M6.23 — transport the v2 runtime pointer and exact body.
+# Release: 2026-08-30 Unit 4B — bounded V3 event records use CPU B's durable transport only.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -39,7 +39,9 @@ INGEST_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/in
 PUBLISH_TIMEOUT_S = 3
 DURABLE_INGEST_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/ingest-record'
 DURABLE_INGEST_TIMEOUT_S = 3
-DURABLE_QUEUE_DEPTH = 8
+# Reviewed RAM bound: 192 sparse event/audit records covers four days at two
+# transitions per hour while still leaving a fixed, nonpersistent ceiling.
+DURABLE_QUEUE_DEPTH = 192
 DURABLE_RETRY_BASE_MS = 5000
 DURABLE_RETRY_MAX_MS = 60000
 RULES_RELEASE_ORIGIN = 'https://pilot--well-pump-control.netlify.app'
@@ -495,16 +497,17 @@ def submit_durable_record(record):
     """Queue one complete CPU A-authored record without blocking CPU A."""
     if (not isinstance(record, dict) or record.get('schemaVersion') != 1 or
             record.get('recordType') not in (
-                'observation', 'rule-adoption', 'rule-rejection')):
+                'observation', 'event-open', 'event-close',
+                'rule-adoption', 'rule-rejection')):
         return False
     _durable_lock.acquire()
     try:
+        high_priority = record.get('recordType') in (
+            'event-open', 'event-close', 'rule-adoption', 'rule-rejection')
         if len(_pending_durable_records) >= DURABLE_QUEUE_DEPTH:
-            # Rules results outrank disposable/sparse observation history. If
-            # the bounded queue filled during an ingest outage, discard the
-            # oldest observation rather than permanently lose the one adoption
-            # or rejection record that confirms the rules outcome to cloud.
-            if record.get('recordType') in ('rule-adoption', 'rule-rejection'):
+            # V3 transitions and rules audits outrank disposable observation
+            # history. Evict only the oldest observation before losing one.
+            if high_priority:
                 for index, pending in enumerate(_pending_durable_records):
                     if pending.get('recordType') == 'observation':
                         _pending_durable_records.pop(index)
@@ -513,6 +516,9 @@ def submit_durable_record(record):
                     return False
             else:
                 return False
+        # Retention priority must not reorder the deployed durable FIFO. A
+        # high-priority event/audit may evict an observation when full, then
+        # joins the tail like every other accepted durable record.
         _pending_durable_records.append(record)
         return True
     finally:

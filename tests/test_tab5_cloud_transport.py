@@ -224,6 +224,42 @@ class CloudTransportTests(unittest.TestCase):
         finally:
             self.cloud._pending_durable_records = original
 
+    def test_event_records_evict_observations_but_preserve_fifo_and_retry_identity(self):
+        original = self.cloud._pending_durable_records
+        event = {"schemaVersion": 1, "runtimeSchemaVersion": 3,
+                 "recordType": "event-open", "recordId": "event-one"}
+        observations = [
+            {"schemaVersion": 1, "recordType": "observation", "sequence": index}
+            for index in range(self.cloud.DURABLE_QUEUE_DEPTH)
+        ]
+        try:
+            self.cloud._pending_durable_records = list(observations)
+            self.assertTrue(self.cloud.submit_durable_record(event))
+            self.assertNotIn(observations[0], self.cloud._pending_durable_records)
+            self.assertIs(self.cloud._peek_durable_record(), observations[1])
+            self.assertIs(self.cloud._pending_durable_records[-1], event)
+            self.requests.queue({}, status_code=503)
+            with self.assertRaises(self.cloud.TransportError):
+                self.cloud._publish_durable_record(event)
+            self.assertIs(self.cloud._pending_durable_records[-1], event)
+        finally:
+            self.cloud._pending_durable_records = original
+
+    def test_high_priority_only_full_queue_rejects_without_eviction(self):
+        original = self.cloud._pending_durable_records
+        pending = [
+            {"schemaVersion": 1, "runtimeSchemaVersion": 3,
+             "recordType": "event-close", "recordId": "event-{}".format(index)}
+            for index in range(self.cloud.DURABLE_QUEUE_DEPTH)
+        ]
+        audit = {"schemaVersion": 1, "recordType": "rule-adoption", "recordId": "audit"}
+        try:
+            self.cloud._pending_durable_records = list(pending)
+            self.assertFalse(self.cloud.submit_durable_record(audit))
+            self.assertEqual(self.cloud._pending_durable_records, pending)
+        finally:
+            self.cloud._pending_durable_records = original
+
     def test_pending_rules_download_can_follow_disposable_current_only(self):
         self.assertTrue(self.cloud._rules_download_may_follow_rtdb(None))
         self.assertTrue(self.cloud._rules_download_may_follow_rtdb("current-observation"))
