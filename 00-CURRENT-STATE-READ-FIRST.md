@@ -499,8 +499,41 @@ write an RTDB pointer. The Gate 2 "stop for approval before any RTDB pointer wri
 control is therefore **procedural, not technical**. Low risk — the pointer is
 execution-disabled and no Tab5 carries a V3 runtime — but do not assume code prevents
 it.
+### STEP 2 TRANSPORT — COMPLETE AND VERIFIED ON HARDWARE, 2026-08-30
+
+The first full web-to-flash delivery ran end to end on the real device. This closes
+step 2. Evidence, not assertion:
+
+- The staged file pulled off Tab5 flash hashes **byte-identical** to the published
+  release: `015f3d95e0b24be12ec2bd88b4a79b9b93f09ef88d049747bbd91ff6022993ed`, matching
+  the device's own reported `hash=015f3d95e0b2`. Compile → Firestore → RTDB pointer →
+  HTTP download → atomic flash write is lossless.
+- Re-running the device's own `validate_rules_v3_staged_release()` against that file
+  **accepts** it, with `executionEnabled: false` in the derived reference.
+- The device logged the pointer read with exactly the 12 contract fields, then
+  `V3 release staged only:` — staged, not adopted, not executed.
+- Two consecutive releases (`…-v1`, then `…-v2`) both delivered and staged, so the
+  path is repeatable, not a one-off.
+
+**Execution remains disabled and no rules engine ran.** Step 2's boundary held.
+
+**Migration gap found and resolved in passing.** The first delivery failed
+`rules_v3_state_invalid`. Cause: the package published before the Gate 1 deploy had its
+Firestore state document written by code predating
+`contracts/rules-v3-state-v1.schema.json`, so it lacked `kind` and `executionEnabled`;
+`markDelivered` spreads that stored document, and the schema's `required` check failed.
+Republishing under current code produced a valid state document and delivery succeeded.
+No migration code was added — the stale document came from a code version that no longer
+exists. **If an old V3 state document is ever encountered again, republish rather than
+patching the schema.**
+
+Note the ordering that this exposed: `publishPointer` writes RTDB **before**
+`markDelivered` records it in Firestore, so a failure between them leaves RTDB saying
+delivered and Firestore saying not. That is what happened here. Worth revisiting when V3
+stabilises; not changed mid-test.
+
 3. **Pull V2, insert V3** in cloud and `pilot.py`; end-to-end testing. This is the
-   missing protection engine.
+   missing protection engine. ← **current step**
 4. **Shelly script** — only after step 3. Wiring determines its final rules wiring.
 5. **Design tightening and baseline rewrite** — after the fact.
 
@@ -552,4 +585,24 @@ not asserted.
 **Asserted but untested:** everything in V3 §§4–9. The V3 semantic kernel does not
 exist yet.
 
-**Never tested:** any Tab5 inhibit of a physically connected pump.
+**Verified on hardware 2026-08-30 — V3 transport, end to end.** Web compile through to
+Tab5 flash, hash-identical, accepted by the device validator, staged execution-disabled.
+See the step 2 completion record in §6.
+
+**Never tested:** any Tab5 inhibit of a physically connected pump. Still true, and now
+the *only* remaining never-tested item in the control path.
+
+**Live hazard to know before enabling execution.** The staged package
+`20260830183549-event-v3-v2` contains **`E007 UtilityVoltageHigh`, enabled, severity
+Red**, which on open assigns `PumpEnable = false` — a real STOP consequence, triggered
+by `SupplyVoltage > 265` over 2 observations. It is inert only because V3 execution is
+disabled and the semantic kernel does not exist. The moment step 3 enables execution,
+this package inhibits the pump on high line voltage. That may well be intended; it must
+be a decision, not a surprise.
+
+Also in that package: `UDF(IsLocked)` is declared as a device field but is **still
+unreadable** per §5.2, so it resolves to `None`. No enabled rule reads it today, so it is
+currently inert — but it is exactly the silent dead-field trap §5.2 describes, now
+shipped in a real package. The Boyle-tank function outputs
+(`TankWaterGallons`, `PressureSlopePSIPerMinute`, `TankNetFlowGPM`, `PumpOffDemandGPM`,
+`TankFlowQuality`) likewise return `None` today; no enabled rule reads them either.
