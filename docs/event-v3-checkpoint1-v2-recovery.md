@@ -46,3 +46,17 @@ candidate tip. It is intentionally not duplicated here: a copied document
 would create a second authority on this clean checkpoint branch. Checkpoint 1
 implements only the reviewed authoring/package subset and must be read with
 that source authority and the checkpoint approval record.
+
+## Checkpoint 2 contract routing
+
+The accepted Checkpoint 1 package must not be passed through the older broad
+candidate Tab5 prototype resolver at
+`agent/event-v3-runtime` `554a64657e5e82bf221f724c99962887423c405d`.
+That prototype requires the older root shape with `calculatedFields` and no
+`lifecycle` or `systemFields`; the Checkpoint 1 runtime package emits
+`calculations`, `lifecycle`, and `systemFields`. Its occurrence triggers also
+expect `request` / `occurrence` rather than the accepted `occurrenceField`.
+
+This is not a Checkpoint 1 runtime change. Checkpoint 2 must adopt and resolve
+the accepted Checkpoint 1 contract explicitly, with its own validation and
+tests, rather than blindly reusing the broad candidate resolver.

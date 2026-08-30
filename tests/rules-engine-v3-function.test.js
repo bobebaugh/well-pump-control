@@ -94,3 +94,44 @@ test("V3 endpoint rejects delivery without constructing or calling a delivery fa
   assert.equal(JSON.parse(result.body).code, "v3_delivery_not_available");
   assert.equal(harnessed.deliveryFactoryCalls, 0);
 });
+
+test("V3 Boolean working field is compiled, published, reopened, and restored", async () => {
+  const { handler, published } = harness();
+  const loaded = JSON.parse((await handler(request("GET"))).body);
+  const systemFields = structuredClone(loaded.draft.systemFields);
+  systemFields.push({
+    id: "working-commissioning-hold",
+    systemName: "CommissioningHold",
+    label: "Commissioning hold",
+    source: "session",
+    runtimeRole: "working",
+    type: "boolean",
+    unit: null,
+    initialValue: false,
+    logging: { mode: "change" },
+    assignmentTarget: true
+  });
+  const events = structuredClone(loaded.draft.events);
+  const highVoltage = events.find(event => event.id === "E007");
+  highVoltage.opening.trigger.condition.clauses.push({ field: "CommissioningHold", operator: "eq", value: false });
+  highVoltage.onOpen.assignments.push({ target: "CommissioningHold", value: true, ownership: "transition" });
+
+  assert.equal((await handler(request("PUT", { section: "systemFields", baseRevision: 1, items: systemFields }))).statusCode, 200);
+  assert.equal((await handler(request("PUT", { section: "events", baseRevision: 1, items: events }))).statusCode, 200);
+  const validation = await handler(request("POST", { action: "validate" }));
+  assert.equal(validation.statusCode, 200);
+  assert.equal(JSON.parse(validation.body).runtimePackage.systemFields.find(field => field.systemName === "CommissioningHold").initialValue, false);
+
+  const publishedResponse = await handler(request("POST", { action: "publish", basePackageVersion: 0 }));
+  assert.equal(publishedResponse.statusCode, 201);
+  const body = JSON.parse(publishedResponse.body);
+  assert.equal(published.length, 1);
+  assert.equal(published[0].release.authoringPackage.systemFields.find(field => field.systemName === "CommissioningHold").assignmentTarget, true);
+  assert.deepEqual(JSON.parse(published[0].release.runtimeBody).events.find(event => event.id === "E007").onOpen.assignments.at(-1), { target: "CommissioningHold", value: true, ownership: "transition" });
+
+  const reopened = JSON.parse((await handler(request("GET", undefined, { version: "3", releaseId: body.current.releaseId }))).body).release;
+  assert.deepEqual(reopened.authoringPackage.systemFields.find(field => field.systemName === "CommissioningHold"), systemFields.at(-1));
+  const restored = await handler(request("POST", { action: "restore", releaseId: body.current.releaseId, baseRevisions: { devices: 1, calculatedFields: 1, systemFields: 2, events: 2 } }));
+  assert.equal(restored.statusCode, 200);
+  assert.deepEqual(JSON.parse(restored.body).draft.systemFields.find(field => field.systemName === "CommissioningHold"), systemFields.at(-1));
+});

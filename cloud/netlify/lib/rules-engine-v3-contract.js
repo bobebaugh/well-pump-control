@@ -53,13 +53,14 @@ function validateSystemFields(systemFields, fields, writable, occurrences, error
   if (!Array.isArray(systemFields)) { errors.push(issue("systemFields", "invalid_system_fields", "System fields must be an array.")); return; }
   if (systemFields.length > MAX_SYSTEM_FIELDS) errors.push(issue("systemFields", "system_fields_too_large", `A package may contain at most ${MAX_SYSTEM_FIELDS} system fields.`));
   const ids = new Set();
+  let operatingModeCount = 0;
   for (let index = 0; index < systemFields.length; index += 1) {
     const field = systemFields[index]; const path = `systemFields[${index}]`;
     if (!isObject(field)) { errors.push(issue(path, "invalid_system_field", "System field must be an object.")); continue; }
     const source = field.source;
     const common = ["id", "systemName", "label", "source", "runtimeRole", "type", "unit", "logging"];
     const allowed = source === "session"
-      ? new Set([...common, "enumValues", "initialValue", "assignmentTarget"])
+      ? new Set([...common, "initialValue", "assignmentTarget", ...(field.type === "enum" ? ["enumValues"] : [])])
       : new Set([...common, "occurrenceKey"]);
     if (!hasOnly(field, allowed)) errors.push(issue(path, "invalid_system_field_shape", "System field has properties appropriate to its declared source."));
     if (!ID_PATTERN.test(field.id || "")) errors.push(issue(`${path}.id`, "invalid_system_field_id", "System field ID is required."));
@@ -74,10 +75,19 @@ function validateSystemFields(systemFields, fields, writable, occurrences, error
     validateLogging(field.logging, `${path}.logging`, field, errors);
 
     if (source === "session") {
-      if (field.runtimeRole !== "operatingMode") errors.push(issue(`${path}.runtimeRole`, "invalid_session_role", "The initial V3 session field role is operatingMode."));
-      if (field.type !== "enum" || !Array.isArray(field.enumValues) || field.enumValues.length !== 2 || !field.enumValues.includes("Normal") || !field.enumValues.includes("Monitor")) errors.push(issue(`${path}.enumValues`, "invalid_operating_mode_values", "Operating mode is the enum Normal / Monitor."));
-      if (!valueMatchesField(field.initialValue, field, "eq")) errors.push(issue(`${path}.initialValue`, "invalid_initial_value", "Initial value must match the typed system field."));
-      if (field.assignmentTarget !== true) errors.push(issue(`${path}.assignmentTarget`, "missing_assignment_target", "Operating mode must be an assignment target."));
+      if (field.runtimeRole === "operatingMode") {
+        operatingModeCount += 1;
+        if (field.type !== "enum" || !sameValue(field.enumValues, ["Normal", "Monitor"])) errors.push(issue(`${path}.enumValues`, "invalid_operating_mode_values", "Operating mode is the ordered enum Normal / Monitor."));
+        if (field.initialValue !== "Normal") errors.push(issue(`${path}.initialValue`, "invalid_operating_mode_initial_value", "Operating mode starts at Normal."));
+        if (field.assignmentTarget !== true) errors.push(issue(`${path}.assignmentTarget`, "missing_assignment_target", "Operating mode must be an assignment target."));
+      } else if (field.runtimeRole === "working") {
+        if (!["number", "integer", "boolean", "enum"].includes(field.type)) errors.push(issue(`${path}.type`, "invalid_working_field_type", "Working fields use number, integer, boolean, or enum."));
+        if (field.type === "enum" && (!Array.isArray(field.enumValues) || field.enumValues.length < 2 || field.enumValues.length > 32 || field.enumValues.some(value => typeof value !== "string" || !value) || new Set(field.enumValues).size !== field.enumValues.length)) errors.push(issue(`${path}.enumValues`, "invalid_working_enum_values", "Enum working fields need two through 32 unique non-empty choices."));
+        if (typeof field.assignmentTarget !== "boolean") errors.push(issue(`${path}.assignmentTarget`, "invalid_assignment_target", "Working field assignment eligibility must be true or false."));
+      } else {
+        errors.push(issue(`${path}.runtimeRole`, "invalid_session_role", "Session fields use operatingMode or working."));
+      }
+      if (!valueMatchesField(field.initialValue, field, "eq") || (field.type === "integer" && !Number.isInteger(field.initialValue))) errors.push(issue(`${path}.initialValue`, "invalid_initial_value", "Initial value must match the typed system field."));
       if (field.assignmentTarget === true) writable.set(field.systemName, { ...field, systemField: true });
     } else {
       if (field.runtimeRole !== "occurrence") errors.push(issue(`${path}.runtimeRole`, "invalid_occurrence_role", "Occurrence fields use runtimeRole occurrence."));
@@ -88,8 +98,7 @@ function validateSystemFields(systemFields, fields, writable, occurrences, error
     }
     if (field.systemName && !fields.has(field.systemName)) fields.set(field.systemName, { ...field, operators: TYPE_OPERATORS[field.type] || [] });
   }
-  const operating = [...fields.values()].filter(field => field.source === "session" && field.runtimeRole === "operatingMode");
-  if (operating.length !== 1) errors.push(issue("systemFields", "operating_mode_required", "Exactly one operatingMode session field is required."));
+  if (operatingModeCount !== 1) errors.push(issue("systemFields", "operating_mode_required", "Exactly one operatingMode session field is required."));
 }
 
 function validateQualifier(condition, path, errors) {

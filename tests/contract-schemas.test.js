@@ -187,6 +187,24 @@ test("V3 runtime schema closes nested compiler output and excludes authoring not
   assert.deepEqual(validate(schema, boundedComparison), []);
 });
 
+test("V3 runtime schema accepts typed generic session working fields", () => {
+  const schema = readJson("contracts/rules-runtime-package-v3.schema.json");
+  const runtime = readJson("contracts/examples/v3/rules-runtime-package.json");
+  runtime.systemFields.push(
+    { id: "working-number", systemName: "WorkingNumber", label: "Working number", source: "session", runtimeRole: "working", type: "number", unit: null, initialValue: 1.5, logging: { mode: "delta", threshold: 0.25 }, assignmentTarget: false },
+    { id: "working-integer", systemName: "WorkingInteger", label: "Working integer", source: "session", runtimeRole: "working", type: "integer", unit: null, initialValue: 2, logging: { mode: "change" }, assignmentTarget: true },
+    { id: "working-boolean", systemName: "WorkingBoolean", label: "Working Boolean", source: "session", runtimeRole: "working", type: "boolean", unit: null, initialValue: false, logging: { mode: "change" }, assignmentTarget: true },
+    { id: "working-enum", systemName: "WorkingEnum", label: "Working enum", source: "session", runtimeRole: "working", type: "enum", unit: null, enumValues: ["Idle", "Active"], initialValue: "Idle", logging: { mode: "change" }, assignmentTarget: false }
+  );
+  assert.deepEqual(validate(schema, runtime), []);
+
+  const wrongInitialType = structuredClone(runtime);
+  wrongInitialType.systemFields.find(field => field.systemName === "WorkingBoolean").initialValue = "false";
+  assert.notDeepEqual(validate(schema, wrongInitialType), []);
+  // Enum membership is a dynamic cross-reference and is intentionally enforced
+  // by the compiler contract rather than claimed as JSON Schema behavior.
+});
+
 test("protected pilot functions and telemetry contract match the reviewed baselines", () => {
   const expected = {
     "cloud/netlify/functions/ingest-power.js": "70986d473b9ede3d3589193a5d38b20c80af54a0655bbf46f80da074141a362e",

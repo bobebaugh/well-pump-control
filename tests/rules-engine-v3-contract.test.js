@@ -92,6 +92,56 @@ test("V3 contract rejects malformed closed shapes and unavailable condition fiel
   assert.deepEqual(result.warnings, []);
 });
 
+test("V3 generic working fields are typed condition fields and optional assignment targets", () => {
+  const draft = defaults();
+  draft.systemFields.push(
+    { id: "working-number", systemName: "WorkingNumber", label: "Working number", source: "session", runtimeRole: "working", type: "number", unit: null, initialValue: 1.25, logging: { mode: "delta", threshold: 0.25 }, assignmentTarget: false },
+    { id: "working-integer", systemName: "WorkingInteger", label: "Working integer", source: "session", runtimeRole: "working", type: "integer", unit: null, initialValue: 3, logging: { mode: "change" }, assignmentTarget: false },
+    { id: "working-boolean", systemName: "WorkingBoolean", label: "Working Boolean", source: "session", runtimeRole: "working", type: "boolean", unit: null, initialValue: false, logging: { mode: "change" }, assignmentTarget: true },
+    { id: "working-enum", systemName: "WorkingEnum", label: "Working enum", source: "session", runtimeRole: "working", type: "enum", unit: null, enumValues: ["Idle", "Active"], initialValue: "Idle", logging: { mode: "change" }, assignmentTarget: false }
+  );
+  const highVoltage = draft.events.find(event => event.id === "E007");
+  highVoltage.opening.trigger.condition.clauses.push({ field: "WorkingBoolean", operator: "eq", value: false });
+  highVoltage.onOpen.assignments.push({ target: "WorkingBoolean", value: true, ownership: "transition" });
+  const compiled = compileV3Release(draft, "20260830000000-event-v3-v1", 1);
+  assert.equal(compiled.valid, true);
+  assert.equal(compiled.runtimePackage.systemFields.find(field => field.systemName === "WorkingBoolean").initialValue, false);
+  assert.deepEqual(compiled.runtimePackage.events.find(event => event.id === "E007").onOpen.assignments.at(-1), { target: "WorkingBoolean", value: true, ownership: "transition" });
+
+  for (const [type, initialValue] of [["number", "not-a-number"], ["integer", 1.5], ["boolean", "false"], ["enum", "Other"]]) {
+    const invalid = structuredClone(draft);
+    const field = invalid.systemFields.find(item => item.type === type && item.runtimeRole === "working");
+    field.initialValue = initialValue;
+    assert.ok(codes(validateAndCompileV3(invalid)).includes("invalid_initial_value"), `${type} initial value should be type-checked`);
+  }
+
+  const notWritable = structuredClone(draft);
+  notWritable.systemFields.find(field => field.systemName === "WorkingBoolean").assignmentTarget = false;
+  assert.ok(codes(validateAndCompileV3(notWritable)).includes("assignment_target_not_writable"));
+});
+
+test("V3 retains one special operating mode and signal-only occurrence fields", () => {
+  const noOperatingMode = defaults();
+  noOperatingMode.systemFields[0].runtimeRole = "working";
+  assert.ok(codes(validateAndCompileV3(noOperatingMode)).includes("operating_mode_required"));
+
+  const operatingInitial = defaults();
+  operatingInitial.systemFields[0].initialValue = "Monitor";
+  const operatingResult = validateAndCompileV3(operatingInitial);
+  assert.ok(codes(operatingResult).includes("invalid_operating_mode_initial_value"));
+
+  const operatingOrder = defaults();
+  operatingOrder.systemFields[0].enumValues = ["Monitor", "Normal"];
+  assert.ok(codes(validateAndCompileV3(operatingOrder)).includes("invalid_operating_mode_values"));
+
+  const occurrenceValue = defaults();
+  occurrenceValue.systemFields[1].initialValue = true;
+  occurrenceValue.systemFields[1].assignmentTarget = true;
+  const occurrenceResult = validateAndCompileV3(occurrenceValue);
+  assert.ok(codes(occurrenceResult).includes("invalid_system_field_shape"));
+  assert.ok(codes(occurrenceResult).includes("invalid_trigger_source") === false);
+});
+
 test("V3 preserves validated event summaries in runtime bytes and rejects malformed summary rows", () => {
   const draft = defaults();
   const event = draft.events.find(item => item.id === "E007");

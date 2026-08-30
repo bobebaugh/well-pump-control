@@ -458,21 +458,63 @@ function capturePhase(name) {
 function renderSystemField() {
   const field = state.draft.systemFields[state.selected.systemFields]; if (!field) { editor.innerHTML = "<p class='empty-editor'>Add a system field to begin.</p>"; return; }
   const session = field.source === "session";
-  editor.innerHTML = `<div class="engine-editor-heading"><div><p class="kicker">SYSTEM FIELD</p><h2>${escapeHtml(field.label)}</h2></div><button class="secondary-button compact-button danger-button" id="remove-item" type="button">Remove</button></div><div class="form-grid compact-form"><label>ID<input id="sf-id" value="${escapeHtml(field.id)}"></label><label>System name<input id="sf-name" value="${escapeHtml(field.systemName)}"></label><label>Label<input id="sf-label" value="${escapeHtml(field.label)}"></label><label>Source<select id="sf-source"><option value="session"${session ? " selected" : ""}>session</option><option value="manualOccurrence"${field.source === "manualOccurrence" ? " selected" : ""}>manual occurrence</option><option value="internalOccurrence"${field.source === "internalOccurrence" ? " selected" : ""}>internal occurrence</option></select></label></div>${session ? `<div class="form-grid compact-form"><label>Role<input value="operatingMode" readonly></label><label>Enum values<input id="sf-enum" value="${escapeHtml((field.enumValues || []).join(", "))}"></label><label>Initial value<input id="sf-initial" value="${escapeHtml(field.initialValue)}"></label><label>Logging<select id="sf-log">${logModeOptions(field.logging?.mode)}</select></label><label class="switch-label"><input id="sf-assignment" type="checkbox"${field.assignmentTarget ? " checked" : ""}> Assignment target</label></div>` : `<div class="form-grid compact-form"><label>Role<input value="occurrence" readonly></label><label>Occurrence key<input id="sf-occurrence" value="${escapeHtml(field.occurrenceKey || "")}"></label><label>Logging<select id="sf-log">${logModeOptions(field.logging?.mode)}</select></label><p class="form-help">Occurrence definitions name runtime signals; they do not invent telemetry.</p></div>`}`;
+  const operatingMode = session && field.runtimeRole === "operatingMode";
+  const enumValues = field.type === "enum" ? `<label>Enum choices<input id="sf-enum" value="${escapeHtml((field.enumValues || []).join(", "))}"${operatingMode ? " readonly" : ""}></label>` : "";
+  const loggingControl = `<label>Logging<select id="sf-log">${logModeOptions(field.logging?.mode)}</select></label>${field.logging?.mode === "delta" ? `<label>Delta threshold<input id="sf-log-threshold" type="number" min="0" step="any" value="${escapeHtml(String(field.logging.threshold ?? ""))}"></label>` : ""}`;
+  const workingInitial = field.type === "boolean"
+    ? `<label>Startup value<select id="sf-initial"><option value="false"${field.initialValue === false ? " selected" : ""}>false</option><option value="true"${field.initialValue === true ? " selected" : ""}>true</option></select></label>`
+    : `<label>Startup value<input id="sf-initial" value="${escapeHtml(String(field.initialValue ?? ""))}"></label>`;
+  const sessionControls = operatingMode
+    ? `<div class="form-grid compact-form"><label>Role<input value="operatingMode" readonly></label><label>Type<input value="enum" readonly></label>${enumValues}<label>Startup value<input id="sf-initial" value="Normal" readonly></label>${loggingControl}<label class="switch-label"><input id="sf-assignment" type="checkbox" checked disabled> Assignment target</label></div><p class="form-help">OperatingMode is the required Normal / Monitor state. It is not device telemetry.</p>`
+    : `<div class="form-grid compact-form"><label>Role<input value="working" readonly></label><label>Type<select id="sf-type"><option value="number"${field.type === "number" ? " selected" : ""}>number</option><option value="integer"${field.type === "integer" ? " selected" : ""}>integer</option><option value="boolean"${field.type === "boolean" ? " selected" : ""}>Boolean</option><option value="enum"${field.type === "enum" ? " selected" : ""}>enum</option></select></label>${enumValues}${workingInitial}${loggingControl}<label class="switch-label"><input id="sf-assignment" type="checkbox"${field.assignmentTarget ? " checked" : ""}> Assignment target</label></div><p class="form-help">Working fields are session/RAM state, not device telemetry. They may be used in event conditions and become action targets only when enabled above.</p>`;
+  editor.innerHTML = `<div class="engine-editor-heading"><div><p class="kicker">SYSTEM FIELD</p><h2>${escapeHtml(field.label)}</h2></div><button class="secondary-button compact-button danger-button" id="remove-item" type="button">Remove</button></div><div class="form-grid compact-form"><label>ID<input id="sf-id" value="${escapeHtml(field.id)}"></label><label>System name<input id="sf-name" value="${escapeHtml(field.systemName)}"></label><label>Label<input id="sf-label" value="${escapeHtml(field.label)}"></label><label>Source<select id="sf-source"><option value="session"${session ? " selected" : ""}>session working state</option><option value="manualOccurrence"${field.source === "manualOccurrence" ? " selected" : ""}>manual occurrence</option><option value="internalOccurrence"${field.source === "internalOccurrence" ? " selected" : ""}>internal occurrence</option></select></label></div>${session ? sessionControls : `<div class="form-grid compact-form"><label>Role<input value="occurrence" readonly></label><label>Occurrence key<input id="sf-occurrence" value="${escapeHtml(field.occurrenceKey || "")}"></label><label>Logging<select id="sf-log">${logModeOptions(field.logging?.mode)}</select></label><p class="form-help">Occurrence definitions name runtime signals; they are not persistent working values or device telemetry.</p></div>`}`;
+}
+function typedWorkingInitial(type, raw, enumValues = []) {
+  if (type === "boolean") return raw === "true";
+  if (type === "number" || type === "integer") return Number(raw);
+  return raw.trim() || enumValues[0] || "";
 }
 function captureSystemField(displayedSource = state.draft.systemFields[state.selected.systemFields]?.source) {
   const index = state.selected.systemFields; const field = state.draft.systemFields[index]; if (!field || !document.querySelector("#sf-id")) return;
-  const common = { id: document.querySelector("#sf-id").value.trim(), systemName: document.querySelector("#sf-name").value.trim(), label: document.querySelector("#sf-label").value.trim(), source: displayedSource, unit: null, logging: { mode: document.querySelector("#sf-log").value } };
-  state.draft.systemFields[index] = displayedSource === "session"
-    ? { ...common, runtimeRole: "operatingMode", type: "enum", enumValues: document.querySelector("#sf-enum").value.split(",").map(value => value.trim()).filter(Boolean), initialValue: document.querySelector("#sf-initial").value.trim(), assignmentTarget: document.querySelector("#sf-assignment").checked }
-    : { ...common, runtimeRole: "occurrence", type: "signal", occurrenceKey: document.querySelector("#sf-occurrence").value.trim() };
+  const logMode = document.querySelector("#sf-log").value;
+  const common = { id: document.querySelector("#sf-id").value.trim(), systemName: document.querySelector("#sf-name").value.trim(), label: document.querySelector("#sf-label").value.trim(), source: displayedSource, unit: null, logging: logMode === "delta" ? { mode: logMode, threshold: Number(document.querySelector("#sf-log-threshold")?.value) } : { mode: logMode } };
+  if (displayedSource !== "session") {
+    state.draft.systemFields[index] = { ...common, runtimeRole: "occurrence", type: "signal", occurrenceKey: document.querySelector("#sf-occurrence").value.trim() };
+    return;
+  }
+  if (field.runtimeRole === "operatingMode") {
+    state.draft.systemFields[index] = { ...common, runtimeRole: "operatingMode", type: "enum", enumValues: ["Normal", "Monitor"], initialValue: "Normal", assignmentTarget: true };
+    return;
+  }
+  const type = document.querySelector("#sf-type").value;
+  const enumValues = type === "enum" ? document.querySelector("#sf-enum").value.split(",").map(value => value.trim()).filter(Boolean) : null;
+  state.draft.systemFields[index] = { ...common, runtimeRole: "working", type, ...(enumValues ? { enumValues } : {}), initialValue: typedWorkingInitial(type, document.querySelector("#sf-initial").value, enumValues || []), assignmentTarget: document.querySelector("#sf-assignment").checked };
 }
 function normalizeSystemFieldSource(index, source) {
   const field = state.draft.systemFields[index];
   const common = { id: field.id, systemName: field.systemName, label: field.label, source, unit: null, logging: field.logging || { mode: "none" } };
-  state.draft.systemFields[index] = source === "session"
-    ? { ...common, runtimeRole: "operatingMode", type: "enum", enumValues: ["Normal", "Monitor"], initialValue: "Normal", assignmentTarget: true }
-    : { ...common, runtimeRole: "occurrence", type: "signal", occurrenceKey: field.occurrenceKey || "newOccurrence" };
+  if (source === "session") {
+    state.draft.systemFields[index] = field.runtimeRole === "operatingMode"
+      ? { ...common, runtimeRole: "operatingMode", type: "enum", enumValues: ["Normal", "Monitor"], initialValue: "Normal", assignmentTarget: true }
+      : { ...common, runtimeRole: "working", type: "boolean", initialValue: false, assignmentTarget: false };
+    return;
+  }
+  state.draft.systemFields[index] = { ...common, runtimeRole: "occurrence", type: "signal", occurrenceKey: field.occurrenceKey || "newOccurrence" };
+}
+function workingFieldWithType(field, type) {
+  const common = { id: field.id, systemName: field.systemName, label: field.label, source: "session", runtimeRole: "working", type, unit: null, logging: field.logging || { mode: "none" }, assignmentTarget: Boolean(field.assignmentTarget) };
+  const initialValue = type === "boolean" ? false : type === "integer" || type === "number" ? 0 : "ChoiceA";
+  return { ...common, ...(type === "enum" ? { enumValues: ["ChoiceA", "ChoiceB"] } : {}), initialValue };
+}
+function normalizeWorkingFieldType(index, type) {
+  state.draft.systemFields[index] = workingFieldWithType(state.draft.systemFields[index], type);
+}
+function systemFieldWithLogging(field, mode) {
+  const threshold = field.logging?.mode === "delta" && Number.isFinite(field.logging.threshold) && field.logging.threshold > 0 ? field.logging.threshold : 1;
+  return { ...field, logging: mode === "delta" ? { mode, threshold } : { mode } };
+}
+function normalizeSystemFieldLogging(index, mode) {
+  state.draft.systemFields[index] = systemFieldWithLogging(state.draft.systemFields[index], mode);
 }
 function renderEvent() {
   const event = state.draft.events[state.selected.events]; if (!event) { editor.innerHTML = "<p class='empty-editor'>Add an event to begin.</p>"; return; }
@@ -514,7 +556,7 @@ function addItem() {
   captureCurrent();
   if (state.section === "devices") state.draft.devices.push({ id: `device-${state.draft.devices.length + 1}`, label: "New device", driver: "", address: "", enabled: false, fields: [] });
   else if (state.section === "calculatedFields") state.draft.calculatedFields.push({ id: `calculation-${state.draft.calculatedFields.length + 1}`, label: "New calculated value", kind: "expression", expression: "PumpWatts", output: { systemName: "CalculatedValue", label: "Calculated value", type: "number", unit: null, logging: { mode: "delta", threshold: 1 } } });
-  else if (state.section === "systemFields") state.draft.systemFields.push({ id: "system-field", systemName: "SystemField", label: "System field", source: "manualOccurrence", runtimeRole: "occurrence", type: "signal", unit: null, occurrenceKey: "newOccurrence", logging: { mode: "none" } });
+  else if (state.section === "systemFields") state.draft.systemFields.push({ id: "system-field", systemName: "SystemField", label: "System field", source: "session", runtimeRole: "working", type: "boolean", unit: null, initialValue: false, logging: { mode: "none" }, assignmentTarget: false });
   else { const clause = defaultV3Clause(); state.draft.events.push({ id: "E100", systemName: "NewEvent", displayName: "New event", enabled: false, severity: "Info", eventClass: "transient", opening: { trigger: { type: "condition", condition: { mode: "all", clauses: [clause], observationCount: 1, minimumSeconds: 0 } } }, closing: { policy: "condition", condition: { mode: "all", clauses: [clone(clause)], observationCount: 1, minimumSeconds: 0 } }, onOpen: { assignments: [], guardedGroups: [] }, onClose: { assignments: [], guardedGroups: [] }, summary: { durationOutput: null, aggregates: [] }, web: { notifyOnOpen: false, notifyOnClose: false, openMessage: "", closeMessage: "" } }); }
   state.selected[state.section] = state.draft[state.section].length - 1; markDirty(); updateCounts(); renderEditor();
 }
@@ -575,6 +617,27 @@ editor.addEventListener("change", event => {
   if (event.target.id === "sf-source") {
     captureSystemField(state.draft.systemFields[state.selected.systemFields].source);
     normalizeSystemFieldSource(state.selected.systemFields, event.target.value);
+    markDirty(); renderEditor(); return;
+  }
+  if (event.target.id === "sf-type") {
+    const type = event.target.value;
+    // The select already has the requested value, but the surrounding form is
+    // still the old type's shape. Capture that rendered shape before changing
+    // the model so Boolean-to-enum does not seek a missing enum control.
+    event.target.value = state.draft.systemFields[state.selected.systemFields].type;
+    captureSystemField("session");
+    event.target.value = type;
+    normalizeWorkingFieldType(state.selected.systemFields, type);
+    markDirty(); renderEditor(); return;
+  }
+  if (event.target.id === "sf-log") {
+    const mode = event.target.value;
+    // As with type, preserve the old rendered logging controls first. A
+    // non-delta form has no threshold element to capture yet.
+    event.target.value = state.draft.systemFields[state.selected.systemFields].logging?.mode || "none";
+    captureSystemField(state.draft.systemFields[state.selected.systemFields].source);
+    event.target.value = mode;
+    normalizeSystemFieldLogging(state.selected.systemFields, mode);
     markDirty(); renderEditor(); return;
   }
   if (event.target.id === "v3-trigger") {

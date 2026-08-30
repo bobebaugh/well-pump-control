@@ -14,6 +14,10 @@
 - Preserve units, validity, observation time, source, and staleness semantics.
 - Do not label a derived value as directly measured.
 - Treat unavailable future sensors and controls as unavailable; never fabricate values for the HMI.
+- For Event V3 behavior, use `EVENT_V3_IMPLEMENTATION.md` only from
+  `agent/event-v3-contract` at `78ca53aff0998d87656016964838acc6881821e2`.
+  It is the implementation authority; do not copy or fork it into a second
+  authority on a checkpoint branch.
 
 ## Security
 
