@@ -8,6 +8,8 @@ const { defaults: v3Defaults } = require("../lib/rules-engine-v3-defaults");
 const { compileV3Release, validateAndCompileV3 } = require("../lib/rules-engine-v3-contract");
 const { SECTIONS: V3_SECTIONS } = require("../lib/rules-engine-v3-store");
 const { RulesEngineReleaseError, RELEASE_ID_PATTERN, verifiedRuntimeRelease } = require("../lib/rules-engine-release-contract");
+const { RELEASE_ID_PATTERN: V3_RELEASE_ID_PATTERN, verifiedRuntimeV3Release } = require("../lib/rules-engine-v3-release-contract");
+const { verifiedRulesV3State } = require("../lib/rules-engine-v3-state-contract");
 
 const MAX_BODY_BYTES = 524288;
 const MAX_RUNTIME_BYTES = 65536;
@@ -75,13 +77,13 @@ function createHandler(dependencies = {}) {
         const releases = await store.listReleases();
         return response(200, {
           status: "ok", draft: loaded.draft, current: loaded.current, releases,
-          capabilities: { functions: FUNCTION_CATALOG, operators: TYPE_OPERATORS, drivers: DEVICE_DRIVERS, summaryOperations: SUMMARY_OPERATIONS, ...(v3 ? { packageSchemaVersion: 3, deliveryAvailable: false } : {}) },
+          capabilities: { functions: FUNCTION_CATALOG, operators: TYPE_OPERATORS, drivers: DEVICE_DRIVERS, summaryOperations: SUMMARY_OPERATIONS, ...(v3 ? { packageSchemaVersion: 3, deliveryAvailable: true } : {}) },
           delivery: {
-            enabled: v3 ? false : loaded.current?.deliveryEnabled === true,
+            enabled: loaded.current?.deliveryEnabled === true,
             releaseId: loaded.current?.delivery?.releaseId || null,
             deliveredAtMs: loaded.current?.deliveredAtMs || null,
             description: v3
-              ? "V3 Checkpoint 1 stops at immutable publication. RTDB delivery is unavailable."
+            ? "V3 staging delivery publishes only an execution-disabled pointer. It does not activate Event V3."
               : "Delivery publishes the current immutable package identity to RTDB; Tab5 adoption remains separately verified."
           }
         });
@@ -97,7 +99,6 @@ function createHandler(dependencies = {}) {
       }
 
       if (!request || !["validate", "publish", "restore", "deliver"].includes(request.action)) return response(400, { status: "error", code: "invalid_action" });
-      if (v3 && request.action === "deliver") return response(409, { status: "error", code: "v3_delivery_not_available" });
       if (request.action === "restore") {
         if (!requestedReleaseId({ queryStringParameters: { releaseId: request.releaseId } }) || !request.baseRevisions || sections.some(section => !Number.isInteger(request.baseRevisions[section]))) {
           return response(400, { status: "error", code: "invalid_restore_request" });
@@ -106,6 +107,20 @@ function createHandler(dependencies = {}) {
         return response(200, { status: "restored", releaseId: request.releaseId, draft });
       }
       if (request.action === "deliver") {
+        if (v3) {
+          if (typeof request.releaseId !== "string" || !V3_RELEASE_ID_PATTERN.test(request.releaseId)) return response(400, { status: "error", code: "invalid_delivery_request" });
+          const loaded = await store.loadOrSeed(v3Defaults(), now().getTime());
+          if (!loaded.current || loaded.current.releaseId !== request.releaseId) return response(409, { status: "error", code: "delivery_not_current", current: loaded.current });
+          const release = await store.getRelease(request.releaseId);
+          const verified = verifiedRuntimeV3Release(release, request.releaseId);
+          if (verified.metadata.contentHash !== loaded.current.contentHash || verified.metadata.packageVersion !== loaded.current.packageVersion || verified.metadata.executionEnabled !== false) {
+            return response(409, { status: "error", code: "delivery_release_mismatch", current: loaded.current });
+          }
+          const deliveryFactory = dependencies.createV3Delivery || (() => require("../lib/rules-engine-v3-delivery").createRulesEngineV3Delivery());
+          await deliveryFactory().publishPointer(verified.metadata);
+          const current = verifiedRulesV3State(await store.markDelivered(request.releaseId, verified.metadata.contentHash, verified.metadata, now().getTime()));
+          return response(200, { status: "delivered", current, metadata: verified.metadata });
+        }
         if (typeof request.releaseId !== "string" || !RELEASE_ID_PATTERN.test(request.releaseId)) {
           return response(400, { status: "error", code: "invalid_delivery_request" });
         }
@@ -153,8 +168,10 @@ function createHandler(dependencies = {}) {
       const contentHash = createHash("sha256").update(runtimeBody, "utf8").digest("hex");
       const stateValue = {
         schemaVersion: v3 ? 3 : 2, packageVersion, releaseId, contentHash,
-        publishedAtMs: now().getTime(), deliveryEnabled: false
+        publishedAtMs: now().getTime(), deliveryEnabled: false,
+        ...(v3 ? { kind: "well-pump-event-v3-staging-state", executionEnabled: false } : {})
       };
+      if (v3) verifiedRulesV3State(stateValue);
       const release = {
         ...stateValue,
         authoringPackage: authoringDraft,
@@ -170,8 +187,10 @@ function createHandler(dependencies = {}) {
       if (error?.name === "RulesEngineV3StoreConflictError") return response(409, { status: "error", code: "stale_draft" });
       if (error?.name === "RulesEngineV3ReleaseNotFoundError") return response(404, { status: "error", code: "release_not_found" });
       if (error?.name === "RulesEngineV3IncompatibleReleaseError") return response(409, { status: "error", code: "incompatible_release_schema" });
+      if (error?.name === "RulesEngineV3ReleaseError") return response(409, { status: "error", code: error.code });
+      if (error?.name === "RulesEngineV3StateError") return response(409, { status: "error", code: error.code });
       if (error instanceof RulesEngineReleaseError) return response(409, { status: "error", code: error.code });
-      if (error?.name === "RulesEngineDeliveryError") return response(503, { status: "error", code: error.code });
+      if (error?.name === "RulesEngineDeliveryError" || error?.name === "RulesEngineV3DeliveryError") return response(503, { status: "error", code: error.code });
       if (error?.code === "invalid_json" || error?.code === "payload_too_large") return response(400, { status: "error", code: error.code });
       const configurationError = error?.name === "ConfigurationError";
       // Preserve the intentionally generic browser response, but retain enough

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/rules-v3-state-v1.schema.json",
+  "title": "Event V3 staging publication state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "packageVersion", "releaseId", "contentHash", "publishedAtMs", "deliveryEnabled", "executionEnabled"],
+  "properties": {
+    "schemaVersion": { "const": 3 },
+    "kind": { "const": "well-pump-event-v3-staging-state" },
+    "packageVersion": { "type": "integer", "minimum": 1 },
+    "releaseId": { "type": "string", "pattern": "^[0-9]{14}-event-v3-v[1-9][0-9]*$" },
+    "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "publishedAtMs": { "type": "integer", "minimum": 0 },
+    "deliveryEnabled": { "type": "boolean" },
+    "executionEnabled": { "const": false },
+    "deliveredAtMs": { "type": "integer", "minimum": 0 },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "kind", "siteId", "releaseId", "packageVersion", "runtimeSchemaVersion", "contentHash", "hashAlgorithm", "byteLength", "publishedAtMs", "executionEnabled", "downloadPath"],
+      "properties": {
+        "schemaVersion": { "const": 3 }, "kind": { "const": "well-pump-event-runtime-release-pointer-v3" }, "siteId": { "const": "well-main" },
+        "releaseId": { "type": "string", "pattern": "^[0-9]{14}-event-v3-v[1-9][0-9]*$" }, "packageVersion": { "type": "integer", "minimum": 1 }, "runtimeSchemaVersion": { "const": 3 },
+        "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "hashAlgorithm": { "const": "sha256" }, "byteLength": { "type": "integer", "minimum": 1, "maximum": 65536 },
+        "publishedAtMs": { "type": "integer", "minimum": 0 }, "executionEnabled": { "const": false }, "downloadPath": { "type": "string", "pattern": "^/\\.netlify/functions/rules-engine-release\\?version=3&releaseId=[0-9]{14}-event-v3-v[1-9][0-9]*$" }
+      }
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "deliveryEnabled": { "const": true } } }, "then": { "required": ["deliveredAtMs", "delivery"] } },
+    { "if": { "properties": { "deliveryEnabled": { "const": false } } }, "then": { "not": { "anyOf": [{ "required": ["deliveredAtMs"] }, { "required": ["delivery"] }] } } }
+  ]
+}

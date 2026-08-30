@@ -18,6 +18,8 @@ const schemas = [
   "contracts/rules-release-metadata-v1.schema.json",
   "contracts/rules-package-v1.schema.json",
   "contracts/rules-runtime-release-metadata-v2.schema.json",
+  "contracts/rules-runtime-release-metadata-v3.schema.json",
+  "contracts/rules-v3-state-v1.schema.json",
   "contracts/rules-runtime-package-v3.schema.json"
 ];
 

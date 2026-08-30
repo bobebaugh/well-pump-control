@@ -22,6 +22,7 @@ function releaseSummary(snapshot) {
     publishedAtMs: value.publishedAtMs,
     contentHash: value.contentHash,
     deliveryEnabled: false,
+    executionEnabled: false,
     runtimeBytes: typeof value.runtimeBody === "string" ? Buffer.byteLength(value.runtimeBody, "utf8") : null
   };
 }
@@ -91,6 +92,18 @@ function createRulesEngineV3Store(dependencies = {}) {
         }
         transaction.create(releases.doc(releaseId), release);
         transaction.set(state, stateValue);
+      });
+    },
+    async markDelivered(releaseId, contentHash, metadata, nowMs) {
+      return db.runTransaction(async transaction => {
+        const current = await transaction.get(state);
+        const value = current.exists ? current.data() : null;
+        if (!value || value.releaseId !== releaseId || value.contentHash !== contentHash || metadata.executionEnabled !== false) {
+          throw new RulesEngineV3StoreConflictError();
+        }
+        const next = { ...value, deliveryEnabled: true, executionEnabled: false, deliveredAtMs: nowMs, delivery: metadata };
+        transaction.set(state, next);
+        return next;
       });
     },
     async restoreRelease(releaseId, expectedRevisions, nowMs) {
