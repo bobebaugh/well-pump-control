@@ -1,5 +1,11 @@
 # Repository guidance
 
+> **READ FIRST — `00-CURRENT-STATE-READ-FIRST.md` at the repository root.**
+> Current verified branch SHAs, active decisions and their rationale, open and
+> blocking items, the owner's work sequence, and which older records are superseded.
+> Read it before this file's references and before starting any work unit.
+> It is a state record, not a design authority.
+
 ## Branch and scope
 
 - `main` and `pilot` are Netlify deployment branches. They are off limits during Tab5 work: do not commit, push, merge, rebase, or otherwise update either branch unless the user explicitly opens that scope.
