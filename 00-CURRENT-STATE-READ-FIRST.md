@@ -190,9 +190,27 @@ A rule referencing `IsLocked` type-checks and then resolves to nothing.
 Both fields need a binding, an object path, and a reader before the V3 enable gate can
 work on hardware.
 
-**5.3 Checkpoint 2 completion is unverified.** The session that produced it was lost;
-we have commit messages, not evidence. Establish this before step 3 begins removing
-V2.
+**5.3 RESOLVED — checkpoint 2 / Gate 1 is verified.** See §6.1.
+
+**5.7 The protected-baseline test fails for a line-ending reason, not a content
+reason. Fix the repo, not the test expectations.**
+
+`tests/contract-schemas.test.js` pins sha256 digests for seven protective-path files
+and reads them with `readFileSync`. Verified 2026-08-30: the git blob content of
+`ingest-power.js`, `current-power.js`, and `power-contract.js` matches the expected
+baselines **exactly**. The on-disk copies do not, because `core.autocrlf=true` and
+`.gitattributes` carries no `text`/`eol` rule — only an LVGL whitespace exception.
+`ingest-power.js` has 211 CR characters on disk.
+
+So the test fails on any Windows checkout and would pass in Linux CI. The guarded
+content is provably unmodified.
+
+**This is worth fixing rather than filing.** The test is a tripwire for unauthorized
+changes to the protective telemetry path. Permanently red for an unrelated reason, it
+has already been normalized as a known failure and can no longer detect a real change.
+Fix in `.gitattributes` (`* text=auto eol=lf`, or scoped to the guarded files) so it
+holds for every checkout, rather than per-machine `core.autocrlf`. Never "fix" it by
+updating the expected digests.
 
 **5.4 `P009` classification depends on the wiring outcome.** If the capture period
 does not inhibit, `IsLocked > 0` means lockout only and `P009`'s Red/Alert/notify is
@@ -209,7 +227,56 @@ the checkpoint branches. Refresh when convenient.
 
 1. **Screen / compiler** — implemented, viewed, *not really tested*.
 2. **Transport** — coded. Next: transmit web → RTDB → flash on Tab5, no engine
-   processing. ← **current step; checkpoint 2 is this work**
+   processing. ← **current step; checkpoint 2 / Gate 1 is this work**
+
+### 6.1 Gate 1 status — independently verified 2026-08-30
+
+Published and verified from GitHub, not from the implementer's report:
+
+| Branch | SHA | vs its base | Files |
+|---|---|---|---|
+| `agent/event-v3-checkpoint2-delivery` | `f355c18b` | 2 ahead of `d0b8a316`, 0 behind, merge base correct | 17 changed, +599/−19 |
+| `agent/event-v3-checkpoint2-tab5-staging` | `a416034d` | 1 ahead of `67553473`, 0 behind | 6 changed, +1133/−2 |
+
+Verified independently:
+
+- **`executionEnabled: false` is enforced at four layers** — `"const": false` in three
+  JSON schemas, the V3 store, a throw in the delivery lib
+  (`execution_must_remain_disabled`), and the RTDB security rules (`.val() == false`).
+- **V2 is preserved in the shared endpoint.** In `rules-engine-release.js`, `v3` gates
+  on `version === "3"` and every V2 branch falls through to the identical original
+  pattern, store, and verifier. The only V2-visible delta is an error check that also
+  catches `RulesEngineV3ReleaseError`, which no V2 path can throw.
+- `ingest-power.js` and the protected-hash expectations were not touched by Gate 1.
+
+Tests reported: Tab5 host 112/112; V3 Node 10/10; V3 contract selection 23/23; full
+Node suite 78 passed / 7 blocked — the blocks being missing `firebase-admin` and the
+line-ending issue in §5.7. Firebase emulator suite could not run.
+
+**Not yet accepted.** Emulator coverage is the one real remaining blocker; the
+protected-baseline mismatch is resolved as a false alarm (§5.7).
+
+**Both Gate 1 branches are now 2 commits behind their bases** — documentation-only
+commits from this file landing on `pilot` and `Tab5`. No conflict risk, but rebase or
+merge before promotion, and expect Gate 2 SHA verification to differ from the Gate 1
+report's table.
+
+### 6.2 Deploy footprint to date
+
+`pilot` was pushed 2026-08-30 to carry this document, which fired a Netlify branch
+deploy. Blast radius verified: only `00-CURRENT-STATE-READ-FIRST.md` and `AGENTS.md`
+changed — **zero files under `web/`, `cloud/`, `contracts/`, or `firebase/`** — so the
+deploy republished functionally identical content. **No Gate 1 or V3 code is
+deployed.** `main` has never been moved.
+
+### 6.3 Note for Gate 2
+
+Gate 1 removed the `v3_delivery_not_available` 409 and set `deliveryAvailable: true`.
+Correct for this gate, but once the web branch deploys, a V3 `deliver` action will
+write an RTDB pointer. The Gate 2 "stop for approval before any RTDB pointer write"
+control is therefore **procedural, not technical**. Low risk — the pointer is
+execution-disabled and no Tab5 carries a V3 runtime — but do not assume code prevents
+it.
 3. **Pull V2, insert V3** in cloud and `pilot.py`; end-to-end testing. This is the
    missing protection engine.
 4. **Shelly script** — only after step 3. Wiring determines its final rules wiring.
