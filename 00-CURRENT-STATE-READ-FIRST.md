@@ -270,7 +270,41 @@ Fix in `.gitattributes` (`* text=auto eol=lf`, or scoped to the guarded files) s
 holds for every checkout, rather than per-machine `core.autocrlf`. Never "fix" it by
 updating the expected digests.
 
-**5.8 BLOCKING — Gate 1's own RTDB rules deny the V3 writes they are meant to allow.**
+**5.8 RESOLVED 2026-08-30 — fixed and independently verified. Kept for the lesson.**
+
+Fixed on `agent/event-v3-checkpoint2-delivery` at **`54b75b74`** (2 commits ahead of
+`f355c18b`, nothing else changed). Verified here by running the suites, because the
+implementer could not run any: **RTDB emulator 9/9, host suite 110/110.**
+
+The fix is the shape §6.1b called for: an explicit named-child validator layer
+(`"field": {".validate": true}`) beneath each `$other`, so legitimate contract fields
+resolve while `$other` still rejects unreviewed ones; and `staged`/`rejected` dropped
+from the state root's `hasChildren` while keeping their own `.validate`, so they are
+optional but still constrained when present. The second commit is whitespace only —
+both revisions parse to structurally identical JSON.
+
+**Green tests were not accepted as proof.** Two mutation tests confirm the negative
+assertions are load-bearing rather than vacuous:
+
+| Mutation | Result |
+|---|---|
+| Drop `executionEnabled == false` from the V3 pointer `.validate` | test 6 fails |
+| Remove all five `$other` guards | tests 6 and 7 fail |
+
+So the four-layer `executionEnabled: false` enforcement and the unreviewed-field
+rejection are both genuinely enforced at the rules layer. The published file was
+restored byte-identical after each mutation.
+
+**The lesson worth keeping:** this defect sat in a published, "independently verified"
+gate for as long as its test suite went unrun. Verification that reads code and reports
+but never executes them cannot find this class of defect — the rules were *syntactically
+fine and semantically inverted*. Run the suite.
+
+---
+
+**Original finding (2026-08-30), retained:**
+
+**Gate 1's own RTDB rules deny the V3 writes they are meant to allow.**
 
 Found 2026-08-30 by running the emulator suite that had never been run. On
 `agent/event-v3-checkpoint2-delivery` (`f355c18b`), `npm run test:rtdb-rules` gives
@@ -370,8 +404,17 @@ the one thing standing between Gate 1 and acceptance, and it does not pass. The 
 failures are precisely the two tests Gate 1 added. Root causes are diagnosed in
 **§5.8**.
 
-**Gate 1 acceptance status: BLOCKED on a real defect, not on missing coverage.** The
-earlier "emulator coverage is the one real remaining blocker" line above is superseded.
+**Gate 1 acceptance status: the cloud-side defect is fixed and verified — see §5.8.**
+At `54b75b74` the emulator suite is 9/9 and the host suite 110/110, with the negative
+assertions mutation-tested. What that does *not* cover, and what still stands between
+Gate 1 and acceptance:
+
+- the **device half** (`agent/event-v3-checkpoint2-tab5-staging`, `a416034d`) is
+  exercised only by its Python host suite (112/112). Its RTDB interaction is verified
+  only indirectly, through the cloud-side emulator tests. Still asserted.
+- both Gate 1 branches remain behind their bases (verify live; see below).
+- §5.2 is unchanged: `IsLocked` and `loCntr` are still unreadable, so the V3 enable gate
+  cannot work on hardware no matter what these rules do.
 
 Environment note, durable: the emulator suite **does** run in a Linux container with
 Java 21 present, but the Firebase CLI must be invoked with the proxy variables unset
