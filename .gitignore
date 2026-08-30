@@ -1,0 +1,24 @@
+# Device runtime secrets. The real file lives on disk beside its committed
+# example and must never be committed. See AGENTS.md.
+tab5/device_secrets.py
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+service-account*.json
+
+# Node (host test tooling; this branch carries no package.json, but a shared
+# checkout or an npm install run here would otherwise leave 450MB untracked)
+node_modules/
+coverage/
+
+# Python host test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Editors and operating systems
+.vscode/settings.json
+.DS_Store
+Thumbs.db
