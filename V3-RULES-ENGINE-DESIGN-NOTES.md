@@ -6,6 +6,16 @@
 
 **Purpose:** capture the current owner discussion before revisiting the larger Tab5 process tree, removing duplicates, reconciling older V3 material, and packaging implementation work units.
 
+## Next-session consolidation handoff
+
+The next design-manager session must begin with the Google Doc **`Well Pump V3 — Rules Engine Consolidation and Next Coding Steps`**:
+
+https://docs.google.com/document/d/1nv1Bk2PQ2bn5pRvhaWlUHsdLs8znr9JHc7TlRb7CKsw
+
+That handoff carries this note forward together with `V3-ISSUES.md`, the current source, older V3 authority/process records, and the broader `pilot.py` processing-tree concerns. It explicitly adds non-event runtime topics that must be reviewed before coding: package adoption, atomic device records, source-health versus event qualification, maintained values versus current evidence, calculations versus history-dependent Functions, durable observation selection/content, event records/summaries, snapshot ordering, action execution, CPU A/CPU B boundaries, one-second cadence, and RAM-state reset boundaries.
+
+This note remains evidence of the owner discussion; do not treat any individual proposal here as implementation authority when the consolidation handoff calls for reconciliation first.
+
 This file is intentionally placed beside `V3-ISSUES.md`. It is **not yet a replacement authority document**. Older V3 records may contradict parts of it and must be reconciled deliberately.
 
 ---
