@@ -3,6 +3,16 @@
 **Status:** end-to-end V3 works on hardware, including event processing (2026-08-30).
 This tracks what is broken or unfinished, split by which GPT session takes it.
 
+## Read before using proposed fixes
+
+Before selecting or implementing another V3 work unit, read the Google Doc **`Well Pump V3 — Rules Engine Consolidation and Next Coding Steps`**:
+
+https://docs.google.com/document/d/1nv1Bk2PQ2bn5pRvhaWlUHsdLs8znr9JHc7TlRb7CKsw
+
+This issue list remains valuable defect/evidence history, but **its suggested fixes are not automatically current design authority**. Several entries predate the newer owner decisions captured in `V3-RULES-ENGINE-DESIGN-NOTES.md` and the consolidation handoff. In particular, TAB5-9's proposed state-preserving live-adoption fix conflicts with the newer intended package-transition boundary that closes old-package events, finishes local records/summaries, discards old semantic state, and starts the new package with an empty kernel. Do not implement that old remedy without reconciliation.
+
+The consolidation handoff also requires review of non-event `pilot.py` processing that interacts with these issues: atomic device records, source-health versus event qualification, maintained values versus current evidence, calculations versus history-dependent Functions, durable-observation policy/content, event summaries, snapshot ordering, action execution, CPU A/CPU B transport boundaries, one-second cadence, and RAM-state reset boundaries.
+
 **How to use.** Owner reports a symptom, an entry gets added here. Entries are batched,
 not committed one at a time. `ONLINE-n` is cloud/web work on `pilot`; `TAB5-n` is device
 work on `Tab5`. Anything marked **unconfirmed** is a report not yet reproduced.
@@ -25,7 +35,14 @@ and reloads from flash.
 Effect: every deliver → test cycle needs a reboot. This is the main friction in the
 iteration loop right now.
 
-Fix: in the staging block, immediately after `rules_v3_staged_reference =
+**Design status of the proposed fix below: SUPERSEDED FOR REVIEW, NOT APPROVED FOR IMPLEMENTATION.**
+The defect remains open, but the newer owner process-tree direction requires package
+adoption to be an explicit transition boundary with old-package closes/records completed
+locally, old semantic state discarded, and a fresh new-package kernel. Preserve the text
+below as historical evidence only until the consolidation session replaces it with a
+reconciled work unit.
+
+Historical proposed fix: in the staging block, immediately after `rules_v3_staged_reference =
 staged_v3['reference']`, re-resolve and re-base the kernel. `staged_v3['package']` is
 already in hand there, so no re-read of flash is needed:
 
@@ -41,14 +58,12 @@ else:
         _next['releaseId'], _next['packageVersion']))
 ```
 
-Use `_copy_rules_v3_kernel()` rather than `new_rules_v3_kernel()`: it re-bases existing
-event state onto the new package, keeping state for events whose ids survive and
-preserving owner sets. That means an open inhibit is not silently dropped by a rules
-edit. Starting fresh would release it. Introduced with the live wiring.
+The earlier proposal used `_copy_rules_v3_kernel()` rather than `new_rules_v3_kernel()`
+to preserve event state and owners across edits. **That preservation assumption is the
+specific part now in conflict with the newer design direction.**
 
-Note this interacts with TAB5-2: `rules_v3_last_actions` must be cleared on adoption, or
-a write already issued under the old package will suppress the equivalent write under
-the new one.
+Note this interacts with TAB5-2: action/executor memory still must be deliberately reset
+or reconciled on adoption, but its exact treatment belongs in the new package-transition work unit.
 
 ### TAB5-10 — Event records are produced, then thrown away · CONFIRMED · TOP PRIORITY
 Owner-reported: the high-voltage test opened the relay but no event record was written.
@@ -88,6 +103,8 @@ hard-rejects any `recordType` outside `('observation', 'rule-adoption',
 whitelist, and they should outrank observations in the discard policy the same way
 adoption records already do — an event record is the evidence of a consequence and must
 not be dropped to make room for telemetry.
+
+Reconcile this work with the new handoff's requirements for event summaries, package-transition closes, CPU-B queue priority, and ONLINE-7 ingest verification before coding.
 
 ### TAB5-11 — `build_rules_audit_record()` is defined but never called · CONFIRMED
 Same pattern as TAB5-10, found while checking whether V2 already wrote event records.
@@ -133,19 +150,17 @@ therefore no `method`, so `issue_rules_v3_action()` returns `unsupported-method:
 Because that is not `issued`, the action is never recorded in `rules_v3_last_actions`,
 so it is retried and logged **every cycle** for as long as Monitor is active.
 
-Fix: the executor should only handle targets that came from a device field with a
-`write` block. System-field assignments are internal state and must not reach it.
-Carry a marker through `resolve_rules_v3_package()` (e.g. `'device': True`) and skip the
-rest. Introduced with the live wiring.
+Fix direction must be reconciled with the new generic design: internal system-field
+assignments must be distinguished from physical device writes, but do not merely add a
+Monitor-specific exception. Carry the distinction through the generic resolver/executor contract.
 
 ### TAB5-2 — Only one issued action is remembered between cycles · CONFIRMED
 `rules_v3_last_actions = [signature]` replaces the whole list with a single entry
 (`tab5/pilot.py` ~4187). If a cycle issues writes to two different targets, only the
 last is remembered, so the other re-issues every cycle.
 
-Fix: accumulate per target, e.g. a dict keyed by target holding the last issued value.
-Clear an entry when that target no longer appears in the selected set. Introduced with
-the live wiring.
+Fix direction: treat this as generic per-target executor state and reconcile reset
+behavior at package adoption/reboot. Do not solve it only for today's single Shelly target.
 
 ### TAB5-3 — `IsLocked` is a placeholder, not a real reading · BY DESIGN, TEMPORARY
 The loop sets `observation['values']['shelly1_lock'] = 0` whenever the Shelly answered.
@@ -165,19 +180,24 @@ A package can reference a field that resolves to `None` forever. It adopts clean
 `enabled_rule_count()` counts it, the HMI shows it as enabled, and it silently never
 fires. There is no log line, no counter, no status.
 
-Fix: at adoption, log every declared field that has no object path, and surface a count.
-This is the trap that hid TAB5-3 and TAB5-4 for weeks.
+Reconcile any fix with the new package validation/adoption and current-evidence model;
+do not let maintained/default values masquerade as fresh evidence.
 
 ### TAB5-6 — Boyle tank outputs are permanently `None` · KNOWN TBD
 `evaluate_runtime_calculations()` sets every `kind: "function"` output to `None`.
 `TankWaterGallons`, `PressureSlopePSIPerMinute`, `TankNetFlowGPM`, `PumpOffDemandGPM`,
 `TankFlowQuality`. No enabled rule reads them today. Deferred work unit, not a defect.
 
+Review this as part of the generic Functions/history design in the consolidation handoff:
+simple calculations use the current frozen snapshot; history-dependent logic belongs in
+approved bounded Functions with explicit history consumers and reset boundaries.
+
 ### TAB5-7 — Executor retries are unbounded · OPEN
 A failed write is retried every cycle with no backoff and no attempt ceiling. If the
 Shelly is unreachable this is one HTTP attempt per second indefinitely.
 
-Fix: bounded retry with backoff, and a log line when giving up.
+Fix belongs in the generic executor: bounded retry/backoff and clear failure status,
+without blocking the one-second semantic cycle.
 
 ### TAB5-8 — `tab5/pilot.py` line endings are mixed · OPEN, DEFERRED
 241 of 4123 lines carry CRLF. Harmless to MicroPython; it makes digest comparison
