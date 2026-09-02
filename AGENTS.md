@@ -6,6 +6,15 @@
 > Read it before this file's references and before starting any work unit.
 > It is a state record, not a design authority.
 
+> **EVENT V3 / RULES ENGINE NEXT SESSION:** also read the Google Doc
+> **`Well Pump V3 — Rules Engine Consolidation and Next Coding Steps`** before
+> selecting or implementing another V3 work unit:
+> https://docs.google.com/document/d/1nv1Bk2PQ2bn5pRvhaWlUHsdLs8znr9JHc7TlRb7CKsw
+> It is the current consolidation handoff for reconciling `V3-ISSUES.md`,
+> `V3-RULES-ENGINE-DESIGN-NOTES.md`, older V3 authority/process material, and the
+> actual `pilot.py` implementation. Do not implement an older issue's suggested fix
+> when the handoff marks that design area for reconciliation first.
+
 ## Branch and scope
 
 - `main` and `pilot` are Netlify deployment branches. They are off limits during Tab5 work: do not commit, push, merge, rebase, or otherwise update either branch unless the user explicitly opens that scope.
@@ -20,6 +29,7 @@
 - The authoritative design records are in the Google Drive Well Pump folder:
   https://drive.google.com/drive/folders/1JWa7dOhqgtryOppsqgWP4Qqe26e_1MHv
 - Read `PROJECT_WORKFLOW.md` there first, then the records it identifies as relevant. Do not maintain a fixed list of design files here; that collection will continue to grow.
+- For Event V3 / Rules Engine consolidation specifically, read `Well Pump V3 — Rules Engine Consolidation and Next Coding Steps` before using the working issue/design notes as implementation instructions.
 - For current Tab5 behavior, prefer hardware-verified interpreted source and current test results over older summaries, compiled branches, build receipts, or historical plans.
 - Keep these states distinct in reports: remote GitHub state, committed Tab5 state, uncommitted or staging files, generated configuration, and results physically verified by the owner.
 
