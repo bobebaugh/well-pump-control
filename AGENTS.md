@@ -1,39 +1,52 @@
-# Repository guidance
+# Repository operating rules
 
-> **READ FIRST — `00-CURRENT-STATE-READ-FIRST.md` at the repository root.**
-> Current verified branch SHAs, active decisions and their rationale, open and
-> blocking items, the owner's work sequence, and which older records are superseded.
-> Read it before this file's references and before starting any work unit.
-> It is a state record, not a design authority.
+## Start here
 
-## Safety and authority
+Read only these active records before starting work:
 
-- The current pilot is observational only.
-- Never add pump start, stop, inhibit, relay, or control authority unless the requested phase explicitly includes a reviewed control change.
-- Tab5 must never manufacture ordinary pump demand.
-- Netlify and Firestore must never be placed in an immediate protective path.
-- Do not weaken existing hardwired protection.
+1. `CURRENT.md` — verified current status, the rolling plan, and stop boundaries.
+2. `DESIGN.md` — owner-approved operating behavior.
+3. This file — durable safety and working rules.
 
-## Data contracts
+Do **not** read project history, old work plans, historical platform documents, or
+superseded V3 material unless the current task specifically requires it. If
+`CURRENT.md` points to an evidence source, read only that source.
 
-- Update versioned files under `contracts/` before changing exchanged field meaning.
+## Current source lines
+
+- `pilot`: cloud/web source — Netlify functions, Firebase paths, web HMI,
+  contracts, and JavaScript tests.
+- `Tab5`: current device source — MicroPython/UIFlow2 under `tab5/`.
+- `firmware/tab5/` and its ESP-IDF workflow are historical evidence, not the
+  current Tab5 application.
+
+## Safety
+
+- Preserve mechanical and hardwired protection; never weaken it.
+- Tab5 must never manufacture ordinary pump demand or gain pump-start authority.
+- Cloud services and network connectivity must never be in an immediate
+  protection path.
+- Never fabricate unavailable sensor, lock, or control state.
 - Preserve units, validity, observation time, source, and staleness semantics.
-- Do not label a derived value as directly measured.
-- Treat unavailable future sensors and controls as unavailable; never fabricate values for the HMI.
-- For Event V3 behavior, use `EVENT_V3_IMPLEMENTATION.md` only from
-  `agent/event-v3-contract` at `78ca53aff0998d87656016964838acc6881821e2`.
-  It is the implementation authority; do not copy or fork it into a second
-  authority on a checkpoint branch.
+- Never expose or commit secrets, credentials, tokens, private keys, Wi-Fi
+  information, or production configuration.
 
-## Security
+## Working model
 
-- Never commit secrets, credentials, tokens, private keys, Wi-Fi information, or production configuration values.
-- Tab5 sends authenticated HTTPS requests to Netlify and never holds Firestore administrative credentials.
+- One owner and one primary agent work at a time. A primary agent may use one
+  bounded sub-agent only for evidence gathering or review.
+- Work one bounded unit at a time. `CURRENT.md` may name only **Now**, **Next**,
+  and **Later**; those are not approval for work beyond Now.
+- Treat design as evolving with evidence. Do not silently turn a proposal into an
+  approved design decision.
+- Keep reports owner-readable: behavior, safety effect, evidence, limits, and the
+  next decision—not implementation detail unless needed for review.
+- Preserve unrelated work. Never delete branches, commits, patches, worktrees, or
+  recovery material without explicit approval.
 
-## Repository sessions
+## Approval boundaries
 
-- At session start, run `git fetch origin --prune`, then query the actual advertised branch with `git ls-remote`; a cached `origin/*` ref is not authoritative.
-- When a task specifies a starting SHA, verify that exact SHA before editing. Stop rather than silently changing branches, bases, dependencies, or toolchains.
-- Preserve unrelated and user-owned changes. Never display, stage, or commit secrets.
-- Never delete branches, commits, patches, or worktrees unless explicitly authorized. Do not run simultaneous modifying agents in the same local checkout.
-- Route Tab5 firmware work to `firmware/tab5/AGENTS.md` and `docs/tab5-platform-runbook.md`.
+Separate explicit owner approval is required for each merge, deployment, package
+adoption on a board, hardware action, wiring change, flash/erase, or test involving
+connected equipment. A review, plan, or accepted commit authorizes none of those by
+itself.
