@@ -1,28 +1,25 @@
 # Current status — Tab5 line
 
-**Verified operating base:** `Tab5` at `39b0d81e1a0eb989677f78f1f7f29605fc1485a3` on 2026-09-06.
+**Verified operating base:** Tab5 at 39b0d81e1a0eb989677f78f1f7f29605fc1485a3 on 2026-09-06.
 
-Tab5 is the interpreted MicroPython device application under `tab5/`. Its current
-upload set is small and separate from the Pilot web/cloud application. This
-checkpoint is source-reviewed only; it did not inspect the installed device image,
-run host tests, upload a package, or touch connected equipment.
+Tab5 is the interpreted MicroPython device application under tab5/. Its current upload set is small and separate from the Pilot web/cloud application. This checkpoint is source-reviewed only; it did not inspect the installed device image, run host tests, upload a package, or touch connected equipment.
+
+## Known V3 discrepancy
+
+The current source loads a staged V3 package into a live kernel, evaluates it, and can reach the Shelly write path. At the same time, the V3 release pointer requires executionEnabled: false. That field is therefore not reliable evidence that V3 execution is disabled. This documentation records the discrepancy; it does not change runtime behavior or resolve the mismatch.
 
 ## Now
 
-Review the new Project Context and mirrored `interfaces/` seed on
-`tab5-working`. No device runtime behavior has changed.
+Review the new Project Context and mirrored interfaces/ seed on tab5-working. No device runtime behavior has changed.
 
 ## Next
 
-Reconcile `tab5/pilot.py` and its current V3 work with the shared interface
-definitions before selecting a bounded implementation unit.
+Reconcile tab5/pilot.py and its current V3 work with the shared interface definitions before selecting a bounded implementation unit.
 
 ## Later
 
-Build and host-test the next trustworthy V3 input/snapshot path before retiring
-working V2 behavior.
+Build and host-test the next trustworthy V3 input/snapshot path before retiring working V2 behavior.
 
 ## Boundaries
 
-Do not promote this branch to `Tab5`, upload/adopt a package, flash/erase a board,
-or test connected equipment without a separately approved work unit.
+Do not promote this branch to Tab5, upload/adopt a package, flash/erase a board, or test connected equipment without a separately approved work unit.
