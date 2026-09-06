@@ -5,7 +5,7 @@
 Read only these active records before starting work:
 
 1. `CURRENT.md` — verified current status, the rolling plan, and stop boundaries.
-2. `DESIGN.md` — owner-approved operating behavior.
+2. `DESIGN.md` — the current design position; it states whether it is proposed or approved.
 3. This file — durable safety and working rules.
 
 Do **not** read project history, old work plans, historical platform documents, or
