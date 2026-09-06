@@ -1,64 +1,48 @@
-# Repository guidance
+# Project Context — agent instructions
 
-> **READ FIRST — `00-CURRENT-STATE-READ-FIRST.md` at the repository root.**
-> Current verified branch SHAs, active decisions and their rationale, open and
-> blocking items, the owner's work sequence, and which older records are superseded.
-> Read it before this file's references and before starting any work unit.
-> It is a state record, not a design authority.
+## Start here
 
-> **EVENT V3 / RULES ENGINE NEXT SESSION:** also read the Google Doc
-> **`Well Pump V3 — Rules Engine Consolidation and Next Coding Steps`** before
-> selecting or implementing another V3 work unit:
-> https://docs.google.com/document/d/1nv1Bk2PQ2bn5pRvhaWlUHsdLs8znr9JHc7TlRb7CKsw
-> It is the current consolidation handoff for reconciling `V3-ISSUES.md`,
-> `V3-RULES-ENGINE-DESIGN-NOTES.md`, older V3 authority/process material, and the
-> actual `pilot.py` implementation. Do not implement an older issue's suggested fix
-> when the handoff marks that design area for reconciliation first.
+A cold agent reads only this Project Context before work:
 
-## Branch and scope
+1. `AGENTS.md` — these durable rules.
+2. `CURRENT.md` — verified current status and the rolling **Now / Next / Later** plan.
+3. `DESIGN.md` — current operating design.
+4. `interfaces/` — only when the task crosses the Pilot–Tab5 boundary.
 
-- `main` and `pilot` are Netlify deployment branches. They are off limits during Tab5 work: do not commit, push, merge, rebase, or otherwise update either branch unless the user explicitly opens that scope.
-- All interpreted Tab5 development belongs on the `Tab5` branch.
-- `Tab5/tab5/` is the complete, version-managed recovery source for the interpreted device upload set. A promotion must preserve every tracked upload file, not only files changed by the work unit. Verify the live GitHub tree after promotion; the owner's PC copy is a backup, not the primary release record.
-- The existing `agent/tab5-*` branches, `firmware/tab5/`, compiled build machinery, and `docs/tab5-platform-runbook.md` are historical evidence, not the current Tab5 development path. Do not build, flash, repair, or extend them. Do not delete that history unless separately requested.
-- Preserve the established web, Netlify, and Firestore implementation while working on Tab5. A Tab5 task does not authorize web redesign or deployment.
+Do not reconstruct project history or read old plans, historical ESP-IDF material,
+unpromoted agent branches, or Google Drive design records unless the active task
+specifically requires a named source.
 
-## Sources of truth
+## Working branches
 
-- Treat the deployed web/Netlify/Firestore implementation and the corresponding GitHub source as established evidence.
-- The authoritative design records are in the Google Drive Well Pump folder:
-  https://drive.google.com/drive/folders/1JWa7dOhqgtryOppsqgWP4Qqe26e_1MHv
-- Read `PROJECT_WORKFLOW.md` there first, then the records it identifies as relevant. Do not maintain a fixed list of design files here; that collection will continue to grow.
-- For Event V3 / Rules Engine consolidation specifically, read `Well Pump V3 — Rules Engine Consolidation and Next Coding Steps` before using the working issue/design notes as implementation instructions.
-- For current Tab5 behavior, prefer hardware-verified interpreted source and current test results over older summaries, compiled branches, build receipts, or historical plans.
-- Keep these states distinct in reports: remote GitHub state, committed Tab5 state, uncommitted or staging files, generated configuration, and results physically verified by the owner.
+- `pilot` and `Tab5` are the operating branches.
+- `pilot-working` and `tab5-working` are the reusable development branches.
+- One owner and one active agent work at a time. A bounded review/evidence
+  sub-agent may assist but does not modify the working branch.
+- Ordinary scoped commits and related bug fixes on the active working branch are
+  permitted when the owner authorizes that work unit.
+- Nothing may be merged, fast-forwarded, or otherwise promoted into `pilot` or
+  `Tab5` without explicit owner approval.
+- Before beginning a new work unit, the corresponding working branch must be
+  clean and match its operating branch.
 
-## Safety and authority
+## Safety and evidence
 
-- The current pilot is observational unless an explicitly reviewed work unit grants specific control authority.
-- Never add pump start, stop, inhibit, relay, or control behavior merely because a design document discusses it.
-- Tab5 must never manufacture ordinary pump demand.
-- Netlify, Firestore, and RTDB must never be placed in an immediate protective path.
-- Do not weaken existing hardwired or Shelly-local protection.
-- A persistent forgotten pump inhibit is the principal software hazard. Any future inhibit must have a reviewed release path and fail-allow behavior.
+- Preserve mechanical, hardwired, and Shelly-local protection. Tab5 never creates
+  ordinary pump demand.
+- Cloud services are never an immediate protection path.
+- Never fabricate unavailable values, lock state, validity, source, time, or
+  staleness.
+- Keep interface definitions versioned. A cross-application record change updates
+  both mirrored `interfaces/` directories and the relevant producer, consumer,
+  examples, and tests.
+- Never expose or commit secrets, tokens, private keys, Wi-Fi credentials, or
+  production configuration.
+- A deployment, board package adoption, flash/erase, wiring change, or connected
+  equipment test needs explicit owner direction for that activity.
 
-## Data contracts
+## Reporting
 
-- Update versioned files under `contracts/` before changing exchanged field meaning.
-- Preserve units, validity, observation time, source, and staleness semantics.
-- Do not label a derived value as directly measured.
-- Treat unavailable future sensors and controls as unavailable; never fabricate values for the HMI.
-
-## Security
-
-- Never commit credentials, passwords, tokens, private keys, Wi-Fi information, or production secret values.
-- Public examples must contain placeholders only.
-- Keep device secrets in the uncommitted device secrets file described by the Tab5 provisioning instructions. Never print or quote real values in logs, reviews, or conversation.
-
-## Repository sessions
-
-- Verify the live GitHub branch before editing; cached `origin/*` refs and obsolete checkouts are not authoritative.
-- Prefer the connected GitHub repository directly. If local Git tooling is necessary, use a task-owned temporary clone, work only on `Tab5`, push the completed commits, and remove the temporary clone afterward.
-- Do not turn `C:\Tab5\pilot-micropython` into a Git repository. It is a device-deployment staging directory and is populated only when the user says a revision is ready for hardware installation.
-- Preserve unrelated and user-owned files. Never clean or modify the obsolete repositories under `C:\Tab5`.
-- Route work under `tab5/` to `tab5/AGENTS.md`.
+Report the intended behavior, test evidence, any changed operational configuration,
+known limits, and the next owner decision in plain language. Do not replace a
+missing fact with a historical narrative.
