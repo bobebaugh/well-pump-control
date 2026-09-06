@@ -1,39 +1,48 @@
-# Repository guidance
+# Project Context — agent instructions
 
-> **READ FIRST — `00-CURRENT-STATE-READ-FIRST.md` at the repository root.**
-> Current verified branch SHAs, active decisions and their rationale, open and
-> blocking items, the owner's work sequence, and which older records are superseded.
-> Read it before this file's references and before starting any work unit.
-> It is a state record, not a design authority.
+## Start here
 
-## Safety and authority
+A cold agent reads only this Project Context before work:
 
-- The current pilot is observational only.
-- Never add pump start, stop, inhibit, relay, or control authority unless the requested phase explicitly includes a reviewed control change.
-- Tab5 must never manufacture ordinary pump demand.
-- Netlify and Firestore must never be placed in an immediate protective path.
-- Do not weaken existing hardwired protection.
+1. `AGENTS.md` — these durable rules.
+2. `CURRENT.md` — verified current status and the rolling **Now / Next / Later** plan.
+3. `DESIGN.md` — current operating design.
+4. `interfaces/` — only when the task crosses the Pilot–Tab5 boundary.
 
-## Data contracts
+Do not reconstruct project history or read old plans, historical ESP-IDF material,
+unpromoted agent branches, or Google Drive design records unless the active task
+specifically requires a named source.
 
-- Update versioned files under `contracts/` before changing exchanged field meaning.
-- Preserve units, validity, observation time, source, and staleness semantics.
-- Do not label a derived value as directly measured.
-- Treat unavailable future sensors and controls as unavailable; never fabricate values for the HMI.
-- For Event V3 behavior, use `EVENT_V3_IMPLEMENTATION.md` only from
-  `agent/event-v3-contract` at `78ca53aff0998d87656016964838acc6881821e2`.
-  It is the implementation authority; do not copy or fork it into a second
-  authority on a checkpoint branch.
+## Working branches
 
-## Security
+- `pilot` and `Tab5` are the operating branches.
+- `pilot-working` and `tab5-working` are the reusable development branches.
+- One owner and one active agent work at a time. A bounded review/evidence
+  sub-agent may assist but does not modify the working branch.
+- Ordinary scoped commits and related bug fixes on the active working branch are
+  permitted when the owner authorizes that work unit.
+- Nothing may be merged, fast-forwarded, or otherwise promoted into `pilot` or
+  `Tab5` without explicit owner approval.
+- Before beginning a new work unit, the corresponding working branch must be
+  clean and match its operating branch.
 
-- Never commit secrets, credentials, tokens, private keys, Wi-Fi information, or production configuration values.
-- Tab5 sends authenticated HTTPS requests to Netlify and never holds Firestore administrative credentials.
+## Safety and evidence
 
-## Repository sessions
+- Preserve mechanical, hardwired, and Shelly-local protection. Tab5 never creates
+  ordinary pump demand.
+- Cloud services are never an immediate protection path.
+- Never fabricate unavailable values, lock state, validity, source, time, or
+  staleness.
+- Keep interface definitions versioned. A cross-application record change updates
+  both mirrored `interfaces/` directories and the relevant producer, consumer,
+  examples, and tests.
+- Never expose or commit secrets, tokens, private keys, Wi-Fi credentials, or
+  production configuration.
+- A deployment, board package adoption, flash/erase, wiring change, or connected
+  equipment test needs explicit owner direction for that activity.
 
-- At session start, run `git fetch origin --prune`, then query the actual advertised branch with `git ls-remote`; a cached `origin/*` ref is not authoritative.
-- When a task specifies a starting SHA, verify that exact SHA before editing. Stop rather than silently changing branches, bases, dependencies, or toolchains.
-- Preserve unrelated and user-owned changes. Never display, stage, or commit secrets.
-- Never delete branches, commits, patches, or worktrees unless explicitly authorized. Do not run simultaneous modifying agents in the same local checkout.
-- Route Tab5 firmware work to `firmware/tab5/AGENTS.md` and `docs/tab5-platform-runbook.md`.
+## Reporting
+
+Report the intended behavior, test evidence, any changed operational configuration,
+known limits, and the next owner decision in plain language. Do not replace a
+missing fact with a historical narrative.
