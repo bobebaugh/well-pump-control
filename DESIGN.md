@@ -30,8 +30,9 @@ re-enable write; absence or invalidity cannot authorize that write.
 
 Pilot publishes an immutable runtime package and a pointer identifying its exact
 bytes, hash, length, and download path. Tab5 validates and stages a package before
-it can adopt it. Tab5 emits current observations, selected durable observations,
-and event records for Pilot to retain and display.
+it can adopt it. Tab5 emits current and selected durable observations. V3 event transitions are
+currently printed locally; durable V3 event production/retention/browser work is
+still incomplete. The event-record interface is not proof of that integration.
 
 Existing versioned record meanings do not change silently. An incompatible record
 gets a new version.
@@ -95,3 +96,20 @@ Their raw observation aliases do not independently select every value change.
 Other material changes, confirmed acquisition-availability transitions and the
 maximum durable interval can still select records containing the current values.
 Delta comparisons retain the existing previous-durable-observation baseline.
+
+## Event meaning and remaining mode integration
+
+Closing policies are independent owner choices, not automatically the inverse of
+opening conditions. S010 is an informational alarm for relay ON while locked and
+remains open until relay ON with lock zero. It never takes relay ownership.
+
+Normal and Monitor are the two kernel modes. Intended Monitor continues observation,
+calculation, logging, event evaluation and ownership bookkeeping while suppressing
+Tab5 inhibit application. Operator and required-source owners must be reconciled;
+operator Normal must not clear a bad-source owner. Web requests, Clear Events and
+required-source occurrence inputs remain incomplete, and require separate design
+review before integration. System Override is removed from the intended design.
+
+An event closes only while open. Subsequent relay restoration/confirmation is
+separate kernel/dispatch work, subject to current lock evidence and other owners.
+Do not infer repeated closing-condition evaluation from a delayed relay write.

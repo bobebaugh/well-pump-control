@@ -24,7 +24,9 @@ specifically requires a named source.
 - Nothing may be merged, fast-forwarded, or otherwise promoted into `pilot` or
   `Tab5` without explicit owner approval.
 - Before beginning a new work unit, the corresponding working branch must be
-  clean and match its operating branch.
+  clean and match its operating branch. Read-only reviews and documentation
+  closeout of an accepted unit do not require discarding unpromoted work. Resolve
+  alignment with the owner before the next coding unit.
 
 ## Safety and evidence
 
@@ -46,3 +48,28 @@ specifically requires a named source.
 Report the intended behavior, test evidence, any changed operational configuration,
 known limits, and the next owner decision in plain language. Do not replace a
 missing fact with a historical narrative.
+
+## Cloud workflow and handoffs
+
+- GitHub is the durable source of truth; the owner may switch Windows computers.
+  Work directly on the reusable working branches; avoid routine per-task branches
+  and Windows bundle transfers. Verify remote refs and a clean checkout first.
+- GitHub plugin authorization and shell Git authentication are separate. Verify
+  the intended write route before implementation. If shell push is unavailable,
+  use authenticated GitHub blob/tree/commit/ref tools when available. Never ask
+  the owner to expand permissions merely because shell credentials are absent.
+- Connector-created commits may have different metadata/hashes from local commits.
+  Preserve the intended parent, verify every uploaded blob and the full tested
+  tree, then fast-forward without force. Recheck the advertised tip and align the
+  local checkout only after verifying its files are identical. Report the canonical
+  remote commit, not an abandoned local commit identity.
+- Owner approval is still required for operating promotion. Record the prior tip
+  for rollback; prefer a revert preserving history. Source rollback does not roll
+  back runtime packages, Firebase rules or installed Tab5 files automatically.
+- Keep CURRENT.md current after host/owner acceptance. Distinguish source facts,
+  host fixtures, owner logs and unverified hardware behavior. A focused review or
+  handoff file may carry the next unit; do not grow a competing historical roadmap.
+- Use one active coding agent for a bounded approved unit. A design session reviews
+  first and discusses requirements; do not interpret a design review as coding
+  authorization. Ordinary implementation choices within an approved unit do not
+  require repeated permission requests.
