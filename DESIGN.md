@@ -80,3 +80,18 @@ new runtime fields. A diagnostic failure does not retain stale operational evide
 or alter acquisition acceptance. Repeated failures are counted with bounded print
 output and recovery is reported. Relay diagnostics observe existing kernel and
 snapshot decisions; they never create an action or change pending release state.
+
+## Acquisition availability and lock logging
+
+`$availability` represents Tab5's complete acquisition result, not a measurement
+supplied by the remote device. For each enabled device declaring it, that Boolean
+remains available to V3 conditions even when all device measurements are rejected.
+Rejected or absent measurement evidence never supplies a default lock or relay
+state. Existing Boolean health events can therefore qualify failure and recovery;
+this does not introduce internal occurrence generation.
+
+The runtime package's named logging policies govern script lock/count values.
+Their raw observation aliases do not independently select every value change.
+Other material changes, confirmed acquisition-availability transitions and the
+maximum durable interval can still select records containing the current values.
+Delta comparisons retain the existing previous-durable-observation baseline.

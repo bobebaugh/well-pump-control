@@ -1,10 +1,11 @@
 # Current status — Tab5 line
 
-**Verified advertised refs for this follow-up:** `Tab5` remains at
-`cd61954d2538abcc996987aa7d2ecfec85dbbd8f`; `tab5-working` starts clean at
-`5984591e0dfad338d23ca3cc975e2e26c7d1c0be`. The owner authorized this diagnostic
-follow-up on the working version already installed and bench-tested. No operating
-branch promotion is part of this unit.
+**Verified aligned base before this unit:** `Tab5` and `tab5-working` at
+`688f491cf9b24b328cd95383cc5c190a544d9745` (M6.32). The owner authorized
+fast-forwarding `Tab5` from `cd61954d2538abcc996987aa7d2ecfec85dbbd8f`
+before beginning this work. `pilot` and `pilot-working` both remain at
+`2f02f158bd5c73ff946f208ab7d1549d6d44c6fc`. M6.33 is working-branch work
+for separate owner bench acceptance; no new operating promotion is included.
 
 ## Owner bench evidence — 2026-09-11
 
@@ -23,7 +24,32 @@ utility polls, substantially reduced when it is closed. Occasional dropouts rema
 request contention is a hypothesis, not a proven cause. These are bench observations
 on an unloaded relay, not proof of installed well-system behavior.
 
+M6.32 owner logs additionally confirm S010 opening for sticky and positive locks
+with relay ON, and closing on zero lock with relay ON without control assignments.
+Diagnostics separated transport timeouts, RPC errors and missing named components.
+The owner stopped/rebooted/renamed the test script during fault testing. Minimal
+utility polling reduced communication failures but does not prove their cause.
+Two source defects were verified: rejected device records removed availability
+from the event snapshot, and raw lock changes bypassed configured delta logging.
+
 ## Now
+
+M6.33 corrects those two defects. For enabled devices declaring `$availability`,
+the V3 event/calculation snapshot contains the actual acquisition result as a
+Boolean even when the complete device measurement record is rejected. All device
+measurements remain absent on rejection. A false availability flag cannot allow
+retained values to qualify as a complete current record. This also applies to
+Shelly EM; it does not integrate the deferred internal-occurrence path.
+
+Raw `shelly1_lock` and `shelly1_lockout_count` no longer independently trigger a
+durable record on every change. Named package logging policies govern those
+values; confirmed availability, other existing triggers and maximum-interval
+records continue independently. Delta is measured against the previous selected
+durable observation, which can also have been selected by another field. Local
+M6.32 diagnostic print lines remain independent of durable logging thresholds.
+No package/interface schema, online compiler, polling, event qualification,
+relay-dispatch or restart-adoption change was required.
+
 
 M6.32 adds local print diagnostics only: request name, elapsed time, transport/JSON/
 RPC or specific field-validation reason, failure count and recovery. Outages print
@@ -69,18 +95,22 @@ commissioned sensor and valid ADC evidence. Invalid pressure evidence clears tha
 calculation's history so recovery must establish fresh history before flow can be
 valid.
 
-Host evidence: `python -m unittest discover -s tests` passes 145 tests,
+Host evidence: `python -m unittest discover -s tests` passes 149 tests,
 including mocked integrated acquisition/cycle/startup boundaries and the existing
 V3 semantic replay suite. `python -m py_compile tab5/pilot.py tab5/cloud.py`
 passes. No live Shelly response has been captured.
 
 ## Next
 
-Review the M6.32 diagnostic follow-up, then owner installation and a short bench
-run to identify read failures and observe timeout recovery. No upload, restart,
-deployment or hardware operation was performed by the agent.
+Owner installs M6.33 pilot.py from tab5-working and tests S020 failure/recovery
+qualification and IsLocked delta logging with the existing V3 package. No upload,
+restart, deployment or hardware operation was performed by the agent.
 
 ## Later
+
+Deferred issue #5: monitor AntiFastCycle script running status by configured name
+when online changes are next scheduled. Stable retained zero values do not prove
+script execution. The current runtime does not check this.
 
 Integrate real occurrence/command inputs, retained event-record production and
 browser handling, and V3 summary accumulation. Write and separately accept the

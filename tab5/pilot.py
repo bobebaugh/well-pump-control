@@ -1,4 +1,4 @@
-# Release: 2026-09-11 M6.32 — Shelly read and relay-decision diagnostics.
+# Release: 2026-09-11 M6.33 — acquisition availability and configured lock logging.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -43,7 +43,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.32'
+SOFTWARE_RELEASE = 'M6.33'
 
 # CPU A validates and adopts the v2 runtime package. CPU B carries only the
 # RTDB pointer and exact downloaded bytes; it never interprets package meaning.
@@ -66,8 +66,6 @@ MATERIAL_EXACT_CHANGE_PATHS = (
     'values.battery_charge_enabled',
     'values.shelly1_sw0',
     'values.shelly1_rly0',
-    'values.shelly1_lock',
-    'values.shelly1_lockout_count',
     'status.adc_available',
     'status.battery_available',
     'status.clock_synced',
@@ -2585,6 +2583,8 @@ def accept_rules_v3_device_record(resolved, device_id, record):
             return None
         if not _v3_typed_value(value, field['type'], field.get('enumValues')):
             return None
+        if object_name == '$availability' and value is not True:
+            return None
         accepted[system_name] = value
     return accepted
 
@@ -2627,6 +2627,18 @@ def collect_rules_v3_device_records(resolved, observation):
         else:
             accepted[device_id] = checked
     return accepted, unavailable
+
+
+def rules_v3_acquisition_availability(resolved, accepted_records):
+    """Tab5's acquisition result survives rejection of device measurements."""
+    values = {}
+    for device_id, device in resolved.get('devices', {}).items():
+        if device.get('enabled') is not True:
+            continue
+        for field in device.get('fields', []):
+            if field.get('object') == '$availability' and field.get('type') == 'boolean':
+                values[field['systemName']] = device_id in accepted_records
+    return values
 
 
 def new_rules_v3_calculation_state():
@@ -2762,6 +2774,7 @@ def run_rules_v3_cycle(runtime, observation, now_ms, occurrences=None,
     resolved = runtime['resolved']
     device_records, unavailable = collect_rules_v3_device_records(resolved, observation)
     inputs = freeze_rules_v3_snapshot(resolved, device_records)
+    inputs.update(rules_v3_acquisition_availability(resolved, device_records))
     calculated, calculation_state = evaluate_rules_v3_calculations(
         resolved, inputs, runtime.get('calculations'), now_ms)
     snapshot = dict(calculated)  # one cycle image shared by every event
@@ -4351,7 +4364,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.32: Shelly read and relay-decision diagnostics; V3 authority')
+log('CPU A release M6.33: acquisition availability and configured lock logging; V3 authority')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.

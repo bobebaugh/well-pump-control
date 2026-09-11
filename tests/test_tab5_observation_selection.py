@@ -565,6 +565,37 @@ class ObservationSelectionTests(unittest.TestCase):
         self.assertEqual(values["PressureADCCounts"], 3943)
         self.assertAlmostEqual(values["PressurePSI"], (3943 - 3732.02) / 211.492)
 
+    def test_lock_countdown_obeys_delta_without_raw_every_change_trigger(self):
+        policies = {'IsLocked': {'mode': 'delta', 'threshold': 10}}
+        previous = observation()
+        previous['values'].update(shelly1_lock=60, shelly1_lockout_count=0, IsLocked=60)
+        selected = []
+        for lock in (58, 56, 53, 50, 48, 42, 40, 31, 30):
+            current = observation()
+            current['values'].update(shelly1_lock=lock, shelly1_lockout_count=0, IsLocked=lock)
+            self.assertIsNone(self.logic['durable_observation_reason'](current, previous, 1000))
+            changes = self.logic['runtime_logging_change_details'](current['values'], previous['values'], policies)
+            if changes:
+                selected.append(lock)
+                previous = current
+        self.assertEqual(selected, [50, 40, 30])
+
+    def test_lock_logging_modes_and_availability_selection_remain_independent(self):
+        previous = observation()
+        previous['values'].update(shelly1_lock=10, shelly1_lockout_count=0, IsLocked=10)
+        current = observation()
+        current['values'].update(shelly1_lock=9, shelly1_lockout_count=1, IsLocked=9)
+        self.assertIsNone(self.logic['durable_observation_reason'](current, previous, 1000))
+        self.assertEqual(self.logic['runtime_logging_change_details'](current['values'], previous['values'],
+                         {'IsLocked': {'mode': 'none'}}), [])
+        self.assertEqual(len(self.logic['runtime_logging_change_details'](current['values'], previous['values'],
+                             {'IsLocked': {'mode': 'change'}})), 1)
+        current['values'].update(shelly1_lock=None, shelly1_lockout_count=None, IsLocked=None)
+        self.assertIsNone(self.logic['durable_observation_reason'](current, previous, 1000))
+        self.assertEqual(self.logic['durable_observation_reason'](current, previous, 1000,
+                         confirmed_shelly1_availability_change=True), 'material-change')
+        self.assertEqual(self.logic['durable_observation_reason'](current, previous, 99999999), 'maximum-interval')
+
     def test_runtime_logging_policy_selects_named_voltage_delta_only(self):
         package = {"devices": [{"enabled": True, "fields": [{
             "systemName": "SupplyVoltage",

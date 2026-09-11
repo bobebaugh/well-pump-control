@@ -213,10 +213,53 @@ class V3IntegratedApplicationTests(unittest.TestCase):
             observation["values"]["pf"] = "bad"
             result = self.logic["run_rules_v3_cycle"](runtime, observation, 0)
             self.assertIn("shelly-em-main", result["unavailableDeviceIds"])
+            self.assertIs(result["snapshot"]["ShellyEMAvailable"], False)
             for field in ("PumpWatts", "SupplyVoltage", "PowerFactor",
-                          "ShellyEnergyWh", "ShellyEMAvailable", "LoadRatioPercent"):
+                          "ShellyEnergyWh", "LoadRatioPercent"):
                 self.assertNotIn(field, result["snapshot"])
             self.assertEqual(result["records"], [])
+
+    def test_offline_event_qualifies_and_recovers_without_device_values(self):
+        package = json.loads(self.raw_a)
+        event = copy.deepcopy(package['events'][0])
+        event.update(id='S020', systemName='ShellyOffline', displayName='Shelly Offline')
+        event['onOpen'] = {'assignments': [], 'guardedGroups': []}
+        event['onClose'] = {'assignments': [], 'guardedGroups': []}
+        def condition(value):
+            return {'mode': 'all', 'observationCount': 2, 'minimumSeconds': 0,
+                    'clauses': [{'field': 'Shelly1Available', 'operator': 'eq', 'value': value}]}
+        event['opening'] = {'trigger': {'type': 'condition', 'condition': condition(False)}}
+        event['closing'] = {'policy': 'condition', 'condition': condition(True)}
+        package['events'] = [event]
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _ = self.start(directory, json.dumps(package))
+            bad = self.observation()
+            bad['status']['shelly1_available'] = False
+            # Even retained, apparently valid zero/relay values cannot supply the device.
+            for index in range(2):
+                result = self.logic['run_rules_v3_cycle'](runtime, bad, index * 1000)
+                self.assertIs(result['snapshot']['Shelly1Available'], False)
+                for field in ('IsLocked', 'PumpEnable', 'ContactorFlag'):
+                    self.assertNotIn(field, result['snapshot'])
+                self.assertEqual(result['actions'], [])
+                self.assertEqual([r['type'] for r in result['records']], [] if index == 0 else ['open'])
+            for index in range(2):
+                result = self.logic['run_rules_v3_cycle'](runtime, self.observation(), 2000 + index * 1000)
+                self.assertIs(result['snapshot']['Shelly1Available'], True)
+                self.assertEqual(result['actions'], [])
+                self.assertEqual([r['type'] for r in result['records']], [] if index == 0 else ['close'])
+
+    def test_malformed_shelly_evidence_sets_availability_false_without_safe_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _ = self.start(directory)
+            for value in (None, '0', False):
+                bad = self.observation()
+                bad['values']['shelly1_lock'] = value
+                result = self.logic['run_rules_v3_cycle'](runtime, bad, 0)
+                self.assertIs(result['snapshot']['Shelly1Available'], False)
+                self.assertNotIn('IsLocked', result['snapshot'])
+                self.assertNotIn('PumpEnable', result['snapshot'])
+                self.assertNotIn(True, [a.get('value') for a in result['actions']])
 
     def test_boyle_history_uses_cycle_snapshots_and_propagates_unavailable_pressure(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -410,6 +453,7 @@ class V3IntegratedApplicationTests(unittest.TestCase):
             observation["values"]["power"] = float("nan")
             result = self.logic["run_rules_v3_cycle"](runtime, observation, 0)
             self.assertIn("shelly-em-main", result["unavailableDeviceIds"])
+            self.assertIs(result["snapshot"]["ShellyEMAvailable"], False)
             for value in (float("nan"), float("inf"), -float("inf")):
                 observation = self.observation()
                 observation["values"]["adc_raw"] = value
