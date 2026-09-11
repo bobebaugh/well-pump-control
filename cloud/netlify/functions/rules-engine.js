@@ -11,6 +11,7 @@ const { RulesEngineReleaseError, RELEASE_ID_PATTERN, verifiedRuntimeRelease } = 
 const { RELEASE_ID_PATTERN: V3_RELEASE_ID_PATTERN, verifiedRuntimeV3Release } = require("../lib/rules-engine-v3-release-contract");
 const { verifiedRulesV3State } = require("../lib/rules-engine-v3-state-contract");
 
+const {readBackup} = require('../lib/rules-engine-v3-backup');
 const MAX_BODY_BYTES = 524288;
 const MAX_RUNTIME_BYTES = 65536;
 const jsonHeaders = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
@@ -66,6 +67,10 @@ function createHandler(dependencies = {}) {
       const draftDefaults = v3 ? v3Defaults : defaults;
       const sections = v3 ? V3_SECTIONS : SECTIONS;
       if (event.httpMethod === "GET") {
+        if(v3 && event.queryStringParameters?.deviceStatus === "1") {
+          try { return response(200,{status:"ok",deviceStatus:await (dependencies.readDeviceStatus || require('../lib/rules-engine-v3-device-status').readDeviceStatus)()}); }
+          catch { return response(200,{status:"unavailable",deviceStatus:null}); }
+        }
         if (event.queryStringParameters?.releaseId) {
           const releaseId = requestedReleaseId(event);
           if (!releaseId) return response(400, { status: "error", code: "invalid_release_id" });
@@ -73,7 +78,8 @@ function createHandler(dependencies = {}) {
           if (!release) return response(404, { status: "error", code: "release_not_found" });
           return response(200, { status: "ok", release });
         }
-        const loaded = await store.loadOrSeed(draftDefaults(), now().getTime());
+        const loaded = v3 && event.queryStringParameters?.seed !== "1" && store.readDraft
+          ? await store.readDraft() : await store.loadOrSeed(draftDefaults(), now().getTime());
         const releases = await store.listReleases();
         return response(200, {
           status: "ok", draft: loaded.draft, current: loaded.current, releases,
@@ -98,7 +104,22 @@ function createHandler(dependencies = {}) {
         return response(200, { status: "saved", section: request.section, revision });
       }
 
-      if (!request || !["validate", "publish", "restore", "deliver"].includes(request.action)) return response(400, { status: "error", code: "invalid_action" });
+      if (!request || !["validate", "publish", "restore", "deliver", "previewImport", "import"].includes(request.action)) return response(400, { status: "error", code: "invalid_action" });
+      if (["previewImport", "import"].includes(request.action)) {
+        if (!v3) return response(400, {code:"invalid_action"});
+        const checked = readBackup(request.backup);
+        if(checked.errors.length) return response(400, {status:"invalid",errors:checked.errors,warnings:[]});
+        const result = validateAndCompileV3(checked.draft);
+        if(request.action === "previewImport") {
+          const loaded = await store.readDraft();
+          return response(200, {status:"preview", baseRevisions:loaded.draft.revisions,
+            counts:Object.fromEntries(sections.map(s=>[s,{before:loaded.draft[s].length,after:checked.draft[s].length}])),
+            valid:result.valid, errors:result.errors, warnings:result.warnings});
+        }
+        if(!request.baseRevisions || sections.some(s=>!Number.isInteger(request.baseRevisions[s]) || request.baseRevisions[s]<0)) return response(400,{code:"invalid_import_request"});
+        const draft = await store.replaceDraft(checked.draft,request.baseRevisions,now().getTime());
+        return response(200,{status:"imported",draft,valid:result.valid,errors:result.errors,warnings:result.warnings});
+      }
       if (request.action === "restore") {
         if (!requestedReleaseId({ queryStringParameters: { releaseId: request.releaseId } }) || !request.baseRevisions || sections.some(section => !Number.isInteger(request.baseRevisions[section]))) {
           return response(400, { status: "error", code: "invalid_restore_request" });
@@ -120,6 +141,8 @@ function createHandler(dependencies = {}) {
           }
           const release = await store.getRelease(request.releaseId);
           const verified = verifiedRuntimeV3Release(release, request.releaseId);
+          const support = validateAndCompileV3(release.authoringPackage);
+          if(!support.valid) return response(400,{status:"invalid",errors:support.errors,warnings:support.warnings});
           if (verified.metadata.contentHash !== loaded.current.contentHash || verified.metadata.packageVersion !== loaded.current.packageVersion || verified.metadata.executionEnabled !== true) {
             return response(409, { status: "error", code: "delivery_release_mismatch", current: loaded.current });
           }
@@ -155,7 +178,7 @@ function createHandler(dependencies = {}) {
         );
         return response(200, { status: "delivered", current, metadata: verified.metadata });
       }
-      const loaded = await store.loadOrSeed(draftDefaults(), now().getTime());
+      const loaded = v3 && store.readDraft ? await store.readDraft() : await store.loadOrSeed(draftDefaults(), now().getTime());
       // V3 closes its authoring root shape.  `revisions` is store metadata,
       // not an editable definition and must never enter the compiler or an
       // immutable V3 authoring release.
@@ -170,6 +193,7 @@ function createHandler(dependencies = {}) {
         return response(200, { status: "valid", errors: [], warnings: result.warnings, runtimePackage: result.runtimePackage, runtimeBytes: Buffer.byteLength(previewBody, "utf8") });
       }
 
+      if(v3 && request.baseRevisions && sections.some(s=>request.baseRevisions[s]!==loaded.draft.revisions[s])) return response(409,{code:"stale_draft"});
       const currentVersion = loaded.current?.packageVersion || 0;
       if (!Number.isInteger(request.basePackageVersion) || request.basePackageVersion !== currentVersion) return response(409, { status: "error", code: "stale_package", current: loaded.current });
       const packageVersion = currentVersion + 1;

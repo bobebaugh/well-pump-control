@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Rules configuration guide</title><link rel="stylesheet" href="/styles.css"></head>
+<body><header class="topbar"><h1>Rules configuration guide</h1><a class="nav-link" href="/rules-engine.html">Rules Engine</a></header>
+<main class="engine-main panel configuration-guide">
+<h2>Backup is the recovery source</h2>
+<p>Use <strong>Export rules backup</strong> before changing a working configuration. Keep that JSON file on your computer. It includes the complete editable configuration: devices, calculated fields and expressions, system fields, events, logging, notification settings and disabled definitions. It includes current unsaved form edits. It excludes Firebase revisions, published identities and application credentials.</p>
+<p><strong>Download runtime JSON is different.</strong> It is compiled for Tab5 and does not preserve the full editable configuration. It cannot be imported as a backup. Neither file restores Firebase credentials/security rules, installed Tab5 software or its connection settings.</p>
+<h2>Restore or replace a configuration</h2>
+<ol><li>Open Import rules backup and choose a complete backup file.</li><li>Review the before/after counts and any publication blockers. Import replaces every draft section, including removal of definitions absent from the file. Export your current work first if needed.</li><li>Choose Replace draft and confirm. All four sections are written in one transaction. Malformed files and concurrent-change conflicts leave the stored draft unchanged.</li><li>Review the restored configuration. Import itself never publishes, delivers or changes Tab5.</li></ol>
+<p>This works with an empty V3 authoring store in an otherwise configured application. Load draft does not seed data. Seed missing V3 sections remains available under initial setup, but backup import does not require it. A structurally complete but unfinished or unsupported configuration can be restored for editing; publication is blocked until its errors are corrected.</p>
+<h2>AI-assisted changes</h2>
+<p>Provide your current exported backup and describe the requested changes. Ask for a <strong>revised complete authoring backup</strong>, preserving all unrelated definitions and references. There is no partial/additive import or automatic conflict merging. Supply this guide when helpful. The backup envelope is:</p>
+<pre>{
+  "kind": "well-pump-rules-authoring-backup",
+  "backupVersion": 1,
+  "authoringPackage": {
+    "schemaVersion": 3,
+    "devices": [...],
+    "calculatedFields": [...],
+    "systemFields": [...],
+    "events": [...]
+  }
+}</pre>
+<p>The ellipses illustrate the format, not an importable file. Use an actual exported backup as the complete example. Do not add credentials, revision metadata, release IDs or compiled runtime properties. Partial files and V2/runtime packages are rejected. The browser import limit is 500,000 bytes.</p>
+<h2>Edit and validate</h2>
+<p>Devices define named measurements and the supported relay mapping. Calculated Fields define arithmetic expressions and the Boyle tank model. System Fields define session values and occurrences. Events define independent opening and closing policies, qualifications, assignments and guards.</p>
+<p>System names use 2–64 characters: a letter first, then letters, digits or underscores. Put spaces in display names. Field names are references; renaming one does not automatically rename its users. Validation identifies unresolved references and duplicate names. Select a finding to navigate to its definition/control.</p>
+<p>Validate saves edited sections before checking. Ordinary saves occur section by section; if one fails, the message identifies what already saved. Remaining edits stay in your browser. Export a backup before reloading after a conflict. Changing a draft invalidates its runtime preview.</p>
+<p>Online validation targets Tab5 M6.33. It checks the current binding catalog, expression and function restrictions, typed assignments, ownership restrictions, ADC prerequisites and package limits. It is host verification, not proof that a device is connected or a sensor commissioned. Missing live evidence remains unavailable on Tab5.</p>
+<h2>Publish and Deliver</h2>
+<ol><li>Select Publish and Deliver. It saves, validates and shows any warnings.</li><li>A changed configuration creates an immutable release. An unchanged configuration matching the current release reuses that release.</li><li>Delivery requests that Tab5 download the release. If delivery fails or the response is interrupted, Retry delivery uses the published version without creating another version. If publication itself has an uncertain outcome, reload; the next attempt checks for a matching committed release first.</li><li>Refresh Tab5 status. Compare the release ID and hash with the staged identity. The report includes its timestamp and is not proof of a live connection.</li><li>Restart Tab5 through your normal procedure. Refresh status and confirm the running identity matches the intended release. Downloading alone never replaces the running kernel.</li></ol>
+<p>Published means stored on the server. Delivery requested means the server pointer was sent. Staged means Tab5 reported a validated next-restart package. Running means Tab5 reported the adopted package. An unavailable or old report cannot confirm the current device state. A rejection shows the reported reason.</p>
+<h2>Supported relay command</h2>
+<p>The supported write is <code>Switch.Set</code> for relay 0. The mapping <code>{"id":0,"valueParameter":"on"}</code> inserts the rule's Boolean assignment into <code>{"id":0,"on":false}</code> or <code>{"id":0,"on":true}</code>. “Use supported relay mapping” sets the approved mapping; arbitrary methods are not supported. The current runtime requires the names <code>PumpEnable</code> and <code>IsLocked</code> for relay ownership and lock evidence.</p>
+<p>False inhibits; true releases Tab5 inhibition to mechanical control, subject to current lock evidence and other owners. It does not create ordinary pump demand. Device addresses in this editor describe the devices; installed Tab5 settings currently own the actual polling endpoints. Shelly-local and hardwired protections remain authoritative.</p>
+<h2>Current limits</h2>
+<ul><li>Tab5 rejects event duration outputs and summary aggregates, even on disabled events. Backups preserve them, but clear them before publishing.</li><li>Expressions produce numbers and use binary +, -, *, /. Unary minus is unsupported; write <code>0 - PumpWatts</code>.</li><li>Boyle tank volume, atmospheric pressure and regression window must be positive; minimum samples is an integer of at least 2. Keep the standard five outputs and quality enumeration.</li><li>Monitor ownership exists in the kernel. Operator/internal occurrence and Clear Events input integration remains separate work. Validation warns about these declarations.</li><li>Notifications are saved authoring settings; delivery is not implemented. Script-running health monitoring is separate work.</li></ul>
+<h2>Existing release restoration</h2>
+<p>If a prior release remains in the existing history, View then Restore to draft copies its authoring sections into the draft. Validate and publish it through the same workflow. Long-term history is not required for recovery; keep your exported backup. Restoring source branches is also separate from restoring configuration or installed Tab5 software.</p>
+</main></body></html>

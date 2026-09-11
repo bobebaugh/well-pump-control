@@ -258,9 +258,10 @@ function baseFields(base) {
   return { fields, writable };
 }
 
-function validateAndCompileV3(draft) {
+function validateAndCompileV3(draft, options = {}) {
   if (!isObject(draft) || draft.schemaVersion !== V3_SCHEMA_VERSION) throw new RulesEngineV3ContractError("invalid_v3_draft", [issue("schemaVersion", "invalid_schema", "V3 authoring draft schemaVersion 3 is required.")]);
-  const errors = [];
+  const errors = require('./rules-engine-v3-backup').authoringShape(draft);
+  if (errors.length) return {valid:false,errors,warnings:[],runtimePackage:null};
   if (!hasOnly(draft, new Set(["schemaVersion", "devices", "calculatedFields", "systemFields", "events"]))) errors.push(issue("", "unsupported_root_property", "V3 draft contains an unsupported root property."));
   if (Array.isArray(draft.devices) && draft.devices.length > MAX_DEVICES) errors.push(issue("devices", "devices_too_large", `A package may contain at most ${MAX_DEVICES} devices.`));
   if (Array.isArray(draft.devices)) draft.devices.forEach((device, index) => { if (Array.isArray(device?.fields) && device.fields.length > MAX_FIELDS_PER_DEVICE) errors.push(issue(`devices[${index}].fields`, "device_fields_too_large", `A device may expose at most ${MAX_FIELDS_PER_DEVICE} fields.`)); });
@@ -275,7 +276,7 @@ function validateAndCompileV3(draft) {
   validateSystemFields(draft.systemFields, fields, writable, occurrences, errors);
   validateEvents(draft.events, fields, writable, occurrences, errors);
   if (errors.length) return { valid: false, errors, warnings: [], runtimePackage: null };
-  return {
+  const result = {
     valid: true,
     errors: [],
     warnings: [],
@@ -292,6 +293,16 @@ function validateAndCompileV3(draft) {
       events: draft.events.map(({ web, ...event }) => event)
     }
   };
+  if (!options.authoringOnly) {
+    const support = require('./rules-engine-v3-support').runtimeSupport(draft, result.runtimePackage);
+    const schema = require('../../../contracts/rules-runtime-package-v3.schema.json');
+    const shapeErrors = require('./rules-engine-v3-release-contract').schemaErrors(schema, {...result.runtimePackage,releaseId:'20260911000000-event-v3-v1',packageVersion:1});
+    if(shapeErrors.length) support.errors.push(issue('runtimePackage','runtime_schema_mismatch',`Compiled package does not satisfy the Tab5 exchange schema: ${[...new Set(shapeErrors)].join(', ')}.`));
+    result.errors = support.errors; result.warnings = support.warnings;
+    result.valid = support.errors.length === 0;
+    if (!result.valid) result.runtimePackage = null;
+  }
+  return result;
 }
 
 function compileV3Release(draft, releaseId, packageVersion) {

@@ -7,7 +7,7 @@ const sectionLabels = {
   events: ["EVENTS", "Event definitions"]
 };
 const state = {
-  draft: null, revisions: {}, current: null, capabilities: null,
+  formDirty: false, busy: false, importCandidate: null, draft: null, revisions: {}, current: null, capabilities: null,
   section: "devices", selected: { devices: 0, calculatedFields: 0, systemFields: 0, events: 0 },
   dirty: new Set(), runtimePackage: null, releases: [], selectedRelease: null
 };
@@ -67,8 +67,8 @@ function updateCounts() {
   document.querySelector("#events-count").textContent = `${state.draft.events.length} configured`;
 }
 function deliveryText(current) {
-  if (!current) return "V3 defaults loaded into the isolated draft; no immutable package is published.";
-  return `SHA-256 ${current.contentHash} · immutable V3 package; delivery stages it for adoption on Tab5 restart`;
+  if (!current) return "No immutable package is published. Import a backup or edit the draft.";
+  return `SHA-256 ${current.contentHash} · ${current.deliveryEnabled ? "Delivery requested; check Tab5 report below" : "Published; delivery not recorded"}`;
 }
 const deliveryErrors = {
   invalid_delivery_request: "Delivery request is invalid: the release id is missing or malformed.",
@@ -87,9 +87,12 @@ function deliveryErrorText(error) {
   return deliveryErrors[code] || `Delivery failed: ${code}`;
 }
 function markDirty() {
+  state.formDirty = true;
   state.dirty.add(state.section);
+  state.runtimePackage = null;
+  document.querySelector("#engine-download").disabled = true;
   document.querySelector("#engine-save").disabled = false;
-  document.querySelector("#engine-publish").disabled = true;
+  document.querySelector("#engine-publish").disabled = false;
   deliverButton.disabled = true;
   document.querySelector("#validation-state").textContent = "Draft changed";
   document.querySelector("#validation-state").className = "warning-text";
@@ -151,12 +154,12 @@ async function restoreSelectedRelease() {
   setStatus(`Restoring version ${release.packageVersion} into all draft sections…`);
   try {
     const result = await api("POST", { action: "restore", releaseId: release.releaseId, baseRevisions: state.revisions });
-    state.draft = result.draft; state.revisions = result.draft.revisions; state.dirty.clear(); state.runtimePackage = null;
+    state.draft = result.draft; state.revisions = result.draft.revisions; state.dirty.clear(); state.formDirty = false; state.runtimePackage = null;
     state.selected = { devices: 0, calculatedFields: 0, systemFields: 0, events: 0 };
     document.querySelector("#engine-save").disabled = true;
     document.querySelector("#engine-validate").disabled = false;
     document.querySelector("#engine-download").disabled = true;
-    document.querySelector("#engine-publish").disabled = true;
+    document.querySelector("#engine-publish").disabled = false;
     document.querySelector("#validation-state").textContent = "Not checked";
     document.querySelector("#validation-state").className = "warning-text";
     document.querySelector("#runtime-size").textContent = `Restored from version ${release.packageVersion}; validation required before publishing.`;
@@ -173,7 +176,7 @@ function captureDevice() {
   device.driver = document.querySelector("#device-driver").value.trim();
   device.address = document.querySelector("#device-address").value.trim();
   device.enabled = document.querySelector("#device-enabled").checked;
-  device.fields = [...editor.querySelectorAll(".device-field-row")].map(row => {
+  device.fields = [...editor.querySelectorAll(".device-field-row")].map((row, index) => {
     const type = row.querySelector("[data-key=type]").value;
     const mode = row.querySelector("[data-key=logMode]").value;
     const field = {
@@ -184,6 +187,7 @@ function captureDevice() {
       access: row.querySelector("[data-key=access]").value,
       logging: { mode }
     };
+    if (type === "enum" && device.fields[index]?.enumValues) field.enumValues = clone(device.fields[index].enumValues);
     const threshold = Number(row.querySelector("[data-key=threshold]").value);
     if (mode === "delta") field.logging.threshold = threshold;
     if (field.access === "readWrite") {
@@ -203,6 +207,7 @@ function captureDevice() {
 function renderDevice() {
   const device = state.draft.devices[state.selected.devices];
   if (!device) { editor.innerHTML = "<p class='empty-editor'>Add a device to begin.</p>"; return; }
+  const readCommands = {'shelly-gen1-em':'GET /emeter/0', 'shelly-gen4-switch':'Shelly.GetStatus; Shelly.GetComponents with dynamic_only=true and config/status included', 'tab5-runtime':'Local acquisition (no Shelly command)'};
   const driverOptions = Object.entries(state.capabilities.drivers).map(([id, label]) => `<option value="${escapeHtml(id)}"${id === device.driver ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
   const rows = device.fields.map((field, index) => `
     <div class="device-field-row" data-index="${index}">
@@ -218,11 +223,11 @@ function renderDevice() {
         <button class="row-delete field-delete" type="button" data-remove-field="${index}" aria-label="Remove field">×</button>
       </div>
       <details class="field-action-mapping"${field.access === "readWrite" ? " open" : ""}>
-        <summary>Device action mapping</summary>
+        <summary>Device action mapping — supported relay ON / OFF</summary><button type="button" class="secondary-button" data-relay-mapping="${index}">Use supported relay mapping</button>
         <div>
-          <label><span>Write method</span><input data-key="writeMethod" value="${escapeHtml(field.write?.method || "")}" placeholder="method"></label>
-          <label><span>Write arguments</span><input data-key="writeParameters" value="${escapeHtml(typeof field.write?.parameters === "string" ? field.write.parameters : JSON.stringify(field.write?.parameters || {}))}" placeholder='{"valueParameter":"on"}'></label>
-          <label><span>Normal value</span><input data-key="normalValue" value="${escapeHtml(field.write?.normalValue ?? "")}" placeholder="normal"></label>
+          <label><span>Write method</span><input data-key="writeMethod" value="${escapeHtml(field.write?.method || "")}" placeholder="Switch.Set" readonly></label>
+          <label><span>Write arguments</span><input data-key="writeParameters" value="${escapeHtml(typeof field.write?.parameters === "string" ? field.write.parameters : JSON.stringify(field.write?.parameters || {}))}" placeholder='{"id":0,"valueParameter":"on"}' readonly></label>
+          <label><span>Released value (mechanical control)</span><input data-key="normalValue" value="${escapeHtml(field.write?.normalValue ?? "")}" placeholder="true" readonly></label>
         </div>
       </details>
     </div>`).join("");
@@ -234,9 +239,10 @@ function renderDevice() {
       <label>Driver<select id="device-driver">${driverOptions}</select></label>
       <label>IP address / location<input id="device-address" value="${escapeHtml(device.address)}"></label>
     </div>
+    <p class="form-help">Current acquisition: ${escapeHtml(readCommands[device.driver] || "Choose a supported driver")}</p>
     <div class="subsection-heading"><div><p class="kicker">NAMED FIELDS</p><h2>Telemetry and actions</h2></div><button class="secondary-button compact-button" id="add-device-field" type="button">Add field</button></div>
     <div class="device-fields-grid">${rows}</div>
-    <p class="form-help">External calculations and events reference the system name. Device objects and API methods remain inside this definition.</p>`;
+    <p class="form-help">Rules reference system names. The only supported write is Switch.Set on relay 0: false sends {id:0,on:false}; true sends {id:0,on:true}, subject to ownership and valid lock evidence. Normal value true releases Tab5 inhibition; it does not create pump demand. Device addresses are descriptive here; installed Tab5 configuration owns polling endpoints.</p>`;
 }
 
 function captureCalculation() {
@@ -293,7 +299,7 @@ function normalizeCalculationKind(calculation, kind) {
   calculation.kind = kind;
   if (kind === "expression") {
     calculation.expression ||= "PumpWatts";
-    calculation.output ||= { systemName: "CalculatedValue", label: "Calculated value", type: "number", unit: null, logging: { mode: "delta", threshold: 1 } };
+    calculation.output ||= { systemName: uniqueName("CalculatedValue",allFields().map(f=>f.systemName)), label: "Calculated value", type: "number", unit: null, logging: { mode: "delta", threshold: 1 } };
     return;
   }
   normalizeCalculationFunction(calculation, calculation.functionId && state.capabilities.functions[calculation.functionId] ? calculation.functionId : Object.keys(state.capabilities.functions)[0]);
@@ -357,18 +363,22 @@ function renderList() {
   const items = state.draft[state.section]; const selected = state.selected[state.section];
   list.innerHTML = items.map((item, index) => `<button type="button" class="engine-list-item${index === selected ? " selected" : ""}" data-select="${index}"><strong>${escapeHtml(itemLabel(item))}</strong><small>${escapeHtml(item.systemName || item.driver || item.functionId || item.id)}</small>${item.enabled === false ? "<i>OFF</i>" : ""}</button>`).join("");
 }
-async function loadDraft() {
+async function loadDraft(seed = false) {
+  if (state.dirty.size && !window.confirm("Discard unsaved edits and reload? Export a backup first to keep them.")) return;
   setStatus("Loading the Rules Engine draft…");
   try {
-    const result = await api("GET");
-    state.draft = result.draft; state.revisions = result.draft.revisions; state.current = result.current; state.capabilities = result.capabilities; state.releases = result.releases || []; state.dirty.clear(); state.runtimePackage = null;
+    const result = await api("GET", undefined, seed === true ? "?seed=1" : "");
+    state.draft = result.draft; state.revisions = result.draft.revisions; state.current = result.current; state.capabilities = result.capabilities; state.releases = result.releases || []; state.dirty.clear(); state.formDirty = false; state.runtimePackage = null;
     document.querySelector("#engine-release").textContent = result.current ? `${result.current.releaseId} · version ${result.current.packageVersion}` : "No published parameter package";
     document.querySelector("#engine-hash").textContent = deliveryText(result.current);
     document.querySelector("#engine-tabs").hidden = false; document.querySelector("#engine-workspace").hidden = false;
     document.querySelector("#engine-save").disabled = true;
     document.querySelector("#engine-validate").disabled = false;
-    document.querySelector("#engine-publish").disabled = true;
+    document.querySelector("#engine-publish").disabled = false;
     deliverButton.disabled = !state.current;
+    document.querySelector("#engine-backup").disabled = false;
+    document.querySelector("#engine-download").disabled = true;
+    document.querySelector("#validation-state").textContent = "Not checked";
     updateCounts(); renderEditor(); renderReleaseHistory(); setStatus("V3 draft loaded. A current immutable package can be staged for adoption on the next Tab5 restart.", "ok");
   } catch (error) { if (error.message !== "cancelled") setStatus(`Could not load Rules Engine: ${error.body?.code || error.message}`, "error"); }
 }
@@ -376,18 +386,43 @@ async function loadDraft() {
 async function saveAll() {
   captureCurrent();
   const sections = state.dirty.size ? [...state.dirty] : [state.section];
+  const saved = [];
   for (const section of sections) {
-    const result = await api("PUT", { section, baseRevision: state.revisions[section], items: state.draft[section] });
-    state.revisions[section] = result.revision; state.dirty.delete(section);
+    try {
+      const result = await api("PUT", { section, baseRevision: state.revisions[section], items: state.draft[section] });
+      state.revisions[section] = result.revision; state.dirty.delete(section); saved.push(section);
+    } catch(error) {
+      error.saveFailure = true;
+      error.message = `Could not save ${section}. ${saved.length ? `Already saved: ${saved.join(', ')}. ` : ''}Remaining edits are still in this browser; export a backup before reloading. ${error.body?.code || error.message}`;
+      throw error;
+    }
   }
   document.querySelector("#engine-save").disabled = true;
   return sections;
 }
 
-function showFindings(result) {
-  const panel = document.querySelector("#validation-panel"); const box = document.querySelector("#validation-findings"); panel.hidden = false;
-  const findings = [...(result.errors || []).map(item => ({ ...item, level: "error" })), ...(result.warnings || []).map(item => ({ ...item, level: "warning" }))];
-  box.innerHTML = findings.length ? findings.map(item => `<div class="validation-finding ${item.level}"><strong>${escapeHtml(item.path)}</strong><span>${escapeHtml(item.message)}</span><code>${escapeHtml(item.code)}</code></div>`).join("") : "<div class='validation-success'><strong>All relationships resolved.</strong><span>The runtime package uses only supported fields, functions, operators, and writable actions.</span></div>";
+function showFindings(result, navigable = true) {
+  const panel = document.querySelector("#validation-panel"), box = document.querySelector("#validation-findings"); panel.hidden = false;
+  const findings = [...(result.errors || []).map(x=>({...x,level:'error'})),...(result.warnings||[]).map(x=>({...x,level:'warning'}))];
+  box.innerHTML = findings.length ? findings.map(item=>{
+    const match = /^(devices|calculatedFields|systemFields|events)\[(\d+)\]/.exec(item.path);
+    const definition = match && state.draft?.[match[1]]?.[Number(match[2])];
+    const title = definition && navigable ? `${definition.id || definition.systemName} — ${itemLabel(definition)}` : item.path;
+    let message = /invalid_(?:system_name|event_name)/.test(item.code) ? 'Use 2–64 characters: start with a letter, then letters, digits or underscores. Spaces are not allowed; use the display name for readable text.' : item.message;
+    if(navigable && /duplicate/.test(item.code)) {
+      const key=item.path.split('.').at(-1), value=item.path.replace(/\[(\d+)\]/g,'.$1').split('.').reduce((v,k)=>v?.[k],state.draft);
+      const matches=[];
+      const walk=(v,p)=>{if(!v || typeof v!=='object') return; for(const [k,x] of Object.entries(v)) {const next=Array.isArray(v)?`${p}[${k}]`:(p?`${p}.${k}`:k);if(k===key && x===value && next!==item.path) matches.push(next);if(typeof x==='object') walk(x,next);}};
+      walk(key==='id' && match ? {[match[1]]:state.draft[match[1]]}:state.draft,'');
+      if(matches.length) message += ` Also defined at: ${matches.join(', ')}.`;
+    }
+    return `<div class="validation-finding ${item.level}">${navigable ? `<button class="secondary-button finding-link" data-finding-path="${escapeHtml(item.path)}">${escapeHtml(title || 'Configuration')}</button>` : `<strong>${escapeHtml(title)}</strong>`}<span>${escapeHtml(message)}</span><small>${escapeHtml(item.path)}</small><code>${escapeHtml(item.code)}</code></div>`;
+  }).join('') : '<div class="validation-success">Online validation passed for the current Tab5 supported subset. Live device availability is checked during operation.</div>';
+}
+function reportError(error, operation) {
+  if (error.saveFailure) { setStatus(error.message, 'error'); return; }
+  if(error.body?.errors?.length) { showFindings(error.body); setStatus(`${operation} blocked. Select a finding to fix it.`, 'error'); }
+  else setStatus(`${operation} failed: ${error.body?.message || error.body?.code || error.message}. Your browser edits are retained.`, 'error');
 }
 async function validatePackage() {
   setStatus("Saving the draft and validating all relationships…");
@@ -395,58 +430,91 @@ async function validatePackage() {
     await saveAll(); const result = await api("POST", { action: "validate" });
     state.runtimePackage = result.runtimePackage;
     document.querySelector("#validation-state").textContent = "Passed"; document.querySelector("#validation-state").className = "ok-text";
-    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte V3 runtime package · publish only`;
+    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte V3 runtime package · checked for Tab5 compatibility`;
     document.querySelector("#engine-download").disabled = false; document.querySelector("#engine-publish").disabled = false;
     showFindings(result); setStatus("Validation passed. The draft can become the next immutable package version.", "ok");
   } catch (error) {
-    const result = error.body || {};
-    if (!result.errors?.length) result.errors = [{ path: "draft", code: result.code || error.message, message: "The draft could not be saved or validated. Reload if another editor changed it." }];
-    document.querySelector("#validation-state").textContent = "Failed"; document.querySelector("#validation-state").className = "error-text";
-    showFindings(result); setStatus(`Validation failed with ${(result.errors || []).length} blocking finding(s).`, "error");
+    state.runtimePackage = null; document.querySelector('#engine-download').disabled = true;
+    document.querySelector('#validation-state').textContent = error.saveFailure ? 'Save failed' : 'Failed';
+    reportError(error,'Validation');
   }
+}
+
+function authoringDraft() {
+  return {schemaVersion:3,...Object.fromEntries(Object.keys(sectionLabels).map(k=>[k,state.draft[k]]))};
+}
+function canonicalJson(value) {
+  const ordered = v => Array.isArray(v) ? v.map(ordered) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k=>[k,ordered(v[k])])) : v;
+  return JSON.stringify(ordered(value));
+}
+function showPublished(current, result = {}) {
+  state.current = current;
+  document.querySelector('#engine-release').textContent = `${current.releaseId} · version ${current.packageVersion}`;
+  document.querySelector('#engine-hash').textContent = deliveryText(current);
+  if(result.runtimePackage) state.runtimePackage = result.runtimePackage;
+  deliverButton.disabled = false;
 }
 async function publishPackage() {
-  if (!state.runtimePackage) return validatePackage();
-  const confirmation = window.prompt("Publish the validated draft as the next immutable parameter version? Type PUBLISH to continue.");
-  if (confirmation !== "PUBLISH") return;
-  setStatus("Publishing the authoring model and compiled runtime package…");
+  if(!state.draft) return;
+  if(!window.confirm('Save, validate, publish and request delivery? Tab5 adopts only on restart.')) return;
+  let publishing = false, baseVersion;
   try {
-    const result = await api("POST", { action: "publish", basePackageVersion: state.current?.packageVersion || 0 });
-    state.current = result.current; state.runtimePackage = result.runtimePackage;
-    state.releases = [{ ...result.current, schemaVersion: 3, runtimeBytes: result.runtimeBytes }, ...state.releases.filter(release => release.releaseId !== result.current.releaseId)];
-    document.querySelector("#engine-release").textContent = `${result.current.releaseId} · version ${result.current.packageVersion}`;
-    document.querySelector("#engine-hash").textContent = deliveryText(result.current);
-    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte V3 runtime package · ready to stage for Tab5 restart`;
-    deliverButton.disabled = false;
-    renderReleaseHistory(); showFindings(result); setStatus("Immutable V3 package published. Delivery stages it for adoption on the next Tab5 restart.", "ok");
-  } catch (error) { setStatus(`Publish failed: ${error.body?.code || error.message}`, "error"); }
-}
-async function deliverPackage() {
-  const releaseId = state.current?.releaseId;
-  if (!releaseId) {
-    setStatus("Publish a V3 package before requesting runtime delivery.", "warning");
-    return;
+    setStatus('Saving and checking Tab5 compatibility…');
+    await saveAll();
+    const validation = await api('POST',{action:'validate'});
+    showFindings(validation); state.runtimePackage = validation.runtimePackage;
+    if(validation.warnings?.length && !window.confirm('Validation has warnings shown below. Continue with publication and delivery?')) return;
+    // Reconcile against the server so reload/retry cannot unnecessarily mint a version.
+    const loaded = await api('GET');
+    if(canonicalJson(loaded.draft.revisions)!==canonicalJson(state.revisions)) throw new Error('Draft changed in another session. Export your edits before reloading.');
+    state.current = loaded.current;
+    let reuse = false;
+    if(state.current) {
+      const existing = await api('GET',undefined,`?releaseId=${encodeURIComponent(state.current.releaseId)}`);
+      reuse = state.current.schemaVersion===4 && canonicalJson(existing.release.authoringPackage)===canonicalJson(authoringDraft());
+    }
+    if(!reuse) {
+      baseVersion = state.current?.packageVersion || 0; publishing = true;
+      const result = await api('POST',{action:'publish',basePackageVersion:baseVersion,baseRevisions:state.revisions});
+      publishing = false; showPublished(result.current,result);
+      state.releases = [{...result.current,schemaVersion:3},...state.releases]; renderReleaseHistory();
+    } else showPublished(state.current);
+    await deliverPackage(false);
+  } catch(error) {
+    if(publishing) {
+      // Do not retry an uncertain publication: first recover its committed identity.
+      try {
+        const loaded = await api('GET');
+        if(loaded.current?.packageVersion === baseVersion + 1) {
+          const existing = await api('GET',undefined,`?releaseId=${encodeURIComponent(loaded.current.releaseId)}`);
+          if(canonicalJson(existing.release.authoringPackage)===canonicalJson(authoringDraft())) {
+            showPublished(loaded.current); setStatus('Publication confirmed after an interrupted response. Use Retry delivery for this version.', 'warning'); return;
+          }
+        }
+      } catch (_) { /* Show uncertain outcome; never create a second version here. */ }
+      setStatus('Publication outcome could not be confirmed. Reload before retrying; the next attempt checks for an existing matching release.', 'error');
+    } else reportError(error,'Publish and Deliver');
   }
-  const confirmation = window.prompt(`Stage ${releaseId} for adoption on the next Tab5 restart? Downloading it will not replace the currently running package. Type DELIVER to continue.`);
-  if (confirmation !== "DELIVER") return;
-  deliverButton.disabled = true;
-  setStatus(`Requesting restart-only staging of ${releaseId} for Tab5…`);
+}
+async function deliverPackage(confirm = true) {
+  const releaseId = state.current?.releaseId;
+  if(!releaseId) return;
+  if(confirm && !window.confirm(`Request delivery of ${releaseId}? The running package changes only on Tab5 restart.`)) return;
   try {
-    const result = await api("POST", { action: "deliver", releaseId: state.current.releaseId });
-    state.current = result.current || state.current;
-    document.querySelector("#engine-release").textContent = `${state.current.releaseId} · version ${state.current.packageVersion}`;
-    document.querySelector("#engine-hash").textContent = deliveryText(state.current);
-    setStatus(`Delivered ${releaseId}: staged for the next Tab5 restart. The currently running package is unchanged.`, "ok");
-  } catch (error) {
-    setStatus(deliveryErrorText(error), "error");
-  } finally {
-    deliverButton.disabled = !state.current || state.dirty.size > 0;
+    setStatus(`Requesting delivery of ${releaseId}…`);
+    const result = await api('POST',{action:'deliver',releaseId});
+    showPublished(result.current || state.current);
+    setStatus(`Delivery requested for ${releaseId}. Awaiting Tab5 staging confirmation; restart adoption remains separate.`, 'ok');
+    await refreshDeviceStatus();
+  } catch(error) {
+    if(error.body?.errors) showFindings(error.body);
+    setStatus(`Version ${state.current.packageVersion} remains published. Delivery was not confirmed. ${deliveryErrorText(error)} Retry delivery uses this same version.`, 'error');
   }
 }
 function downloadRuntime() {
   if (!state.runtimePackage) return;
   const blob = new Blob([`${JSON.stringify(state.runtimePackage, null, 2)}\n`], { type: "application/json" });
-  const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `${state.current?.releaseId || "rules-engine-runtime-preview"}.json`; link.click(); URL.revokeObjectURL(link.href);
+  const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `${state.runtimePackage.releaseId || "rules-engine-runtime-preview"}.json`; link.click(); URL.revokeObjectURL(link.href);
 }
 
 function removeItem() {
@@ -519,7 +587,7 @@ function typedWorkingInitial(type, raw, enumValues = []) {
 function captureSystemField(displayedSource = state.draft.systemFields[state.selected.systemFields]?.source) {
   const index = state.selected.systemFields; const field = state.draft.systemFields[index]; if (!field || !document.querySelector("#sf-id")) return;
   const logMode = document.querySelector("#sf-log").value;
-  const common = { id: document.querySelector("#sf-id").value.trim(), systemName: document.querySelector("#sf-name").value.trim(), label: document.querySelector("#sf-label").value.trim(), source: displayedSource, unit: null, logging: logMode === "delta" ? { mode: logMode, threshold: Number(document.querySelector("#sf-log-threshold")?.value) } : { mode: logMode } };
+  const common = { id: document.querySelector("#sf-id").value.trim(), systemName: document.querySelector("#sf-name").value.trim(), label: document.querySelector("#sf-label").value.trim(), source: displayedSource, unit: field.unit ?? null, logging: logMode === "delta" ? { mode: logMode, threshold: Number(document.querySelector("#sf-log-threshold")?.value) } : { mode: logMode } };
   if (displayedSource !== "session") {
     state.draft.systemFields[index] = { ...common, runtimeRole: "occurrence", type: "signal", occurrenceKey: document.querySelector("#sf-occurrence").value.trim() };
     return;
@@ -562,7 +630,7 @@ function renderEvent() {
   const event = state.draft.events[state.selected.events]; if (!event) { editor.innerHTML = "<p class='empty-editor'>Add an event to begin.</p>"; return; }
   const trigger = event.opening.trigger; const isCondition = trigger.type === "condition"; const openBody = isCondition ? v3ConditionHtml("open", trigger.condition) : `<div class="condition-controls"><label>Occurrence<select id="v3-occurrence">${occurrenceFields(trigger.type === "manual" ? "manualOccurrence" : "internalOccurrence").map(field => optionHtml(field, trigger.occurrenceField)).join("")}</select></label><label>Observations<input id="v3-open-count" type="number" min="1" value="${trigger.qualification.observationCount}"></label><label>Minimum seconds<input id="v3-open-seconds" type="number" min="0" value="${trigger.qualification.minimumSeconds}"></label></div>`; const close = event.closing.policy === "condition" ? v3ConditionHtml("close", event.closing.condition) : "<p class='form-help'>This policy has no closing condition.</p>";
   const web = event.web || { notifyOnOpen: false, notifyOnClose: false, openMessage: "", closeMessage: "" };
-  editor.innerHTML = `<div class="engine-editor-heading"><div><p class="kicker">V3 EVENT DEFINITION</p><h2>${escapeHtml(event.displayName)}</h2></div><div class="inline-switches"><label class="switch-label"><input id="event-enabled" type="checkbox"${event.enabled ? " checked" : ""}> Enabled</label><button class="secondary-button compact-button danger-button" id="remove-item" type="button">Remove</button></div></div><div class="form-grid compact-form"><label>ID<input id="event-id" value="${escapeHtml(event.id)}"></label><label>System name<input id="event-system-name" value="${escapeHtml(event.systemName)}"></label><label>Display name<input id="event-display-name" value="${escapeHtml(event.displayName)}"></label><label>Severity<select id="event-severity"><option${event.severity === "Info" ? " selected" : ""}>Info</option><option${event.severity === "Yellow" ? " selected" : ""}>Yellow</option><option${event.severity === "Red" ? " selected" : ""}>Red</option></select></label><label>Class<select id="v3-class"><option value="transient"${event.eventClass === "transient" ? " selected" : ""}>transient</option><option value="latched"${event.eventClass === "latched" ? " selected" : ""}>latched</option><option value="monitor"${event.eventClass === "monitor" ? " selected" : ""}>Monitor</option></select></label></div><div class="event-condition-grid"><section><div class="subsection-heading"><div><p class="kicker">OPENING</p><h2>Trigger and qualification</h2></div></div><label>Trigger<select id="v3-trigger"><option value="condition"${isCondition ? " selected" : ""}>condition</option><option value="manual"${trigger.type === "manual" ? " selected" : ""}>manual occurrence</option><option value="internal"${trigger.type === "internal" ? " selected" : ""}>internal occurrence</option></select></label>${openBody}</section><section><div class="subsection-heading"><div><p class="kicker">CLOSING</p><h2>Policy</h2></div></div><label>Policy<select id="v3-close-policy"><option value="condition"${event.closing.policy === "condition" ? " selected" : ""}>condition</option><option value="clearEvents"${event.closing.policy === "clearEvents" ? " selected" : ""}>Clear Events</option><option value="immediate"${event.closing.policy === "immediate" ? " selected" : ""}>immediate</option></select></label>${close}</section></div><div class="event-lower-grid">${phaseHtml("onOpen", event.onOpen)}${phaseHtml("onClose", event.onClose)}</div><section class="event-summary-section"><div class="subsection-heading"><div><p class="kicker">SUMMARY</p><h2>Closing summary values</h2></div><button class="secondary-button compact-button" id="add-summary-row" type="button">Add summary value</button></div>${summaryHtml(event.summary)}</section><section><p class="kicker">AUTHORING NOTIFICATIONS</p><div class="inline-switches"><label class="switch-label"><input id="notify-open" type="checkbox"${web.notifyOnOpen ? " checked" : ""}> Notify on open</label><label class="switch-label"><input id="notify-close" type="checkbox"${web.notifyOnClose ? " checked" : ""}> Notify on close</label></div><label>Open message<textarea id="open-message">${escapeHtml(web.openMessage)}</textarea></label><label>Close message<textarea id="close-message">${escapeHtml(web.closeMessage)}</textarea></label><p class="form-help">Monitor and latched constraints are validated by the server when the package is checked.</p></section>`;
+  editor.innerHTML = `<div class="engine-editor-heading"><div><p class="kicker">V3 EVENT DEFINITION</p><h2>${escapeHtml(event.displayName)}</h2></div><div class="inline-switches"><label class="switch-label"><input id="event-enabled" type="checkbox"${event.enabled ? " checked" : ""}> Enabled</label><button class="secondary-button compact-button danger-button" id="remove-item" type="button">Remove</button></div></div><div class="form-grid compact-form"><label>ID<input id="event-id" value="${escapeHtml(event.id)}"></label><label>System name<input id="event-system-name" value="${escapeHtml(event.systemName)}"></label><label>Display name<input id="event-display-name" value="${escapeHtml(event.displayName)}"></label><label>Severity<select id="event-severity"><option${event.severity === "Info" ? " selected" : ""}>Info</option><option${event.severity === "Yellow" ? " selected" : ""}>Yellow</option><option${event.severity === "Red" ? " selected" : ""}>Red</option></select></label><label>Class<select id="v3-class"><option value="transient"${event.eventClass === "transient" ? " selected" : ""}>transient</option><option value="latched"${event.eventClass === "latched" ? " selected" : ""}>latched</option><option value="monitor"${event.eventClass === "monitor" ? " selected" : ""}>Monitor</option></select></label></div><div class="event-condition-grid"><section><div class="subsection-heading"><div><p class="kicker">OPENING</p><h2>Trigger and qualification</h2></div></div><label>Trigger<select id="v3-trigger"><option value="condition"${isCondition ? " selected" : ""}>condition</option><option value="manual"${trigger.type === "manual" ? " selected" : ""}>manual occurrence</option><option value="internal"${trigger.type === "internal" ? " selected" : ""}>internal occurrence</option></select></label>${openBody}</section><section><div class="subsection-heading"><div><p class="kicker">CLOSING</p><h2>Policy</h2></div></div><label>Policy<select id="v3-close-policy"><option value="condition"${event.closing.policy === "condition" ? " selected" : ""}>condition</option><option value="clearEvents"${event.closing.policy === "clearEvents" ? " selected" : ""}>Clear Events</option><option value="immediate"${event.closing.policy === "immediate" ? " selected" : ""}>immediate</option></select></label>${close}</section></div><div class="event-lower-grid">${phaseHtml("onOpen", event.onOpen)}${phaseHtml("onClose", event.onClose)}</div><section class="event-summary-section"><div class="subsection-heading"><div><p class="kicker">SUMMARY</p><h2>Closing summary values — not supported by Tab5 yet</h2></div><button class="secondary-button compact-button" id="add-summary-row" type="button">Add summary value</button></div>${summaryHtml(event.summary)}</section><section><p class="kicker">AUTHORING NOTIFICATIONS</p><div class="inline-switches"><label class="switch-label"><input id="notify-open" type="checkbox"${web.notifyOnOpen ? " checked" : ""}> Notify on open</label><label class="switch-label"><input id="notify-close" type="checkbox"${web.notifyOnClose ? " checked" : ""}> Notify on close</label></div><label>Open message<textarea id="open-message">${escapeHtml(web.openMessage)}</textarea></label><label>Close message<textarea id="close-message">${escapeHtml(web.closeMessage)}</textarea></label><p class="form-help">Opening and closing conditions are independent. Occurrence and Clear Events inputs are not yet connected; notification settings are authoring only.</p></section>`;
 }
 function captureEvent(displayedTriggerType, displayedClosingPolicy) {
   const event = state.draft.events[state.selected.events];
@@ -579,7 +647,7 @@ function captureEvent(displayedTriggerType, displayedClosingPolicy) {
   event.closing = closingPolicy === "condition" ? { policy: closingPolicy, condition: captureV3Condition("close") } : { policy: closingPolicy };
   event.onOpen = capturePhase("onOpen");
   event.onClose = capturePhase("onClose");
-  event.summary = { durationOutput: document.querySelector("#summary-duration-enabled").checked ? { systemName: document.querySelector("#summary-duration-name").value.trim(), label: document.querySelector("#summary-duration-label").value.trim(), type: "number", unit: "s", logging: { mode: "none" } } : null, aggregates: [...editor.querySelectorAll(".summary-row")].map(row => ({ source: row.querySelector("[data-key=source]").value, operation: row.querySelector("[data-key=operation]").value, scale: Number(row.querySelector("[data-key=scale]").value), output: { systemName: row.querySelector("[data-key=systemName]").value.trim(), label: row.querySelector("[data-key=label]").value.trim(), type: "number", unit: row.querySelector("[data-key=unit]").value.trim() || null, logging: { mode: "none" } } })) };
+  event.summary = { durationOutput: document.querySelector("#summary-duration-enabled").checked ? { systemName: document.querySelector("#summary-duration-name").value.trim(), label: document.querySelector("#summary-duration-label").value.trim(), type: event.summary.durationOutput?.type || "number", unit: "s", logging: clone(event.summary.durationOutput?.logging || { mode: "none" }) } : null, aggregates: [...editor.querySelectorAll(".summary-row")].map((row, index) => ({ source: row.querySelector("[data-key=source]").value, operation: row.querySelector("[data-key=operation]").value, scale: Number(row.querySelector("[data-key=scale]").value), output: { systemName: row.querySelector("[data-key=systemName]").value.trim(), label: row.querySelector("[data-key=label]").value.trim(), type: event.summary.aggregates[index]?.output.type || "number", unit: row.querySelector("[data-key=unit]").value.trim() || null, logging: clone(event.summary.aggregates[index]?.output.logging || { mode: "none" }) } })) };
   event.web = { notifyOnOpen: document.querySelector("#notify-open").checked, notifyOnClose: document.querySelector("#notify-close").checked, openMessage: document.querySelector("#open-message").value.trim(), closeMessage: document.querySelector("#close-message").value.trim() };
 }
 function setEventTrigger(event, type) {
@@ -592,26 +660,123 @@ function setEventTrigger(event, type) {
 function setEventClosingPolicy(event, policy) {
   event.closing = policy === "condition" ? { policy, condition: { mode: "all", clauses: [defaultV3Clause()], observationCount: 1, minimumSeconds: 0 } } : { policy };
 }
-function captureCurrent() { if (!state.draft) return; if (state.section === "devices") captureDevice(); else if (state.section === "calculatedFields") captureCalculation(); else if (state.section === "systemFields") captureSystemField(); else captureEvent(); }
+function captureCurrent() { if (!state.draft || !state.formDirty) return; state.formDirty = false; if (state.section === "devices") captureDevice(); else if (state.section === "calculatedFields") captureCalculation(); else if (state.section === "systemFields") captureSystemField(); else captureEvent(); }
 function renderEditor() { const [kicker, title] = sectionLabels[state.section]; document.querySelector("#browser-kicker").textContent = kicker; document.querySelector("#browser-title").textContent = title; document.querySelectorAll(".engine-tile").forEach(button => button.classList.toggle("active", button.dataset.section === state.section)); renderList(); if (state.section === "devices") renderDevice(); else if (state.section === "calculatedFields") renderCalculation(); else if (state.section === "systemFields") renderSystemField(); else renderEvent(); }
+function uniqueName(base, existing) { let name=base,n=2; while(existing.includes(name)) name=`${base}${n++}`; return name; }
 function addItem() {
   captureCurrent();
   if (state.section === "devices") state.draft.devices.push({ id: `device-${state.draft.devices.length + 1}`, label: "New device", driver: "", address: "", enabled: false, fields: [] });
-  else if (state.section === "calculatedFields") state.draft.calculatedFields.push({ id: `calculation-${state.draft.calculatedFields.length + 1}`, label: "New calculated value", kind: "expression", expression: "PumpWatts", output: { systemName: "CalculatedValue", label: "Calculated value", type: "number", unit: null, logging: { mode: "delta", threshold: 1 } } });
-  else if (state.section === "systemFields") state.draft.systemFields.push({ id: "system-field", systemName: "SystemField", label: "System field", source: "session", runtimeRole: "working", type: "boolean", unit: null, initialValue: false, logging: { mode: "none" }, assignmentTarget: false });
-  else { const clause = defaultV3Clause(); state.draft.events.push({ id: "E100", systemName: "NewEvent", displayName: "New event", enabled: false, severity: "Info", eventClass: "transient", opening: { trigger: { type: "condition", condition: { mode: "all", clauses: [clause], observationCount: 1, minimumSeconds: 0 } } }, closing: { policy: "condition", condition: { mode: "all", clauses: [clone(clause)], observationCount: 1, minimumSeconds: 0 } }, onOpen: { assignments: [], guardedGroups: [] }, onClose: { assignments: [], guardedGroups: [] }, summary: { durationOutput: null, aggregates: [] }, web: { notifyOnOpen: false, notifyOnClose: false, openMessage: "", closeMessage: "" } }); }
+  else if (state.section === "calculatedFields") state.draft.calculatedFields.push({ id: `calculation-${state.draft.calculatedFields.length + 1}`, label: "New calculated value", kind: "expression", expression: "PumpWatts", output: { systemName: uniqueName("CalculatedValue",allFields().map(f=>f.systemName)), label: "Calculated value", type: "number", unit: null, logging: { mode: "delta", threshold: 1 } } });
+  else if (state.section === "systemFields") state.draft.systemFields.push({ id: uniqueName("system-field",state.draft.systemFields.map(f=>f.id)), systemName: uniqueName("SystemField",allFields().map(f=>f.systemName)), label: "System field", source: "session", runtimeRole: "working", type: "boolean", unit: null, initialValue: false, logging: { mode: "none" }, assignmentTarget: false });
+  else { const clause = defaultV3Clause(); state.draft.events.push({ id: uniqueName("E100", state.draft.events.map(e=>e.id)), systemName: uniqueName("NewEvent",state.draft.events.map(e=>e.systemName)), displayName: "New event", enabled: false, severity: "Info", eventClass: "transient", opening: { trigger: { type: "condition", condition: { mode: "all", clauses: [clause], observationCount: 1, minimumSeconds: 0 } } }, closing: { policy: "condition", condition: { mode: "all", clauses: [clone(clause)], observationCount: 1, minimumSeconds: 0 } }, onOpen: { assignments: [], guardedGroups: [] }, onClose: { assignments: [], guardedGroups: [] }, summary: { durationOutput: null, aggregates: [] }, web: { notifyOnOpen: false, notifyOnClose: false, openMessage: "", closeMessage: "" } }); }
   state.selected[state.section] = state.draft[state.section].length - 1; markDirty(); updateCounts(); renderEditor();
 }
 
-document.querySelector("#engine-load").addEventListener("click", loadDraft);
-document.querySelector("#engine-save").addEventListener("click", async () => { try { const sections = await saveAll(); setStatus(`Saved ${sections.join(", ")} draft section(s).`, "ok"); } catch (error) { setStatus(`Save failed: ${error.body?.code || error.message}`, "error"); } });
-document.querySelector("#engine-validate").addEventListener("click", validatePackage);
-document.querySelector("#engine-publish").addEventListener("click", publishPackage);
-document.querySelector("#engine-deliver").addEventListener("click", deliverPackage);
+
+function syncButtons() {
+  document.querySelector('#engine-publish').disabled = !state.draft;
+  document.querySelector('#engine-backup').disabled = !state.draft;
+  document.querySelector('#engine-save').disabled = !state.dirty.size;
+  document.querySelector('#engine-download').disabled = !state.runtimePackage;
+  deliverButton.disabled = !state.current;
+}
+async function runBusy(operation) {
+  if(state.busy) return;
+  state.busy = true;
+  const main = document.querySelector('main'); main.inert = true;
+  try { await operation(); } catch(error) {reportError(error,'Operation');}
+  finally {main.inert = false; state.busy = false; syncButtons();}
+}
+function downloadBackup() {
+  captureCurrent();
+  const value = {kind:'well-pump-rules-authoring-backup',backupVersion:1,authoringPackage:authoringDraft()};
+  const link = document.createElement('a'); link.href=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)+'\n'],{type:'application/json'}));
+  link.download=`well-pump-rules-backup-${new Date().toISOString().replace(/[:.]/g,'-')}.json`; link.click(); URL.revokeObjectURL(link.href);
+}
+async function previewImport(file) {
+  state.importCandidate = null; document.querySelector("#import-preview").hidden = true;
+  if(!file) return;
+  if(file.size>500000) throw new Error('Backup exceeds the 500,000 byte import limit.');
+  const backup = JSON.parse(await file.text());
+  const result = await api('POST',{action:'previewImport',backup});
+  state.importCandidate = {backup,baseRevisions:result.baseRevisions};
+  document.querySelector('#import-details').textContent = Object.entries(result.counts).map(([k,v])=>`${sectionLabels[k][1]}: ${v.before} → ${v.after}`).join(' · ') + (result.valid ? '. Ready for online validation after import.' : '. This draft has publication blockers; importing preserves it for editing.') + ' All saved and unsaved draft definitions will be replaced. Published and running packages are unchanged.';
+  document.querySelector('#import-preview').hidden=false;
+  showFindings(result,false);
+}
+async function applyImport() {
+  if(!state.importCandidate || !window.confirm('Replace the entire draft with this backup? Export your current work first if you need to keep it.')) return;
+  const result = await api('POST',{action:'import',...state.importCandidate});
+  state.dirty.clear(); state.importCandidate=null; document.querySelector('#import-preview').hidden=true;
+  await loadDraft(); showFindings(result); setStatus('Configuration restored to the draft. Validate or Publish and Deliver when ready.','ok');
+}
+async function refreshDeviceStatus() {
+  const box=document.querySelector('#device-package-state');
+  try {
+    const result=await api('GET',undefined,'?deviceStatus=1'); const d=result.deviceStatus;
+    if(!d) {box.textContent='Tab5 report unavailable. Staged and running identities are unknown.';return;}
+    const ref=x=>x ? `v${x.packageVersion} · ${x.releaseId} · SHA ${x.contentHash.slice(0,12)}` : 'Unavailable';
+    box.textContent=`Last reported ${new Date(d.reportedAtMs).toLocaleString()} (not a live connection check). Running: ${ref(d.running)}. Desired: ${ref(d.desired)}. Staged for restart: ${ref(d.staged)}.${d.rejected ? ` Rejected: ${d.rejected.reason}.` : ''}`;
+  } catch(_) {box.textContent='Could not read Tab5 report. Staged and running identities are unknown.';}
+}
+function navigateFinding(path) {
+  const match=/^(devices|calculatedFields|systemFields|events)\[(\d+)\](.*)$/.exec(path);
+  if(!match || !state.draft?.[match[1]]?.[Number(match[2])]) return;
+  captureCurrent(); state.section=match[1];state.selected[state.section]=Number(match[2]);renderEditor();
+  const tail=match[3]; let target=null;
+  const simple={devices:{id:'device-id',label:'device-label',driver:'device-driver',address:'device-address'},calculatedFields:{id:'calculation-id',expression:'calculation-expression',kind:'calculation-kind'},systemFields:{id:'sf-id',systemName:'sf-name',label:'sf-label',type:'sf-type',initialValue:'sf-initial',enumValues:'sf-enum',source:'sf-source'},events:{id:'event-id',systemName:'event-system-name',displayName:'event-display-name',eventClass:'v3-class'}};
+  const key=tail.split('.')[1]; if(simple[state.section][key]) target=document.getElementById(simple[state.section][key]);
+  const field=/\.fields\[(\d+)\]\.(\w+)/.exec(tail);
+  if(field) target=editor.querySelector(`.device-field-row[data-index="${field[1]}"] [data-key="${field[2]}"]`);
+  const parameter=/\.parameters\.(\w+)/.exec(tail);
+  if(parameter) target=editor.querySelector(`[data-calculation-parameter="${parameter[1]}"]`);
+  const output=/\.(output|outputs\[(\d+)\])\.(\w+)/.exec(tail);
+  if(output) target=editor.querySelectorAll('.calculation-output-row')[Number(output[2]||0)]?.querySelector(`[data-key="${output[3]}"]`);
+  if(tail.includes('.summary.durationOutput')) target=document.querySelector(tail.endsWith('systemName')?'#summary-duration-name':'#summary-duration-enabled');
+  const aggregate=/\.summary\.aggregates\[(\d+)\]/.exec(tail);
+  if(aggregate) target=editor.querySelectorAll('.summary-row')[Number(aggregate[1])]?.querySelector('input,select');
+  if(tail.includes('.closing.policy')) target=document.querySelector('#v3-close-policy');
+  const qualifier=/\.(observationCount|minimumSeconds)$/.exec(tail);
+  const prefix=tail.includes('.closing')?'close':'open';
+  if(qualifier) target=document.querySelector(`#v3-${prefix}-${qualifier[1]==='observationCount'?'count':'seconds'}`);
+  const clause=/\.clauses\[(\d+)\]\.(field|operator|value)/.exec(tail);
+  if(clause) target=editor.querySelectorAll(`.v3-${prefix}-clause`)[Number(clause[1])]?.querySelector(`[data-key="${clause[2]}"]`);
+  const phaseMatch=/\.(onOpen|onClose)(?:\.guardedGroups\[(\d+)\])?\.assignments\[(\d+)\](?:\.(target|value|ownership))?/.exec(tail);
+  if(phaseMatch) {
+    const button=editor.querySelector(`[data-v3-remove-assignment="${phaseMatch[1]}:${phaseMatch[2]??'plain'}:${phaseMatch[3]}"]`);
+    target=button?.closest('.event-action-row')?.querySelector(`[data-key="${phaseMatch[4]||'target'}"]`);
+  }
+  const guard=/\.(onOpen|onClose)\.guardedGroups\[(\d+)\]\.guard\.clauses\[(\d+)\]\.(field|operator|value)/.exec(tail);
+  if(guard) target=editor.querySelectorAll(`.v3-guard-${guard[1]}-${guard[2]}-clause`)[Number(guard[3])]?.querySelector(`[data-key="${guard[4]}"]`);
+  target ||= editor; for(let el=target;el && el!==editor;el=el.parentElement) if(el.tagName==='DETAILS') el.open=true;
+  target.scrollIntoView({block:'center'});target.setAttribute('tabindex','-1');target.focus();
+}
+editor.addEventListener('click',e=>{
+  const button=e.target.closest('[data-relay-mapping]'); if(!button) return;
+  const device=state.draft.devices[state.selected.devices];
+  if(device.driver!=='shelly-gen4-switch') return setStatus('Relay mapping is available only for Shelly Gen4 switch.','warning');
+  captureCurrent(); const field=device.fields[Number(button.dataset.relayMapping)];
+  Object.assign(field,{object:'RLY(0)',type:'boolean',unit:null,access:'readWrite',write:{method:'Switch.Set',parameters:{id:0,valueParameter:'on'},normalValue:true}});
+  delete field.enumValues;markDirty();renderEditor();
+});
+document.querySelector('#validation-findings').addEventListener('click',e=>{const b=e.target.closest('[data-finding-path]');if(b) navigateFinding(b.dataset.findingPath);});
+document.querySelector('#engine-backup').addEventListener('click',downloadBackup);
+document.querySelector('#engine-import').addEventListener('click',()=>document.querySelector('#backup-file').click());
+document.querySelector('#backup-file').addEventListener('change',e=>{const file=e.target.files[0];e.target.value='';runBusy(()=>previewImport(file));});
+document.querySelector('#apply-import').addEventListener('click',()=>runBusy(applyImport));
+document.querySelector('#cancel-import').addEventListener('click',()=>{state.importCandidate=null;document.querySelector('#import-preview').hidden=true;});
+document.querySelector('#refresh-device-state').addEventListener('click',()=>runBusy(refreshDeviceStatus));
+document.querySelector('#seed-defaults').addEventListener('click',()=>runBusy(()=>{if(window.confirm('Seed missing V3 sections? Use backup import instead for recovery.')) return loadDraft(true);}));
+window.addEventListener('beforeunload',e=>{if(state.dirty.size){e.preventDefault();e.returnValue='';}});
+document.querySelector("#engine-load").addEventListener("click", () => runBusy(loadDraft));
+document.querySelector("#engine-save").addEventListener("click", () => runBusy(async () => { try { const sections = await saveAll(); setStatus(`Saved ${sections.join(", ")} draft section(s).`, "ok"); } catch (error) { reportError(error,"Save"); } }));
+document.querySelector("#engine-validate").addEventListener("click", () => runBusy(validatePackage));
+document.querySelector("#engine-publish").addEventListener("click", () => runBusy(publishPackage));
+document.querySelector("#engine-deliver").addEventListener("click", () => runBusy(deliverPackage));
 document.querySelector("#engine-download").addEventListener("click", downloadRuntime);
 document.querySelector("#release-view").addEventListener("click", viewRelease);
 document.querySelector("#release-download").addEventListener("click", downloadSelectedRelease);
-document.querySelector("#release-restore").addEventListener("click", restoreSelectedRelease);
+document.querySelector("#release-restore").addEventListener("click", () => runBusy(restoreSelectedRelease));
 document.querySelector("#release-select").addEventListener("change", () => {
   state.selectedRelease = null;
   document.querySelector("#release-download").disabled = true;

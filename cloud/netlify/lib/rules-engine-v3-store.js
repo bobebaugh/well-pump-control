@@ -45,6 +45,31 @@ function createRulesEngineV3Store(dependencies = {}) {
   const state = site.collection("rulesEngineV3State").doc("current");
 
   return {
+    async readDraft() {
+      const result = {schemaVersion:3, revisions:{}};
+      for (const section of SECTIONS) {
+        const snapshot = await drafts.doc(section).get();
+        result[section] = snapshot.exists ? snapshot.data().items : [];
+        result.revisions[section] = snapshot.exists ? snapshot.data().draftRevision : 0;
+      }
+      const current = await state.get();
+      return {draft:result,current:current.exists ? current.data() : null};
+    },
+    async replaceDraft(authoring, expectedRevisions, nowMs) {
+      return db.runTransaction(async transaction => {
+        const revisions = {};
+        for (const section of SECTIONS) {
+          const snapshot = await transaction.get(drafts.doc(section));
+          const actual = snapshot.exists ? snapshot.data().draftRevision : 0;
+          if(actual !== expectedRevisions[section]) throw new RulesEngineV3StoreConflictError();
+          revisions[section] = actual + 1;
+        }
+        for(const section of SECTIONS) transaction.set(drafts.doc(section), {
+          schemaVersion:3, draftRevision:revisions[section], updatedAtMs:nowMs, items:authoring[section]
+        });
+        return {...authoring,revisions};
+      });
+    },
     async listReleases() {
       const snapshot = await releases.orderBy("packageVersion", "desc").get();
       return snapshot.docs.map(releaseSummary);
@@ -77,7 +102,7 @@ function createRulesEngineV3Store(dependencies = {}) {
       const reference = drafts.doc(section);
       return db.runTransaction(async transaction => {
         const snapshot = await transaction.get(reference);
-        if (!snapshot.exists || snapshot.data().draftRevision !== expectedRevision) throw new RulesEngineV3StoreConflictError();
+        if ((snapshot.exists ? snapshot.data().draftRevision : 0) !== expectedRevision) throw new RulesEngineV3StoreConflictError();
         const nextRevision = expectedRevision + 1;
         transaction.set(reference, { schemaVersion: 3, draftRevision: nextRevision, updatedAtMs: nowMs, items });
         return nextRevision;

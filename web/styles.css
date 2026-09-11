@@ -392,3 +392,13 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(67,168,255,.
   .condition-controls, .summary-duration { grid-template-columns: 1fr; }.data-grid { min-width: 850px; }
   .device-field-primary, .field-action-mapping > div { grid-template-columns: 1fr 1fr; }.device-field-primary > *, .field-log, .field-threshold, .field-access, .field-delete { grid-column: auto; grid-row: auto; }.field-delete { justify-self: start; }
 }
+
+/* Configuration workflow */
+.event-action-row { grid-template-columns: 1.3fr minmax(85px,.7fr) 1fr 28px; }
+.finding-link { text-align:left; white-space:normal; }
+#device-package-state, #import-details { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.7; }
+#engine-editor :focus { outline:2px solid var(--blue); outline-offset:3px; }
+
+.configuration-guide { padding:24px; max-width:1000px; line-height:1.65; }
+.configuration-guide h2 { margin-top:24px; }
+.configuration-guide pre { overflow:auto; }

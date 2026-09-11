@@ -1,4 +1,21 @@
-# Editor review — next design session
+# Editor review — accepted configuration unit
+
+## Accepted scope — owner discussion, 2026-09-11
+
+The owner approved one implementation batch: consumer-router-style complete
+backup export/replacement import, online Tab5 compatibility validation, actionable
+findings, Publish and Deliver with same-release retry, truthful package identities,
+and a short repository guide. Additive import is removed: AI receives the current
+backup and returns a revised complete authoring backup. Existing seeding/history
+remain available but are not long-term recovery dependencies. Do not add general
+Shelly command support; disclose the supported relay mapping. Mode inputs and
+script-running health remain separate functional work.
+
+The owner explicitly approved continuing from pilot-working 8d659d6 while it differs
+from pilot by documentation and requested branch synchronization at unit closeout.
+Do not promote operating branches automatically. See CURRENT.md for verification
+and remaining acceptance. The original brief below is retained as review context;
+this accepted scope supersedes its additive-import and multi-unit suggestions.
 
 ## Purpose and authority
 

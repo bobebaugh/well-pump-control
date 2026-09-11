@@ -74,11 +74,11 @@ test("V3 contract rejects invalid system sources, typed assignments, lifecycle p
 
   const bounds = defaults();
   bounds.events = Array.from({ length: 65 }, (_, index) => ({ ...structuredClone(bounds.events[0]), id: `E${index}`, systemName: `Event${index}` }));
-  assert.ok(codes(validateAndCompileV3(bounds)).includes("events_too_large"));
+  assert.ok(codes(validateAndCompileV3(bounds)).includes("invalid_authoring_shape"));
 
   const summaryBounds = defaults();
   summaryBounds.events[0].summary.aggregates = Array.from({ length: 33 }, (_, index) => ({ source: "SupplyVoltage", operation: "maximum", scale: 1, output: { systemName: `HighVoltageMaximum${index}`, label: `Maximum voltage ${index}`, type: "number", unit: "V", logging: { mode: "none" } } }));
-  assert.ok(codes(validateAndCompileV3(summaryBounds)).includes("summary_aggregates_too_large"));
+  assert.ok(codes(validateAndCompileV3(summaryBounds)).includes("invalid_authoring_shape"));
 });
 
 test("V3 contract rejects malformed closed shapes and unavailable condition fields", () => {
@@ -87,8 +87,11 @@ test("V3 contract rejects malformed closed shapes and unavailable condition fiel
   malformed.events[0].opening.trigger.condition.clauses[0].field = "NotAField";
   const result = validateAndCompileV3(malformed);
   assert.equal(result.valid, false);
-  assert.ok(codes(result).includes("invalid_system_field_shape"));
-  assert.ok(codes(result).includes("unknown_condition_field"));
+  assert.ok(codes(result).includes("invalid_authoring_shape"));
+  delete malformed.systemFields[0].unexpected;
+  const fieldOnly = defaults();
+  fieldOnly.events[0].opening.trigger.condition.clauses[0].field = "NotAField";
+  assert.ok(codes(validateAndCompileV3(fieldOnly)).includes("unknown_condition_field"));
   assert.deepEqual(result.warnings, []);
 });
 
@@ -142,7 +145,7 @@ test("V3 retains one special operating mode and signal-only occurrence fields", 
   assert.ok(codes(occurrenceResult).includes("invalid_trigger_source") === false);
 });
 
-test("V3 preserves validated event summaries in runtime bytes and rejects malformed summary rows", () => {
+test("V3 retains authoring summaries but blocks publication to the current Tab5", () => {
   const draft = defaults();
   const event = draft.events.find(item => item.id === "E007");
   event.summary = {
@@ -150,9 +153,10 @@ test("V3 preserves validated event summaries in runtime bytes and rejects malfor
     aggregates: [{ source: "SupplyVoltage", operation: "maximum", scale: 1, output: { systemName: "HighVoltageMaximum", label: "Maximum voltage", type: "number", unit: "V", logging: { mode: "none" } } }]
   };
   const valid = compileV3Release(draft, "20260830000000-event-v3-v1", 1);
-  assert.equal(valid.valid, true);
-  assert.deepEqual(valid.runtimePackage.events.find(item => item.id === "E007").summary, event.summary);
-  assert.deepEqual(valid.warnings, []);
+  assert.equal(valid.valid, false);
+  assert.ok(valid.errors.some(e => e.code === "tab5_unsupported"));
+  const authoring = validateAndCompileV3(draft, {authoringOnly:true});
+  assert.deepEqual(authoring.runtimePackage.events.find(item => item.id === "E007").summary, event.summary);
 
   const malformed = defaults();
   malformed.events[0].summary.aggregates = [{ source: "ShellyEMAvailable", operation: "average", scale: 1, output: { systemName: "BadSummary", label: "Bad", type: "number", unit: "V", logging: { mode: "none" } } }];

@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#09111f">
   <title>Rules Engine — Well Pump Pilot</title>
-  <link rel="stylesheet" href="/styles.css?v=20260830-v3">
-  <script src="/rules-engine.js?v=20260830-v3" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=20260911-config">
+  <script src="/rules-engine.js?v=20260911-config" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -24,7 +24,7 @@
   <main class="engine-main">
     <section class="editor-notice">
       <strong>Event V3 runtime delivery — restart-only adoption.</strong>
-      <span>This editor publishes immutable V3 releases. Delivery stages an execution-enabled package; it does not replace the package currently running on Tab5.</span>
+      <span>This editor publishes immutable V3 releases. Delivery requests a download. Tab5 confirms staging separately and adopts only on restart.</span>
     </section>
 
     <section class="panel engine-toolbar">
@@ -39,22 +39,28 @@
         <small id="runtime-size">No runtime package generated.</small>
       </div>
       <div class="toolbar-actions">
-        <button class="secondary-button" id="engine-load" type="button">Load / seed defaults</button>
+        <button class="secondary-button" id="engine-load" type="button">Load draft</button>
+        <button class="secondary-button" id="engine-backup" type="button" disabled>Export rules backup</button>
+        <button class="secondary-button" id="engine-import" type="button">Import rules backup</button>
+        <input id="backup-file" type="file" accept=".json,application/json" hidden>
         <button class="secondary-button" id="engine-save" type="button" disabled>Save draft</button>
         <button class="secondary-button" id="engine-validate" type="button" disabled>Validate package</button>
         <button class="secondary-button" id="engine-download" type="button" disabled>Download runtime JSON</button>
-        <button class="primary-button" id="engine-publish" type="button" disabled>Publish next version</button>
-        <button class="primary-button" id="engine-deliver" type="button" disabled>Deliver to Tab5</button>
+        <button class="primary-button" id="engine-publish" type="button" disabled>Publish and Deliver</button>
+        <button class="primary-button" id="engine-deliver" type="button" disabled>Retry delivery</button>
       </div>
     </section>
 
     <section id="engine-status" class="editor-status" aria-live="polite">No draft loaded.</section>
 
+    <section class="panel release-details"><strong>Tab5 — last reported package identities</strong><div id="device-package-state">Not checked. Delivery success does not confirm staging.</div><button id="refresh-device-state" class="secondary-button" type="button">Refresh Tab5 status</button></section>
+    <section id="import-preview" class="panel release-details" hidden><h2>Replace configuration draft</h2><div id="import-details"></div><button id="apply-import" class="primary-button" type="button">Replace draft</button><button id="cancel-import" class="secondary-button" type="button">Cancel</button></section>
+    <details class="panel"><summary>Backup help and initial setup</summary><p>Export rules backup preserves the complete editable configuration, including unsaved edits. Runtime JSON is not a restore file. Import replaces the draft and never publishes or delivers automatically.</p><p>For AI-assisted changes, provide a backup and request a revised complete backup. Partial imports are not supported.</p><button id="seed-defaults" class="secondary-button" type="button">Seed missing V3 sections</button><p>Seeding is optional. A backup can initialize an empty V3 store directly.</p><a href="/rules-engine-guide.html">Configuration guide</a></details>
     <section id="release-history" class="panel release-history" hidden>
       <div>
         <p class="kicker">PUBLISHED PACKAGE HISTORY</p>
         <h2>Immutable releases</h2>
-        <small>Select any published version. Restoring copies it into the draft; publishing always creates the next version.</small>
+        <small>Select any published version. Restoring copies it into the draft; changed configurations publish as a new version; unchanged configurations reuse the current release.</small>
       </div>
       <label class="release-selector">Published version<select id="release-select"></select></label>
       <div class="release-actions">

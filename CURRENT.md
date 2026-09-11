@@ -8,12 +8,18 @@ uses schema 4 with executionEnabled true, device state uses schema 2 with runnin
 desired and staged identities. Legacy publication state requires republishing;
 delivery does not rewrite immutable releases. Tab5 adopts only on restart.
 
-The current editor has separate Validate, Publish and Deliver actions, release
-history and a restore action. Review their exact behavior and tests before
-proposing replacements. The findings panel currently exposes paths/messages/codes
-separately from the offending field. System names prohibit spaces. Summary output
-names must be unique across the package; duration/aggregate declarations are not
-supported by the current Tab5 runtime even when online validation accepts them.
+The configuration unit implements complete authoring backup export/replacement
+import, with no additive import. A read of the V3 draft no longer seeds missing
+documents; import can initialize an empty V3 authoring store atomically. Existing
+seeding and historical restoration remain optional. Publish and Deliver validates
+online and reuses a matching current release; failed delivery retries that release.
+Device status is a separate read of the existing rulesV3State record, with report
+time and explicit unavailable identities. No Firebase rules change is included.
+
+Online checks now cover known M6.33 support gaps, including summaries, expression
+programs, Boyle parameters/quality enum, ADC prerequisites, mode assignments and
+required relay/lock names. Authoring backup preserves unfinished definitions;
+publication rejects unsupported configurations. The guide is web/rules-engine-guide.html.
 
 ## Verified handoff bases — 2026-09-11
 
@@ -66,25 +72,37 @@ work. Read-only design review can proceed from the working branches now.
 - Bench evidence is not proof of production protection. The relay was described
   by the owner as unloaded; the final Shelly protection script is not implemented.
 
-## Next
+## Configuration unit verification and closeout
 
-Read EDITOR-REVIEW.md and conduct a read-only complete editor/workflow review with
-the owner. Present current behavior, gaps, proposed screens/workflows, design
-questions and small implementation units. Stop for discussion before coding.
-The upcoming coding agent must receive a bounded accepted unit, exact source
-bases, acceptance criteria and exclusions, not the entire roadmap as authorization.
+- Owner authorized work from pilot-working 8d659d6dca5210828b8b0806b2439d1e644d468c,
+  preserving its documentation handoff. Tab5 reference is unchanged M6.33 at
+  6d4b54cc9806e34b01343caf69f1df86e540d486.
+- 120 host tests passed; JavaScript syntax and whitespace checks passed.
+  Host tests cover empty-store import, atomic rejection/conflict, full authoring
+  round-trip, compatibility against an exact dependency slice of the real Tab5
+  resolver, and actual browser-script orchestration with an in-memory backend.
+- Visual/browser acceptance is not established: local Chromium was absent and its
+  download timed out; the connected browser rejected the local fixture URL. The
+  isolated Playwright check remains available as tests/editor-browser.check.cjs.
+- No live Firebase access, package publication/delivery, hardware operation,
+  operating promotion, or deployment occurred in this unit.
+- Closeout: review source/test evidence, run the browser check where Chromium is
+  available, then obtain owner direction for operating promotion/deployment and
+  any actual package delivery/restart check.
+- Owner requested branch synchronization when the unit is finished. Preserve
+  accepted M6.33 and documentation; synchronize the corresponding working and
+  operating branches only with explicit promotion approval. This is not approval
+  to deploy or install Tab5 automatically.
 
 ## Later / unresolved
 
-- Publish-and-deliver simplification, precise actionable validation errors,
-  authoring JSON replacement/additive import, prior-release restoration review,
-  and an evolving user guide: design brief in EDITOR-REVIEW.md.
+- Confirm the configuration workflow in the deployed browser after owner-approved promotion.
 - Normal/Monitor kernel exists; web operator requests, required-source occurrence
   generation and Clear Events integration remain incomplete. S020 availability
   correction does not wire automatic Monitor behavior. Separate design/work unit.
 - Retained V3 event records/browser and summaries remain incomplete. Desired
-  standard close-record duration is a proposal, not implemented. Pilot permits
-  some declarations that Tab5 rejects; review the full compatibility surface.
+  standard close-record duration is a proposal, not implemented. Online checks target the current Tab5 supported subset; future runtime changes
+  require updating compatibility fixtures and checks.
 - Issue #5: https://github.com/bobebaugh/well-pump-control/issues/5 . Monitor the
   script named AntiFastCycle (currently script:2, copied test code) when online
   changes are next scheduled. WellTesting (script:1) is no longer authoritative.

@@ -113,3 +113,19 @@ review before integration. System Override is removed from the intended design.
 An event closes only while open. Subsequent relay restoration/confirmation is
 separate kernel/dispatch work, subject to current lock evidence and other owners.
 Do not infer repeated closing-condition evaluation from a delayed relay write.
+
+## Configuration backup and publication workflow
+
+A versioned complete authoring backup is the long-term recovery source. It can
+replace all four draft sections in an empty V3 authoring store without seeding.
+Import validates structure before one revision-checked transaction; unfinished or
+unsupported authoring remains editable but cannot publish. Runtime JSON is not an
+authoring backup. AI-assisted additions use a revised complete backup; additive
+merge/import is out of scope.
+
+Online validation targets the existing Tab5 supported subset before publication
+and delivery. Existing Tab5 integrity/support checks remain. A matching current
+authoring release can be reused; delivery retry does not mint a new version.
+Publication, delivery request and Tab5's last reported desired/staged/running
+identities remain distinct. No new exchanged schema or mode-input integration is
+introduced by this workflow.
