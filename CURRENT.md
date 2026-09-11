@@ -5,6 +5,9 @@
 the pre-promotion review base; the work below is committed only on the working
 branch.
 
+This review-correction unit starts from reviewed working commit
+`13f4bfee552892fde8d6f66813271363708bcbb2` and preserves it as an ancestor.
+
 Pilot is the browser/cloud application: web files, Netlify functions, Firebase/
 Firestore-facing services, package authoring, and retained records. This unit is
 host-tested source work only. It did not inspect or change deployed services,
@@ -19,9 +22,14 @@ actual running/staged state with schema 2. The delivery endpoint, store, browser
 copy, contract validators, checked-in RTDB rules source, and tests agree that a
 delivered V3 package is executable but is adopted by Tab5 only on restart.
 
-Host evidence: `npm test` passes all 111 tests. The RTDB emulator suite was
-updated for the new contracts, but its run is still required in an environment
-where the emulator process is available. No Firebase rules were deployed.
+Delivery now validates both the stored publication state and the prospective
+delivered state before publishing the RTDB pointer or writing state. An existing
+schema-3 publication state is rejected with an explicit instruction to publish
+again; it is not reinterpreted, and immutable release bytes remain unchanged.
+
+Host evidence: `npm test` passes all 112 tests. `npm run test:rtdb-rules` could
+not start because this environment's required network approval was cancelled
+before a decision was returned. No Firebase rules were deployed.
 
 ## Next
 

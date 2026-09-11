@@ -60,7 +60,28 @@ test("V3 store seeds, saves, publishes, reopens, and restores only V3 Firestore 
   const restored = await store.restoreRelease(state.releaseId, saved.draft.revisions, 130);
   assert.equal(restored.systemFields[0].label, "Restored operating mode");
   assert.deepEqual(restored.revisions, { devices: 2, calculatedFields: 2, systemFields: 3, events: 2 });
-  const delivered = await store.markDelivered(state.releaseId, state.contentHash, { executionEnabled: true, releaseId: state.releaseId }, 140);
+  const metadata = {
+    schemaVersion: 4, kind: "well-pump-event-v3-runtime-pointer", siteId: "well-main",
+    releaseId: state.releaseId, packageVersion: 1, runtimeSchemaVersion: 3,
+    contentHash: state.contentHash, hashAlgorithm: "sha256", byteLength: 1234,
+    publishedAtMs: 120, executionEnabled: true,
+    downloadPath: `/.netlify/functions/rules-engine-release?version=3&releaseId=${state.releaseId}`
+  };
+  const prospective = {
+    ...state, deliveryEnabled: true, deliveredAtMs: 140, delivery: metadata
+  };
+  const statePath = "sites/well-main/rulesEngineV3State/current";
+  values.set(statePath, {
+    ...state, schemaVersion: 3, kind: "well-pump-event-v3-staging-state",
+    executionEnabled: false
+  });
+  await assert.rejects(
+    store.markDelivered(state.releaseId, state.contentHash, prospective),
+    error => error.name === "RulesEngineV3StoreConflictError");
+  assert.equal(values.get(statePath).schemaVersion, 3);
+  values.set(statePath, structuredClone(state));
+  const delivered = await store.markDelivered(
+    state.releaseId, state.contentHash, prospective);
   assert.equal(delivered.deliveryEnabled, true);
   assert.equal(delivered.executionEnabled, true);
   assert.equal(values.has(`sites/well-main/rulesEngineState/current`), false);

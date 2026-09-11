@@ -111,14 +111,27 @@ function createHandler(dependencies = {}) {
           if (typeof request.releaseId !== "string" || !V3_RELEASE_ID_PATTERN.test(request.releaseId)) return response(400, { status: "error", code: "invalid_delivery_request" });
           const loaded = await store.loadOrSeed(v3Defaults(), now().getTime());
           if (!loaded.current || loaded.current.releaseId !== request.releaseId) return response(409, { status: "error", code: "delivery_not_current", current: loaded.current });
+          try { verifiedRulesV3State(loaded.current); }
+          catch (error) {
+            if (error?.name === "RulesEngineV3StateError") {
+              return response(409, { status: "error", code: "rules_v3_republish_required", message: "Publish this V3 package again before delivery so its publication state uses the current runtime schema." });
+            }
+            throw error;
+          }
           const release = await store.getRelease(request.releaseId);
           const verified = verifiedRuntimeV3Release(release, request.releaseId);
           if (verified.metadata.contentHash !== loaded.current.contentHash || verified.metadata.packageVersion !== loaded.current.packageVersion || verified.metadata.executionEnabled !== true) {
             return response(409, { status: "error", code: "delivery_release_mismatch", current: loaded.current });
           }
+          const deliveredAtMs = now().getTime();
+          const prospectiveState = verifiedRulesV3State({
+            ...loaded.current, deliveryEnabled: true, executionEnabled: true,
+            deliveredAtMs, delivery: verified.metadata
+          });
           const deliveryFactory = dependencies.createV3Delivery || (() => require("../lib/rules-engine-v3-delivery").createRulesEngineV3Delivery());
           await deliveryFactory().publishPointer(verified.metadata);
-          const current = verifiedRulesV3State(await store.markDelivered(request.releaseId, verified.metadata.contentHash, verified.metadata, now().getTime()));
+          const current = await store.markDelivered(
+            request.releaseId, verified.metadata.contentHash, prospectiveState);
           return response(200, { status: "delivered", current, metadata: verified.metadata });
         }
         if (typeof request.releaseId !== "string" || !RELEASE_ID_PATTERN.test(request.releaseId)) {

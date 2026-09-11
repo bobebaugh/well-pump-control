@@ -1,5 +1,7 @@
 "use strict";
 
+const { verifiedRulesV3State } = require("./rules-engine-v3-state-contract");
+
 const SITE_ID = "well-main";
 const SECTIONS = ["devices", "calculatedFields", "systemFields", "events"];
 
@@ -94,14 +96,24 @@ function createRulesEngineV3Store(dependencies = {}) {
         transaction.set(state, stateValue);
       });
     },
-    async markDelivered(releaseId, contentHash, metadata, nowMs) {
+    async markDelivered(releaseId, contentHash, prospectiveState) {
       return db.runTransaction(async transaction => {
         const current = await transaction.get(state);
         const value = current.exists ? current.data() : null;
-        if (!value || value.releaseId !== releaseId || value.contentHash !== contentHash || metadata.executionEnabled !== true) {
+        let next;
+        try {
+          verifiedRulesV3State(value);
+          next = verifiedRulesV3State(prospectiveState);
+        } catch {
           throw new RulesEngineV3StoreConflictError();
         }
-        const next = { ...value, deliveryEnabled: true, executionEnabled: true, deliveredAtMs: nowMs, delivery: metadata };
+        if (value.releaseId !== releaseId || value.contentHash !== contentHash ||
+            next.releaseId !== releaseId || next.contentHash !== contentHash ||
+            next.packageVersion !== value.packageVersion ||
+            next.publishedAtMs !== value.publishedAtMs ||
+            next.deliveryEnabled !== true || next.executionEnabled !== true) {
+          throw new RulesEngineV3StoreConflictError();
+        }
         transaction.set(state, next);
         return next;
       });

@@ -16,6 +16,7 @@ function harness(options = {}) {
   const published = [];
   let current = null;
   let deliveryFactoryCalls = 0;
+  let markDeliveredCalls = 0;
   const store = {
     async loadOrSeed() { return { draft: { ...structuredClone(draft), revisions: { ...revisions } }, current }; },
     async listReleases() { return published.map(item => ({ releaseId: item.releaseId, packageVersion: item.release.packageVersion, schemaVersion: 3 })).reverse(); },
@@ -25,11 +26,13 @@ function harness(options = {}) {
       assert.equal(expectedVersion, current?.packageVersion || 0); assert.deepEqual(expectedRevisions, revisions);
       published.push({ releaseId, release, stateValue }); current = stateValue;
     },
-    async markDelivered(releaseId, contentHash, metadata, nowMs) {
+    async markDelivered(releaseId, contentHash, prospectiveState) {
+      markDeliveredCalls += 1;
       assert.equal(releaseId, current?.releaseId);
       assert.equal(contentHash, current?.contentHash);
-      assert.equal(metadata.executionEnabled, true);
-      current = { ...current, deliveryEnabled: true, executionEnabled: true, deliveredAtMs: nowMs, delivery: metadata };
+      assert.equal(prospectiveState.executionEnabled, true);
+      assert.equal(prospectiveState.deliveryEnabled, true);
+      current = structuredClone(prospectiveState);
       return current;
     },
     async restoreRelease(releaseId, expectedRevisions) {
@@ -48,7 +51,12 @@ function harness(options = {}) {
     createV3Delivery: options.createV3Delivery,
     now: () => new Date("2026-08-30T12:34:56.000Z")
   });
-  return { handler, published, get deliveryFactoryCalls() { return deliveryFactoryCalls; } };
+  return {
+    handler, published,
+    setCurrent(value) { current = structuredClone(value); },
+    get deliveryFactoryCalls() { return deliveryFactoryCalls; },
+    get markDeliveredCalls() { return markDeliveredCalls; }
+  };
 }
 
 test("V3 endpoint validates, publishes, reopens, and restores an isolated immutable package", async () => {
@@ -108,6 +116,30 @@ test("V3 endpoint delivers an execution-enabled restart-staged pointer without c
   assert.equal(body.metadata.downloadPath, `/.netlify/functions/rules-engine-release?version=3&releaseId=${published.current.releaseId}`);
   assert.equal(delivered.length, 1);
   assert.equal(harnessed.deliveryFactoryCalls, 0);
+});
+
+test("V3 delivery rejects old publication state before pointer or state writes", async () => {
+  let pointerWrites = 0;
+  const harnessed = harness({ createV3Delivery: () => ({
+    async publishPointer() { pointerWrites += 1; }
+  }) });
+  const published = JSON.parse((await harnessed.handler(
+    request("POST", { action: "publish", basePackageVersion: 0 }))).body);
+  const immutableBytes = harnessed.published[0].release.runtimeBody;
+  harnessed.setCurrent({
+    ...published.current, schemaVersion: 3,
+    kind: "well-pump-event-v3-staging-state", executionEnabled: false
+  });
+
+  const result = await harnessed.handler(request(
+    "POST", { action: "deliver", releaseId: published.current.releaseId }));
+  assert.equal(result.statusCode, 409);
+  const body = JSON.parse(result.body);
+  assert.equal(body.code, "rules_v3_republish_required");
+  assert.match(body.message, /Publish this V3 package again/);
+  assert.equal(pointerWrites, 0);
+  assert.equal(harnessed.markDeliveredCalls, 0);
+  assert.equal(harnessed.published[0].release.runtimeBody, immutableBytes);
 });
 
 test("V3 Boolean working field is compiled, published, reopened, and restored", async () => {

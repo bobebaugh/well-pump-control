@@ -44,7 +44,7 @@ test("Rules Engine browser truthfully describes restart-only V3 package adoption
   assert.doesNotMatch(html, /id="engine-(?:enable|execution)"/);
   assert.match(source, /deliverButton\.disabled = !state\.current/);
   assert.match(source, /deliverButton\.disabled = true;/);
-  for (const code of ["invalid_delivery_request", "pointer_read_failed", "delivery_not_current", "delivery_release_mismatch", "pointer_changed", "pointer_write_failed", "publisher_auth_failed", "configuration_missing", "runtime_pointer_required"]) {
+  for (const code of ["invalid_delivery_request", "pointer_read_failed", "delivery_not_current", "delivery_release_mismatch", "rules_v3_republish_required", "pointer_changed", "pointer_write_failed", "publisher_auth_failed", "configuration_missing", "runtime_pointer_required"]) {
     // Require the code as a mapped key, not merely present somewhere in the file.
     assert.match(source, new RegExp(`\\b${code}:`));
   }

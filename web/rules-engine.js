@@ -75,6 +75,7 @@ const deliveryErrors = {
   pointer_read_failed: "Could not read the current V3 pointer. The database security rules are most likely not deployed (firebase deploy --only database).",
   delivery_not_current: "This release is no longer the current published version. Reload before delivering.",
   delivery_release_mismatch: "Delivery refused: the stored release disagrees with the published pointer.",
+  rules_v3_republish_required: "This package has older V3 publication state. Publish it again before delivery.",
   pointer_changed: "Delivery did not complete because another writer changed the RTDB pointer. Reload and try again.",
   pointer_write_failed: "RTDB pointer write was rejected. The database security rules are most likely not deployed (firebase deploy --only database).",
   publisher_auth_failed: "Delivery could not authenticate the V3 publisher token.",
