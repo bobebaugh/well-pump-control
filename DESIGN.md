@@ -30,8 +30,9 @@ re-enable write; absence or invalidity cannot authorize that write.
 
 Pilot publishes an immutable runtime package and a pointer identifying its exact
 bytes, hash, length, and download path. Tab5 validates and stages a package before
-it can adopt it. Tab5 emits current observations, selected durable observations,
-and event records for Pilot to retain and display.
+it can adopt it. Tab5 emits current and selected durable observations. V3 event transitions are
+currently printed locally; durable V3 event production/retention/browser work is
+still incomplete. The event-record interface is not proof of that integration.
 
 Existing versioned record meanings do not change silently. An incompatible record
 gets a new version.
@@ -72,3 +73,43 @@ Work proceeds one bounded unit at a time on a reusable working branch. The owner
 reviews behavior through the application and stored Firestore/RTDB data, supported
 by the agent's tests and evidence. Promotion to an operating branch is a separate
 owner decision.
+
+## Local diagnostics
+
+Shelly read diagnostics identify the request and failure stage without creating
+new runtime fields. A diagnostic failure does not retain stale operational evidence
+or alter acquisition acceptance. Repeated failures are counted with bounded print
+output and recovery is reported. Relay diagnostics observe existing kernel and
+snapshot decisions; they never create an action or change pending release state.
+
+## Acquisition availability and lock logging
+
+`$availability` represents Tab5's complete acquisition result, not a measurement
+supplied by the remote device. For each enabled device declaring it, that Boolean
+remains available to V3 conditions even when all device measurements are rejected.
+Rejected or absent measurement evidence never supplies a default lock or relay
+state. Existing Boolean health events can therefore qualify failure and recovery;
+this does not introduce internal occurrence generation.
+
+The runtime package's named logging policies govern script lock/count values.
+Their raw observation aliases do not independently select every value change.
+Other material changes, confirmed acquisition-availability transitions and the
+maximum durable interval can still select records containing the current values.
+Delta comparisons retain the existing previous-durable-observation baseline.
+
+## Event meaning and remaining mode integration
+
+Closing policies are independent owner choices, not automatically the inverse of
+opening conditions. S010 is an informational alarm for relay ON while locked and
+remains open until relay ON with lock zero. It never takes relay ownership.
+
+Normal and Monitor are the two kernel modes. Intended Monitor continues observation,
+calculation, logging, event evaluation and ownership bookkeeping while suppressing
+Tab5 inhibit application. Operator and required-source owners must be reconciled;
+operator Normal must not clear a bad-source owner. Web requests, Clear Events and
+required-source occurrence inputs remain incomplete, and require separate design
+review before integration. System Override is removed from the intended design.
+
+An event closes only while open. Subsequent relay restoration/confirmation is
+separate kernel/dispatch work, subject to current lock evidence and other owners.
+Do not infer repeated closing-condition evaluation from a delayed relay write.
