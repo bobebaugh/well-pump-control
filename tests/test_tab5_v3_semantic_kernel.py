@@ -12,7 +12,7 @@ PILOT_PATH = ROOT / "tab5" / "pilot.py"
 FIXTURE_PATH = ROOT / "tests" / "fixtures" / "rules-runtime-package-v3-checkpoint1.json"
 
 FUNCTIONS = {
-    "_v3_closed", "_v3_number", "_v3_integer", "_v3_name", "_v3_id",
+    "_finite_number", "_v3_closed", "_v3_number", "_v3_integer", "_v3_name", "_v3_id",
     "_v3_scalar", "_v3_logging", "_v3_typed_value", "_v3_enum_values",
     "_v3_field", "_v3_output", "_v3_system_field", "_v3_clause",
     "_v3_condition", "_v3_phase", "_v3_dependencies_acyclic",
@@ -375,7 +375,7 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
         # The engine is wired in, and issuing is a separate call from selecting.
         loop_source = source[source.index("while True:"):]
         self.assertIn("run_rules_v3_cycle", loop_source)
-        self.assertIn("issue_rules_v3_action", loop_source)
+        self.assertIn("dispatch_rules_v3_actions", loop_source)
         self.assertNotIn("issue_rules_v3_action", kernel_source)
 
     def test_conflicting_actions_collapse_to_the_non_normal_value(self):

@@ -1,4 +1,4 @@
-# Release: 2026-09-11 M6.30 — transport V3 runtime intent and actual device state.
+# Release: 2026-09-11 M6.31 — transport for corrected V3 authority runtime.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,

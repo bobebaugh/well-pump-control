@@ -42,6 +42,25 @@ kernel. Restart validates and adopts the last valid staged file with fresh event
 ownership, and calculation state. Reports keep running and staged identities
 distinct and describe execution according to the running source behavior.
 
+Validation of a downloaded candidate includes runtime support and package
+resolution before it may replace the staged file. Schema validity alone is not
+enough; unsupported drivers, bindings, calculations, or event behavior preserve
+the previous staged bytes and identity.
+
+A device RPC acknowledgement means only that the request received a recognized
+success response. It is not evidence that the requested physical state was
+observed. Each bounded cycle compares the desired state with its fresh observation
+and retries while ownership and lock rules still authorize the action.
+
+Operational numeric evidence and calculation results must be finite. Raw ADC data
+may remain available for diagnosis, but it cannot establish operational pressure
+or flow unless ADC validity and pressure-sensor commissioning are both true.
+Invalid pressure evidence breaks calculation history; recovery uses fresh history.
+
+Pilot validates current and prospective publication state before any V3 delivery
+pointer or state write. Legacy publication state is not silently upgraded during
+delivery; the owner must publish again under the current schema.
+
 The Shelly 1 read record joins two sequential RPC responses from one acquisition
 cycle. It is intentionally not described as a simultaneous hardware snapshot.
 Dynamic script number components are discovered by name; Tab5 reads but never

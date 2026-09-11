@@ -63,7 +63,8 @@ def load_logic(targets):
 TARGETS = {
     "read_shelly", "read_shelly1", "normalize_shelly1_cycle",
     "start_rules_v3_runtime", "stage_rules_v3_release", "run_rules_v3_cycle",
-    "rules_v3_state_report", "issue_rules_v3_action", "build_durable_observation",
+    "rules_v3_state_report", "issue_rules_v3_action", "dispatch_rules_v3_actions",
+    "build_durable_observation",
 }
 
 
@@ -249,17 +250,18 @@ class V3IntegratedApplicationTests(unittest.TestCase):
                 self.assertEqual(bool(enables), lock == 0)
                 if enables:
                     calls = []
-                    reply = types.SimpleNamespace(json=lambda: {}, close=lambda: None)
+                    reply = types.SimpleNamespace(
+                        json=lambda: {"was_on": False}, close=lambda: None)
                     self.logic["requests"] = types.SimpleNamespace(
                         get=lambda url, timeout: calls.append((url, timeout)) or reply)
                     outcome = self.logic["issue_rules_v3_action"](
                         runtime["resolved"], enables[0], observation)
-                    self.assertEqual(outcome, "issued")
+                    self.assertEqual(outcome, "acknowledged")
                     self.assertEqual(len(calls), 1)
 
             runtime, _path = self.start(directory)
             action = {"target": "PumpEnable", "value": True}
-            for lock in (-1, 9, None):
+            for lock in (-1, 9, "invalid", None):
                 observation = self.observation(lock=0 if lock is None else lock)
                 if lock is None:
                     observation["values"].pop("shelly1_lock")
@@ -274,6 +276,22 @@ class V3IntegratedApplicationTests(unittest.TestCase):
             runtime_a, path = self.start(directory)
             runtime_a["kernel"]["owners"] = {"PumpEnable": {
                 "value": False, "instances": {"old": "E007"}}}
+            unsupported = json.loads(self.raw_a)
+            unsupported.update({"releaseId": "20260911120000-event-v3-v2",
+                                "packageVersion": 2})
+            unsupported["devices"][0]["driver"] = "unsupported-driver"
+            raw_unsupported = json.dumps(unsupported, separators=(",", ":"))
+            rejected, reason = self.logic["stage_rules_v3_release"](
+                {"metadata": self.pointer(raw_unsupported, unsupported["releaseId"], 2),
+                 "release": raw_unsupported}, runtime_a["reference"],
+                str(path), str(path.parent / ".rules-runtime-v3-staged.download"))
+            self.assertIsNone(rejected)
+            self.assertEqual(reason, "release-runtime-unsupported")
+            self.assertEqual(path.read_text(encoding="utf-8"), self.raw_a)
+            still_a, reason = self.logic["start_rules_v3_runtime"](str(path))
+            self.assertIsNone(reason)
+            self.assertEqual(still_a["reference"]["packageVersion"], 1)
+
             package_b = json.loads(self.raw_a)
             package_b.update({"releaseId": "20260911120100-event-v3-v2", "packageVersion": 2})
             raw_b = json.dumps(package_b, separators=(",", ":"))
@@ -295,6 +313,135 @@ class V3IntegratedApplicationTests(unittest.TestCase):
             self.assertEqual(runtime_b["kernel"]["owners"], {})
             self.assertFalse(any(item["active"] for item in runtime_b["kernel"]["events"].values()))
 
+    def test_dispatch_retries_until_observed_and_reasserts_active_inhibit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _path = self.start(directory)
+            action = None
+            for tick in (0, 1000):
+                observed_on = self.observation(voltage=270.0)
+                observed_on["values"]["shelly1_rly0"] = True
+                result = self.logic["run_rules_v3_cycle"](
+                    runtime, observed_on, tick)
+                candidates = [item for item in result["actions"]
+                              if item["target"] == "PumpEnable"]
+                if candidates:
+                    action = candidates[0]
+            self.assertIsNotNone(action)
+
+            replies = [
+                types.SimpleNamespace(json=lambda: {"error": {"code": -1}}, close=lambda: None),
+                TimeoutError("transport"),
+                types.SimpleNamespace(json=lambda: {"was_on": True}, close=lambda: None),
+                types.SimpleNamespace(json=lambda: {"was_on": True}, close=lambda: None),
+            ]
+            calls = []
+            def get(url, timeout):
+                calls.append((url, timeout))
+                reply = replies.pop(0)
+                if isinstance(reply, Exception):
+                    raise reply
+                return reply
+            self.logic["requests"] = types.SimpleNamespace(get=get)
+
+            dispatched, _ = self.logic["dispatch_rules_v3_actions"](
+                runtime["resolved"], [action], observed_on)
+            self.assertEqual(dispatched[0]["outcome"], "rpc-error")
+            for expected in ("request-failed:transport", "acknowledged"):
+                cycle = self.logic["run_rules_v3_cycle"](
+                    runtime, observed_on, 2000 + len(calls) * 1000)
+                dispatched, _ = self.logic["dispatch_rules_v3_actions"](
+                    runtime["resolved"], cycle["actions"], observed_on)
+                self.assertEqual(dispatched[0]["outcome"], expected)
+
+            observed_off = self.observation(voltage=270.0)
+            observed_off["values"]["shelly1_rly0"] = False
+            cycle = self.logic["run_rules_v3_cycle"](runtime, observed_off, 5000)
+            self.assertFalse(any(item["target"] == "PumpEnable" for item in cycle["actions"]))
+            dispatched, _ = self.logic["dispatch_rules_v3_actions"](
+                runtime["resolved"], [action], observed_off)
+            self.assertEqual(dispatched[0]["outcome"], "observed-desired-state")
+            self.assertEqual(len(calls), 3)
+
+            relay_returned_on = self.observation(voltage=270.0)
+            relay_returned_on["values"]["shelly1_rly0"] = True
+            cycle = self.logic["run_rules_v3_cycle"](runtime, relay_returned_on, 6000)
+            inhibit = [item for item in cycle["actions"]
+                       if item["target"] == "PumpEnable" and item["value"] is False]
+            self.assertEqual(len(inhibit), 1)
+            dispatched, _ = self.logic["dispatch_rules_v3_actions"](
+                runtime["resolved"], inhibit, relay_returned_on)
+            self.assertEqual(dispatched[0]["outcome"], "acknowledged")
+            self.assertEqual(len(calls), 4)
+
+    def test_pressure_requires_current_validity_and_resets_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _path = self.start(directory)
+            result = None
+            for index in range(11):
+                observation = self.observation()
+                observation["values"]["adc_raw"] = 12000 + index * 10
+                result = self.logic["run_rules_v3_cycle"](
+                    runtime, observation, index * 1000)
+            self.assertEqual(result["snapshot"]["TankFlowQuality"], "VALID")
+
+            for status_name in ("pressure_sensor_commissioned", "adc_available"):
+                invalid = self.observation()
+                invalid["status"][status_name] = False
+                result = self.logic["run_rules_v3_cycle"](runtime, invalid, 11000)
+                self.assertIn("PressureADCCounts", result["snapshot"])
+                self.assertNotIn("PressurePSI", result["snapshot"])
+                self.assertEqual(result["snapshot"]["TankFlowQuality"],
+                                 "PRESSURE_INVALID")
+
+            recovered = self.logic["run_rules_v3_cycle"](
+                runtime, self.observation(), 12000)
+            self.assertIn("PressurePSI", recovered["snapshot"])
+            self.assertEqual(recovered["snapshot"]["TankFlowQuality"],
+                             "INSUFFICIENT_HISTORY")
+
+    def test_nonfinite_inputs_packages_and_results_are_unavailable(self):
+        for value in (float("nan"), float("inf"), -float("inf")):
+            self.assertIsNone(self.logic["read_shelly"](
+                lambda _url, bad=value: self.em(power=bad)))
+
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, path = self.start(directory)
+            observation = self.observation()
+            observation["values"]["power"] = float("nan")
+            result = self.logic["run_rules_v3_cycle"](runtime, observation, 0)
+            self.assertIn("shelly-em-main", result["unavailableDeviceIds"])
+            for value in (float("nan"), float("inf"), -float("inf")):
+                observation = self.observation()
+                observation["values"]["adc_raw"] = value
+                result = self.logic["run_rules_v3_cycle"](runtime, observation, 0)
+                self.assertIn("tab5-main", result["unavailableDeviceIds"])
+                self.assertNotIn("PressurePSI", result["snapshot"])
+
+            invalid_package = json.loads(self.raw_a)
+            invalid_package.update({"releaseId": "20260911120200-event-v3-v2",
+                                    "packageVersion": 2})
+            invalid_package["calculations"][0]["program"][1][1] = float("nan")
+            raw_invalid = json.dumps(invalid_package, separators=(",", ":"))
+            staged, reason = self.logic["stage_rules_v3_release"](
+                {"metadata": self.pointer(raw_invalid, invalid_package["releaseId"], 2),
+                 "release": raw_invalid}, runtime["reference"], str(path),
+                str(path.parent / ".rules-runtime-v3-staged.download"))
+            self.assertIsNone(staged)
+            self.assertEqual(reason, "release-runtime-unsupported")
+            self.assertEqual(path.read_text(encoding="utf-8"), self.raw_a)
+
+            overflow_package = json.loads(self.raw_a)
+            overflow_package.update({"releaseId": "20260911120300-event-v3-v2",
+                                     "packageVersion": 2})
+            overflow_package["calculations"][0]["program"] = [
+                ["field", "PumpWatts"], ["number", 1e308], ["operator", "*"]]
+            raw_overflow = json.dumps(overflow_package, separators=(",", ":"))
+            runtime_overflow, overflow_path = self.start(directory, raw_overflow)
+            observation = self.observation()
+            observation["values"]["power"] = 1e308
+            result = self.logic["run_rules_v3_cycle"](runtime_overflow, observation, 0)
+            self.assertNotIn("LoadRatioPercent", result["snapshot"])
+
     def test_normal_loop_has_no_v2_evaluation_or_v2_relay_dispatch(self):
         source = PILOT_PATH.read_text(encoding="utf-8")
         loop = source[source.index("while True:", source.index("# --- boot sequence ---")):]
@@ -302,7 +449,7 @@ class V3IntegratedApplicationTests(unittest.TestCase):
                           "issue_runtime_stop(", "adopt_runtime_release("):
             self.assertNotIn(forbidden, loop)
         self.assertIn("run_rules_v3_cycle(", loop)
-        self.assertIn("issue_rules_v3_action(", loop)
+        self.assertIn("dispatch_rules_v3_actions(", loop)
 
     def test_durable_observation_uses_running_v3_reference(self):
         with tempfile.TemporaryDirectory() as directory:

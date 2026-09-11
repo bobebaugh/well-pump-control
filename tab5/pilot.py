@@ -1,4 +1,4 @@
-# Release: 2026-09-11 M6.30 — run V3 from trustworthy, restart-only inputs.
+# Release: 2026-09-11 M6.31 — correct V3 staging, dispatch, and pressure validity.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -43,7 +43,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.30'
+SOFTWARE_RELEASE = 'M6.31'
 
 # CPU A validates and adopts the v2 runtime package. CPU B carries only the
 # RTDB pointer and exact downloaded bytes; it never interprets package meaning.
@@ -731,8 +731,24 @@ def runtime_direct_field_values(package, observation):
     return values
 
 
+def _finite_number(value):
+    """Recognize finite Python/MicroPython numbers without requiring math.isfinite."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        # NaN is unequal to itself; either infinity minus itself is NaN.
+        return value == value and value - value == 0
+    except Exception:
+        return False
+
+
 def _runtime_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return value == value and value - value == 0
+    except Exception:
+        return False
 
 
 def evaluate_runtime_program(program, named_values):
@@ -754,26 +770,29 @@ def evaluate_runtime_program(program, named_values):
                 return None
             stack.append(value)
         elif kind == 'operator':
-            if value == 'neg':
-                if not stack:
+            try:
+                if value == 'neg':
+                    if not stack:
+                        return None
+                    stack[-1] = -stack[-1]
+                    continue
+                if len(stack) < 2:
                     return None
-                stack[-1] = -stack[-1]
-                continue
-            if len(stack) < 2:
-                return None
-            right = stack.pop()
-            left = stack.pop()
-            if value == '+':
-                stack.append(left + right)
-            elif value == '-':
-                stack.append(left - right)
-            elif value == '*':
-                stack.append(left * right)
-            elif value == '/':
-                if right == 0:
+                right = stack.pop()
+                left = stack.pop()
+                if value == '+':
+                    stack.append(left + right)
+                elif value == '-':
+                    stack.append(left - right)
+                elif value == '*':
+                    stack.append(left * right)
+                elif value == '/':
+                    if right == 0:
+                        return None
+                    stack.append(left / right)
+                else:
                     return None
-                stack.append(left / right)
-            else:
+            except Exception:
                 return None
         else:
             return None
@@ -900,6 +919,9 @@ def issue_rules_v3_action(resolved, action, observation):
         return 'unsupported-value:{}'.format(value)
     if observation.get('status', {}).get('shelly1_available') is not True:
         return 'shelly-unavailable'
+    observed = observation.get('values', {}).get('shelly1_rly0')
+    if isinstance(observed, bool) and observed is value:
+        return 'observed-desired-state'
     if value is True and observation.get('values', {}).get('shelly1_lock') != 0:
         return 'lock-evidence-unavailable-or-locked'
     switch_id = spec.get('parameters', {}).get('id', 0)
@@ -908,7 +930,13 @@ def issue_rules_v3_action(resolved, action, observation):
         reply = requests.get(url, timeout=SHELLY_TIMEOUT_S)
         data = reply.json()
         reply.close()
-        return 'issued' if isinstance(data, dict) else 'invalid-response'
+        if not isinstance(data, dict):
+            return 'invalid-response'
+        if 'error' in data or ('code' in data and 'message' in data):
+            return 'rpc-error'
+        result = data.get('result', data)
+        return ('acknowledged' if isinstance(result, dict) and
+                isinstance(result.get('was_on'), bool) else 'invalid-response')
     except Exception as error:
         return 'request-failed:{}'.format(error)
 
@@ -950,6 +978,18 @@ def rules_v3_collapse_actions(resolved, actions):
         else:
             dropped.append(action)
     return list(chosen.values()), dropped
+
+
+def dispatch_rules_v3_actions(resolved, actions, observation):
+    """Dispatch at most one write per target using this cycle's observed state."""
+    selected, dropped = rules_v3_collapse_actions(resolved, actions)
+    results = []
+    for action in selected:
+        results.append({
+            'action': action,
+            'outcome': issue_rules_v3_action(resolved, action, observation),
+        })
+    return results, dropped
 
 
 def runtime_condition_value(condition, fields):
@@ -1716,9 +1756,8 @@ def adopt_runtime_release(candidate, active_reference,
     return checked, 'adopted'
 
 
-# V3 Gate 1 is intentionally a closed-schema staging validator, not a
-# semantic runtime.  It must remain independent of every V2 evaluator and
-# device adapter until a later reviewed work unit explicitly connects one.
+# V3 package validation remains independent of every V2 evaluator. Closed-schema
+# validation is followed by V3 runtime-support resolution before staging.
 def _v3_closed(value, required, allowed=None):
     if not isinstance(value, dict):
         return False
@@ -1728,7 +1767,12 @@ def _v3_closed(value, required, allowed=None):
 
 
 def _v3_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return value == value and value - value == 0
+    except Exception:
+        return False
 
 
 def _v3_integer(value):
@@ -2182,7 +2226,7 @@ def rules_v3_pointer_rejection_reason(pointer):
 
 
 def validate_rules_v3_staged_release(raw_release, pointer=None):
-    """Validate exact bytes and V3 schema only; do not create a runtime."""
+    """Validate exact bytes and resolve supported runtime behavior before staging."""
     if not isinstance(raw_release, str) or not raw_release:
         return None, 'release-empty'
     try:
@@ -2209,10 +2253,14 @@ def validate_rules_v3_staged_release(raw_release, pointer=None):
     if normalized is not None and (package.get('releaseId') != normalized['releaseId'] or
                                    package.get('packageVersion') != normalized['packageVersion']):
         return None, 'release-pointer-mismatch'
+    resolved = resolve_rules_v3_package(package)
+    if resolved is None:
+        return None, 'release-runtime-unsupported'
     reference = {'releaseId': package['releaseId'], 'packageVersion': package['packageVersion'],
                  'runtimeSchemaVersion': 3, 'contentHash': content_hash,
                  'version': package['packageVersion']}
-    return {'package': package, 'reference': reference, 'pointer': normalized}, None
+    return {'package': package, 'reference': reference, 'pointer': normalized,
+            'resolved': resolved}, None
 
 
 def load_rules_v3_staged_package(path=RULES_V3_STAGED_FILE):
@@ -2376,6 +2424,16 @@ def resolve_rules_v3_package(package):
             operating_mode_target = field['systemName']
     pump_target = 'PumpEnable' if 'PumpEnable' in writable else None
     lock_field = 'IsLocked' if 'IsLocked' in field_types else None
+    tab5_objects = {}
+    for device in package['devices']:
+        if device.get('driver') == 'tab5-runtime':
+            tab5_objects.update({field['object']: field['systemName']
+                                 for field in device['fields']})
+    adc_field = tab5_objects.get('values.adc_raw')
+    pressure_guards = [
+        tab5_objects.get('status.pressure_sensor_commissioned'),
+        tab5_objects.get('status.adc_available'),
+    ]
     available = set(field['systemName'] for device in package['devices']
                     for field in device['fields'])
     available.update(field['systemName'] for field in package['systemFields'])
@@ -2389,7 +2447,12 @@ def resolve_rules_v3_package(package):
                             if calculation['kind'] == 'expression' else
                             [calculation['inputs']['pressure']])
             if all(name in available for name in dependencies):
-                calculation_plan.append(calculation)
+                resolved_calculation = dict(calculation)
+                if calculation['kind'] == 'expression' and adc_field in dependencies:
+                    if adc_field is None or any(name is None for name in pressure_guards):
+                        return None
+                    resolved_calculation['_requiredTrueFields'] = list(pressure_guards)
+                calculation_plan.append(resolved_calculation)
                 outputs = ([calculation['output']] if calculation['kind'] == 'expression'
                            else calculation['outputs'])
                 available.update(output['systemName'] for output in outputs)
@@ -2482,16 +2545,20 @@ def new_rules_v3_calculation_state():
 def _rules_v3_linear_slope(history):
     if not isinstance(history, list) or len(history) < 2:
         return None
-    origin = history[-1][0]
-    points = [(time.ticks_diff(item[0], origin) / 1000.0, item[1])
-              for item in history]
-    mean_x = sum(item[0] for item in points) / len(points)
-    mean_y = sum(item[1] for item in points) / len(points)
-    denominator = sum((item[0] - mean_x) ** 2 for item in points)
-    if denominator <= 0:
+    try:
+        origin = history[-1][0]
+        points = [(time.ticks_diff(item[0], origin) / 1000.0, item[1])
+                  for item in history]
+        mean_x = sum(item[0] for item in points) / len(points)
+        mean_y = sum(item[1] for item in points) / len(points)
+        denominator = sum((item[0] - mean_x) ** 2 for item in points)
+        if denominator <= 0:
+            return None
+        slope = (sum((item[0] - mean_x) * (item[1] - mean_y)
+                     for item in points) / denominator) * 60.0
+    except Exception:
         return None
-    return (sum((item[0] - mean_x) * (item[1] - mean_y)
-                for item in points) / denominator) * 60.0
+    return slope if _v3_number(slope) else None
 
 
 def _rules_v3_boyle_outputs(calculation, fields, state, now_ms):
@@ -2500,6 +2567,7 @@ def _rules_v3_boyle_outputs(calculation, fields, state, now_ms):
     outputs = calculation['outputs']
     names = [item['systemName'] for item in outputs]
     result = {names[4]: 'TANK_MODEL_INVALID'}
+    histories = state.setdefault('histories', {})
     volume = parameters['effectiveTankGallons']
     precharge = parameters['prechargeGaugePsi']
     atmosphere = parameters['atmosphericPressurePsi']
@@ -2510,15 +2578,22 @@ def _rules_v3_boyle_outputs(calculation, fields, state, now_ms):
         return result
     pressure = fields.get(calculation['inputs']['pressure'])
     if (not _v3_number(pressure) or pressure + atmosphere <= 0):
+        histories[calculation['id']] = []
         result[names[4]] = 'PRESSURE_INVALID'
         return result
-    air_gallons = volume * (precharge + atmosphere) / (pressure + atmosphere)
-    water_gallons = volume - air_gallons
-    if water_gallons < 0 or water_gallons > volume:
+    try:
+        air_gallons = volume * (precharge + atmosphere) / (pressure + atmosphere)
+        water_gallons = volume - air_gallons
+    except Exception:
+        histories[calculation['id']] = []
+        result[names[4]] = 'PRESSURE_INVALID'
+        return result
+    if (not _v3_number(air_gallons) or not _v3_number(water_gallons) or
+            water_gallons < 0 or water_gallons > volume):
+        histories[calculation['id']] = []
         result[names[4]] = 'PRESSURE_INVALID'
         return result
     result[names[0]] = water_gallons
-    histories = state.setdefault('histories', {})
     history = histories.setdefault(calculation['id'], [])
     history.append((now_ms, pressure))
     tolerance_ms = 350
@@ -2538,11 +2613,18 @@ def _rules_v3_boyle_outputs(calculation, fields, state, now_ms):
         result[names[4]] = 'SAMPLE_GAP'
         return result
     slope = _rules_v3_linear_slope(forward)
-    if slope is None:
+    if not _v3_number(slope):
         result[names[4]] = 'TREND_UNRESOLVED'
         return result
-    dwater_dpressure = volume * (precharge + atmosphere) / ((pressure + atmosphere) ** 2)
-    net_flow = dwater_dpressure * slope
+    try:
+        dwater_dpressure = volume * (precharge + atmosphere) / ((pressure + atmosphere) ** 2)
+        net_flow = dwater_dpressure * slope
+    except Exception:
+        result[names[4]] = 'TANK_MODEL_INVALID'
+        return result
+    if not _v3_number(dwater_dpressure) or not _v3_number(net_flow):
+        result[names[4]] = 'TANK_MODEL_INVALID'
+        return result
     result.update({names[1]: slope, names[2]: net_flow,
                    names[3]: max(0.0, -net_flow), names[4]: 'VALID'})
     return result
@@ -2554,7 +2636,9 @@ def evaluate_rules_v3_calculations(resolved, fields, state, now_ms):
     state = state if isinstance(state, dict) else new_rules_v3_calculation_state()
     for calculation in resolved.get('calculations', []):
         if calculation['kind'] == 'expression':
-            value = evaluate_runtime_program(calculation['program'], values)
+            required = calculation.get('_requiredTrueFields', ())
+            value = (evaluate_runtime_program(calculation['program'], values)
+                     if all(values.get(name) is True for name in required) else None)
             if _v3_number(value):
                 values[calculation['output']['systemName']] = value
         elif calculation['kind'] == 'function':
@@ -2569,7 +2653,7 @@ def start_rules_v3_runtime(path=RULES_V3_STAGED_FILE):
     checked, reason = load_rules_v3_staged_package(path)
     if checked is None:
         return None, reason
-    resolved = resolve_rules_v3_package(checked['package'])
+    resolved = checked.get('resolved')
     if resolved is None:
         return None, 'release-runtime-unsupported'
     return {
@@ -2944,7 +3028,12 @@ def restart_rules_v3_kernel(resolved):
 
 
 def _is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return value == value and value - value == 0
+    except Exception:
+        return False
 
 
 def operational_pump_state(power_w, shelly_available, shelly_age_ms):
@@ -4171,12 +4260,11 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.30: V3 is the sole event and device-write authority')
+log('CPU A release M6.31: V3 is the sole event and device-write authority')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.
 rules_v3_runtime, _rules_v3_error = start_rules_v3_runtime()
-rules_v3_last_actions = []
 rules_v3_last_mode = 'Normal'
 rules_v3_desired_reference = None
 rules_v3_staged_reference = None
@@ -4427,26 +4515,19 @@ while True:
             log('V3 MODE: {} -> {}'.format(rules_v3_last_mode, mode_now))
             rules_v3_last_mode = mode_now
         if v3_actions:
-            keep, dropped = rules_v3_collapse_actions(
-                rules_v3_runtime['resolved'], v3_actions)
+            dispatched, dropped = dispatch_rules_v3_actions(
+                rules_v3_runtime['resolved'], v3_actions, observation)
             for action in dropped:
                 log('V3 ACTION DROPPED (conflict): {}={} reason={}'.format(
                     action.get('target'), action.get('value'), action.get('reason')))
-            for action in keep:
+            for dispatch in dispatched:
+                action = dispatch['action']
                 signature = (action.get('target'), action.get('value'))
-                if signature in rules_v3_last_actions:
-                    continue  # already issued and unchanged; stay quiet
                 log('V3 ACTION SELECTED: {}={} reason={} event={}'.format(
                     action.get('target'), action.get('value'),
                     action.get('reason'), action.get('eventId')))
-                outcome = issue_rules_v3_action(
-                    rules_v3_runtime['resolved'], action, observation)
-                log('V3 ACTION ISSUED: {}={} -> {}'.format(
-                    signature[0], signature[1], outcome))
-                if outcome == 'issued':
-                    rules_v3_last_actions = [signature]
-        else:
-            rules_v3_last_actions = []
+                log('V3 ACTION DISPATCH: {}={} -> {}'.format(
+                    signature[0], signature[1], dispatch['outcome']))
 
     last_observation = observation
     append_event_history(event_history, observation)

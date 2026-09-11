@@ -5,6 +5,9 @@
 the pre-promotion review base; the work below is committed only on the working
 branch.
 
+This review-correction unit starts from reviewed working commit
+`d29c9c77864b6b4e14091db642febea45e7eba91` and preserves it as an ancestor.
+
 Tab5 is the interpreted MicroPython device application under `tab5/`. Its upload
 set remains separate from the Pilot web/cloud application. This unit is host-tested
 source work only: no package was delivered or uploaded, no device was restarted,
@@ -28,11 +31,26 @@ simultaneous hardware snapshot.
 
 Downloads validate and atomically replace only the next-restart staged file. The
 running package and its kernel/ownership/calculation state remain unchanged until
-restart. Startup adopts the last valid staged package with fresh state. Pointer
+restart. Schema-valid candidates must also resolve against the implemented drivers,
+bindings, calculations, and event subset before they can replace that file, so an
+unsupported candidate leaves the last usable staged bytes intact. Startup adopts
+the last valid staged package with fresh state. Pointer
 schema 4 and device-state schema 2 distinguish actual V3 runtime intent, running
 identity, and staged identity without changing the meanings of the older schemas.
 
-Host evidence: `python -m unittest discover -s tests -v` passes 137 tests,
+Relay dispatch now distinguishes a recognized successful Shelly acknowledgement
+from RPC and transport failures. The next cycle always compares the requested
+state with fresh observed relay state: an acknowledgement alone does not suppress
+a retry, and an active inhibit owner reasserts OFF if the relay is observed ON.
+Re-enable still requires available, valid, exactly-zero lock evidence.
+
+All operational numeric inputs and calculation results must be finite. Raw ADC
+diagnostics remain observable, but pressure-derived calculations require both a
+commissioned sensor and valid ADC evidence. Invalid pressure evidence clears that
+calculation's history so recovery must establish fresh history before flow can be
+valid.
+
+Host evidence: `python -m unittest discover -s tests` passes 140 tests,
 including mocked integrated acquisition/cycle/startup boundaries and the existing
 V3 semantic replay suite. `python -m py_compile tab5/pilot.py tab5/cloud.py`
 passes. No live Shelly response has been captured.
