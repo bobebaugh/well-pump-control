@@ -1,4 +1,4 @@
-# Release: 2026-09-11 M6.31 — correct V3 staging, dispatch, and pressure validity.
+# Release: 2026-09-11 M6.32 — Shelly read and relay-decision diagnostics.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -43,7 +43,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.31'
+SOFTWARE_RELEASE = 'M6.32'
 
 # CPU A validates and adopts the v2 runtime package. CPU B carries only the
 # RTDB pointer and exact downloaded bytes; it never interprets package meaning.
@@ -420,14 +420,94 @@ shelly1_resume_confirmation_pending = True
 
 
 # --- Shelly reads ---
+_shelly_diagnostic_failures = {}
+
+
+def _shelly_read_reason(url, data):
+    """Diagnostic only; the existing normalizers remain authoritative."""
+    if not isinstance(data, dict):
+        return 'response-not-object'
+    if 'error' in data or ('code' in data and 'message' in data):
+        return 'rpc-error'
+    if url == SHELLY_EM_URL:
+        for name in ('power', 'reactive', 'pf', 'voltage', 'total', 'total_returned'):
+            if not _is_number(data.get(name)):
+                return 'missing-or-invalid-' + name
+        if data.get('is_valid') is not True:
+            return 'is_valid-not-true'
+        if not -1 <= data['pf'] <= 1 or data['voltage'] < 0:
+            return 'pf-or-voltage-out-of-range'
+    elif url == SHELLY_1_STATUS_URL:
+        for component, field in (('switch:0', 'output'), ('input:0', 'state')):
+            record = data.get(component)
+            if not isinstance(record, dict) or not isinstance(record.get(field), bool):
+                return 'missing-or-invalid-' + component + '.' + field
+    elif url == SHELLY_1_COMPONENTS_URL:
+        if not isinstance(data.get('components'), list):
+            return 'components-not-list'
+        found = {}
+        for component in data['components']:
+            if not isinstance(component, dict):
+                continue
+            key, config, status = component.get('key'), component.get('config'), component.get('status')
+            if (not isinstance(key, str) or not key.startswith('number:') or
+                    not isinstance(config, dict) or not isinstance(status, dict)):
+                continue
+            name = config.get('name')
+            if name in ('IsLocked', 'loCntr'):
+                if name in found:
+                    return 'duplicate-' + name
+                found[name] = status.get('value')
+        for name, low, high in (('IsLocked', -1, 86400), ('loCntr', 0, 3)):
+            if name not in found:
+                return 'missing-' + name
+            value = found[name]
+            if not isinstance(value, int) or isinstance(value, bool):
+                return 'wrong-type-' + name
+            if not low <= value <= high:
+                return 'out-of-range-' + name
+    return None
+
+
+def _shelly_read_diagnostic(label, elapsed, reason, http_status=None):
+    count = _shelly_diagnostic_failures.get(label, 0)
+    if reason is not None:
+        count += 1
+        _shelly_diagnostic_failures[label] = count
+        # Bound output during prolonged outages, but retain the failure count.
+        if count == 1 or count % 30 == 0:
+            log('SHELLY READ: request={} elapsed_ms={} reason={} http_status={} consecutive_failures={}'.format(
+                label, elapsed, reason, http_status, count))
+    elif count:
+        log('SHELLY READ RECOVERED: request={} elapsed_ms={} preceding_failures={}'.format(
+            label, elapsed, count))
+        _shelly_diagnostic_failures[label] = 0
+
+
 def _read_json(url):
+    label = ('ShellyEM.status' if url == SHELLY_EM_URL else
+             'Shelly1.GetStatus' if url == SHELLY_1_STATUS_URL else
+             'Shelly1.GetComponents' if url == SHELLY_1_COMPONENTS_URL else 'Shelly.read')
+    started = time.ticks_ms()
+    phase, http_status = 'transport', None
     try:
         r = requests.get(url, timeout=SHELLY_TIMEOUT_S)
+        http_status = getattr(r, 'status_code', None)
+        phase = 'json-decode'
         data = r.json()
+        phase = 'response-close'
         r.close()
-        return data
-    except Exception:
+    except Exception as error:
+        # Do not print arbitrary exception text, response bodies, or URLs.
+        errno = getattr(error, 'errno', None)
+        if errno is None and error.args and isinstance(error.args[0], int):
+            errno = error.args[0]
+        reason = '{}:{}:errno={}'.format(phase, type(error).__name__, errno)
+        _shelly_read_diagnostic(label, time.ticks_diff(time.ticks_ms(), started), reason, http_status)
         return None
+    _shelly_read_diagnostic(label, time.ticks_diff(time.ticks_ms(), started),
+                            _shelly_read_reason(url, data), http_status)
+    return data
 
 
 def normalize_shelly_em_status(data):
@@ -990,6 +1070,17 @@ def dispatch_rules_v3_actions(resolved, actions, observation):
             'outcome': issue_rules_v3_action(resolved, action, observation),
         })
     return results, dropped
+
+
+def rules_v3_relay_diagnostic(runtime, observation, actions):
+    resolved, kernel = runtime['resolved'], runtime['kernel']
+    target = resolved.get('pumpTarget')
+    values = observation.get('values', {})
+    available = observation.get('status', {}).get('shelly1_available') is True
+    selected = tuple((item.get('value'), item.get('reason')) for item in actions
+                     if item.get('target') == target)
+    return (kernel.get('releasePending'), available, values.get('shelly1_rly0'),
+            values.get('shelly1_lock'), selected)
 
 
 def runtime_condition_value(condition, fields):
@@ -4260,12 +4351,13 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.31: V3 is the sole event and device-write authority')
+log('CPU A release M6.32: Shelly read and relay-decision diagnostics; V3 authority')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.
 rules_v3_runtime, _rules_v3_error = start_rules_v3_runtime()
 rules_v3_last_mode = 'Normal'
+rules_v3_last_relay_diagnostic = None
 rules_v3_desired_reference = None
 rules_v3_staged_reference = None
 rules_v3_running_reference = None
@@ -4514,7 +4606,13 @@ while True:
         if mode_now != rules_v3_last_mode:
             log('V3 MODE: {} -> {}'.format(rules_v3_last_mode, mode_now))
             rules_v3_last_mode = mode_now
+        relay_diagnostic = rules_v3_relay_diagnostic(rules_v3_runtime, observation, v3_actions)
+        if relay_diagnostic != rules_v3_last_relay_diagnostic:
+            log('V3 RELAY EVIDENCE: sequence={} release_pending={} available={} observed_on={} lock={} selected={}'.format(
+                observation_sequence, *relay_diagnostic))
+            rules_v3_last_relay_diagnostic = relay_diagnostic
         if v3_actions:
+            dispatch_started = time.ticks_ms()
             dispatched, dropped = dispatch_rules_v3_actions(
                 rules_v3_runtime['resolved'], v3_actions, observation)
             for action in dropped:
@@ -4526,8 +4624,9 @@ while True:
                 log('V3 ACTION SELECTED: {}={} reason={} event={}'.format(
                     action.get('target'), action.get('value'),
                     action.get('reason'), action.get('eventId')))
-                log('V3 ACTION DISPATCH: {}={} -> {}'.format(
-                    signature[0], signature[1], dispatch['outcome']))
+                log('V3 ACTION DISPATCH: {}={} -> {} sequence={} elapsed_ms={}'.format(
+                    signature[0], signature[1], dispatch['outcome'], observation_sequence,
+                    time.ticks_diff(time.ticks_ms(), dispatch_started)))
 
     last_observation = observation
     append_event_history(event_history, observation)

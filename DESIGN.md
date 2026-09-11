@@ -72,3 +72,11 @@ Work proceeds one bounded unit at a time on a reusable working branch. The owner
 reviews behavior through the application and stored Firestore/RTDB data, supported
 by the agent's tests and evidence. Promotion to an operating branch is a separate
 owner decision.
+
+## Local diagnostics
+
+Shelly read diagnostics identify the request and failure stage without creating
+new runtime fields. A diagnostic failure does not retain stale operational evidence
+or alter acquisition acceptance. Repeated failures are counted with bounded print
+output and recovery is reported. Relay diagnostics observe existing kernel and
+snapshot decisions; they never create an action or change pending release state.
