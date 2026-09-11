@@ -51,7 +51,7 @@ test("V3 store seeds, saves, publishes, reopens, and restores only V3 Firestore 
   assert.equal(await store.saveSection("systemFields", 1, systemFields, 110), 2);
   const saved = await store.loadOrSeed(defaults(), 120);
   const runtimeBody = "{\"schemaVersion\":3}";
-  const state = { schemaVersion: 3, packageVersion: 1, releaseId: "20260830123456-event-v3-v1", contentHash: "a".repeat(64), publishedAtMs: 120, deliveryEnabled: false };
+  const state = { schemaVersion: 4, kind: "well-pump-event-v3-runtime-state", packageVersion: 1, releaseId: "20260830123456-event-v3-v1", contentHash: "a".repeat(64), publishedAtMs: 120, deliveryEnabled: false, executionEnabled: true };
   await store.publish(0, saved.draft.revisions, state.releaseId, { ...state, authoringPackage: saved.draft, runtimeBody }, state);
   assert.equal((await store.getRelease(state.releaseId)).runtimePackage.schemaVersion, 3);
   assert.equal(values.has(`sites/well-main/rulesEngineV3Releases/${state.releaseId}`), true);
@@ -60,8 +60,8 @@ test("V3 store seeds, saves, publishes, reopens, and restores only V3 Firestore 
   const restored = await store.restoreRelease(state.releaseId, saved.draft.revisions, 130);
   assert.equal(restored.systemFields[0].label, "Restored operating mode");
   assert.deepEqual(restored.revisions, { devices: 2, calculatedFields: 2, systemFields: 3, events: 2 });
-  const delivered = await store.markDelivered(state.releaseId, state.contentHash, { executionEnabled: false, releaseId: state.releaseId }, 140);
+  const delivered = await store.markDelivered(state.releaseId, state.contentHash, { executionEnabled: true, releaseId: state.releaseId }, 140);
   assert.equal(delivered.deliveryEnabled, true);
-  assert.equal(delivered.executionEnabled, false);
+  assert.equal(delivered.executionEnabled, true);
   assert.equal(values.has(`sites/well-main/rulesEngineState/current`), false);
 });

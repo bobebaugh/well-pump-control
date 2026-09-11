@@ -5,7 +5,7 @@ const runtimeSchema = require("../../../contracts/rules-runtime-package-v3.schem
 const { MAX_RUNTIME_BYTES, V3_KIND, V3_SCHEMA_VERSION } = require("./rules-engine-v3-contract");
 
 const SITE_ID = "well-main";
-const POINTER_SCHEMA_VERSION = 3;
+const POINTER_SCHEMA_VERSION = 4;
 const RELEASE_ID_PATTERN = /^[0-9]{14}-event-v3-v[1-9][0-9]*$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 
@@ -98,7 +98,7 @@ function verifiedRuntimeV3Release(release, expectedReleaseId) {
     runtimeBody: release.runtimeBody,
     metadata: {
       schemaVersion: POINTER_SCHEMA_VERSION,
-      kind: "well-pump-event-v3-staging-pointer",
+      kind: "well-pump-event-v3-runtime-pointer",
       siteId: SITE_ID,
       releaseId: release.releaseId,
       packageVersion: release.packageVersion,
@@ -107,7 +107,7 @@ function verifiedRuntimeV3Release(release, expectedReleaseId) {
       hashAlgorithm: "sha256",
       byteLength: Buffer.byteLength(release.runtimeBody, "utf8"),
       publishedAtMs: release.publishedAtMs,
-      executionEnabled: false,
+      executionEnabled: true,
       downloadPath: releaseDownloadPath(release.releaseId)
     }
   };

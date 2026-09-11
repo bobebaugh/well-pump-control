@@ -22,7 +22,7 @@ function releaseSummary(snapshot) {
     publishedAtMs: value.publishedAtMs,
     contentHash: value.contentHash,
     deliveryEnabled: false,
-    executionEnabled: false,
+    executionEnabled: value.executionEnabled === true,
     runtimeBytes: typeof value.runtimeBody === "string" ? Buffer.byteLength(value.runtimeBody, "utf8") : null
   };
 }
@@ -98,10 +98,10 @@ function createRulesEngineV3Store(dependencies = {}) {
       return db.runTransaction(async transaction => {
         const current = await transaction.get(state);
         const value = current.exists ? current.data() : null;
-        if (!value || value.releaseId !== releaseId || value.contentHash !== contentHash || metadata.executionEnabled !== false) {
+        if (!value || value.releaseId !== releaseId || value.contentHash !== contentHash || metadata.executionEnabled !== true) {
           throw new RulesEngineV3StoreConflictError();
         }
-        const next = { ...value, deliveryEnabled: true, executionEnabled: false, deliveredAtMs: nowMs, delivery: metadata };
+        const next = { ...value, deliveryEnabled: true, executionEnabled: true, deliveredAtMs: nowMs, delivery: metadata };
         transaction.set(state, next);
         return next;
       });

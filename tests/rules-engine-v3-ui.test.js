@@ -15,7 +15,7 @@ test("Rules Engine browser is explicitly routed to the isolated V3 endpoint", ()
   assert.match(source, /authoring\?\.schemaVersion === 3/);
   assert.match(source, /action: "restore"/);
   assert.match(source, /action: "publish"/);
-  assert.match(html, /Event V3 Checkpoint 2 — execution-disabled delivery staging/);
+  assert.match(html, /Event V3 runtime delivery — restart-only adoption/);
 });
 
 test("Rules Engine presents all schema-3 authoring sections and lifecycle controls", () => {
@@ -34,19 +34,17 @@ test("Rules Engine presents all schema-3 authoring sections and lifecycle contro
   assert.match(source, /runtimeRole: "occurrence", type: "signal"/);
 });
 
-test("Rules Engine browser can stage a current V3 package without enabling execution", () => {
+test("Rules Engine browser truthfully describes restart-only V3 package adoption", () => {
   assert.match(html, /id="engine-deliver" type="button" disabled>Deliver to Tab5</);
   assert.match(source, /function deliverPackage/);
   assert.match(source, /action: "deliver", releaseId: state\.current\.releaseId/);
   assert.match(source, /Type DELIVER to continue/);
-  assert.match(html, /execution-disabled package for the Tab5/);
-  assert.match(source, /staged execution-disabled for Tab5, not running/);
-  assert.doesNotMatch(source, /executionEnabled:\s*true/);
-  assert.doesNotMatch(html, /executionEnabled:\s*true/);
+  assert.match(html, /execution-enabled package/);
+  assert.match(source, /staged for the next Tab5 restart/);
   assert.doesNotMatch(html, /id="engine-(?:enable|execution)"/);
   assert.match(source, /deliverButton\.disabled = !state\.current/);
   assert.match(source, /deliverButton\.disabled = true;/);
-  for (const code of ["invalid_delivery_request", "pointer_read_failed", "delivery_not_current", "delivery_release_mismatch", "pointer_changed", "pointer_write_failed", "publisher_auth_failed", "configuration_missing", "execution_must_remain_disabled"]) {
+  for (const code of ["invalid_delivery_request", "pointer_read_failed", "delivery_not_current", "delivery_release_mismatch", "pointer_changed", "pointer_write_failed", "publisher_auth_failed", "configuration_missing", "runtime_pointer_required"]) {
     // Require the code as a mapped key, not merely present somewhere in the file.
     assert.match(source, new RegExp(`\\b${code}:`));
   }

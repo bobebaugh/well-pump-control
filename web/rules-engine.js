@@ -68,7 +68,7 @@ function updateCounts() {
 }
 function deliveryText(current) {
   if (!current) return "V3 defaults loaded into the isolated draft; no immutable package is published.";
-  return `SHA-256 ${current.contentHash} · immutable V3 package; delivery can stage it execution-disabled for Tab5`;
+  return `SHA-256 ${current.contentHash} · immutable V3 package; delivery stages it for adoption on Tab5 restart`;
 }
 const deliveryErrors = {
   invalid_delivery_request: "Delivery request is invalid: the release id is missing or malformed.",
@@ -79,7 +79,7 @@ const deliveryErrors = {
   pointer_write_failed: "RTDB pointer write was rejected. The database security rules are most likely not deployed (firebase deploy --only database).",
   publisher_auth_failed: "Delivery could not authenticate the V3 publisher token.",
   configuration_missing: "Delivery is unavailable because Firebase environment configuration is missing.",
-  execution_must_remain_disabled: "Delivery was refused because the package was not execution-disabled."
+  runtime_pointer_required: "Delivery was refused because the package is not a V3 runtime pointer."
 };
 function deliveryErrorText(error) {
   const code = error.body?.code || error.message;
@@ -368,7 +368,7 @@ async function loadDraft() {
     document.querySelector("#engine-validate").disabled = false;
     document.querySelector("#engine-publish").disabled = true;
     deliverButton.disabled = !state.current;
-    updateCounts(); renderEditor(); renderReleaseHistory(); setStatus("V3 draft loaded. A current immutable package can be staged execution-disabled for Tab5; it does not run rules or act on hardware.", "ok");
+    updateCounts(); renderEditor(); renderReleaseHistory(); setStatus("V3 draft loaded. A current immutable package can be staged for adoption on the next Tab5 restart.", "ok");
   } catch (error) { if (error.message !== "cancelled") setStatus(`Could not load Rules Engine: ${error.body?.code || error.message}`, "error"); }
 }
 
@@ -415,27 +415,27 @@ async function publishPackage() {
     state.releases = [{ ...result.current, schemaVersion: 3, runtimeBytes: result.runtimeBytes }, ...state.releases.filter(release => release.releaseId !== result.current.releaseId)];
     document.querySelector("#engine-release").textContent = `${result.current.releaseId} · version ${result.current.packageVersion}`;
     document.querySelector("#engine-hash").textContent = deliveryText(result.current);
-    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte V3 runtime package · ready to stage execution-disabled for Tab5`;
+    document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte V3 runtime package · ready to stage for Tab5 restart`;
     deliverButton.disabled = false;
-    renderReleaseHistory(); showFindings(result); setStatus("Immutable V3 package published. Delivery can only stage it execution-disabled; no rules run and no hardware action occurs.", "ok");
+    renderReleaseHistory(); showFindings(result); setStatus("Immutable V3 package published. Delivery stages it for adoption on the next Tab5 restart.", "ok");
   } catch (error) { setStatus(`Publish failed: ${error.body?.code || error.message}`, "error"); }
 }
 async function deliverPackage() {
   const releaseId = state.current?.releaseId;
   if (!releaseId) {
-    setStatus("Publish a V3 package before requesting execution-disabled delivery.", "warning");
+    setStatus("Publish a V3 package before requesting runtime delivery.", "warning");
     return;
   }
-  const confirmation = window.prompt(`Stage ${releaseId} for Tab5 adoption? This delivery remains execution-disabled: no rules run and no hardware action occurs. Type DELIVER to continue.`);
+  const confirmation = window.prompt(`Stage ${releaseId} for adoption on the next Tab5 restart? Downloading it will not replace the currently running package. Type DELIVER to continue.`);
   if (confirmation !== "DELIVER") return;
   deliverButton.disabled = true;
-  setStatus(`Requesting execution-disabled staging of ${releaseId} for Tab5…`);
+  setStatus(`Requesting restart-only staging of ${releaseId} for Tab5…`);
   try {
     const result = await api("POST", { action: "deliver", releaseId: state.current.releaseId });
     state.current = result.current || state.current;
     document.querySelector("#engine-release").textContent = `${state.current.releaseId} · version ${state.current.packageVersion}`;
     document.querySelector("#engine-hash").textContent = deliveryText(state.current);
-    setStatus(`Delivered ${releaseId}: staged execution-disabled for Tab5, not running. No hardware action occurred.`, "ok");
+    setStatus(`Delivered ${releaseId}: staged for the next Tab5 restart. The currently running package is unchanged.`, "ok");
   } catch (error) {
     setStatus(deliveryErrorText(error), "error");
   } finally {

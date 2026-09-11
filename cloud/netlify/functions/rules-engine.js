@@ -83,7 +83,7 @@ function createHandler(dependencies = {}) {
             releaseId: loaded.current?.delivery?.releaseId || null,
             deliveredAtMs: loaded.current?.deliveredAtMs || null,
             description: v3
-            ? "V3 staging delivery publishes only an execution-disabled pointer. It does not activate Event V3."
+            ? "V3 delivery stages an execution-enabled runtime package. Tab5 adopts it only on restart."
               : "Delivery publishes the current immutable package identity to RTDB; Tab5 adoption remains separately verified."
           }
         });
@@ -113,7 +113,7 @@ function createHandler(dependencies = {}) {
           if (!loaded.current || loaded.current.releaseId !== request.releaseId) return response(409, { status: "error", code: "delivery_not_current", current: loaded.current });
           const release = await store.getRelease(request.releaseId);
           const verified = verifiedRuntimeV3Release(release, request.releaseId);
-          if (verified.metadata.contentHash !== loaded.current.contentHash || verified.metadata.packageVersion !== loaded.current.packageVersion || verified.metadata.executionEnabled !== false) {
+          if (verified.metadata.contentHash !== loaded.current.contentHash || verified.metadata.packageVersion !== loaded.current.packageVersion || verified.metadata.executionEnabled !== true) {
             return response(409, { status: "error", code: "delivery_release_mismatch", current: loaded.current });
           }
           const deliveryFactory = dependencies.createV3Delivery || (() => require("../lib/rules-engine-v3-delivery").createRulesEngineV3Delivery());
@@ -167,13 +167,14 @@ function createHandler(dependencies = {}) {
       const runtimeBody = compiled ? compiled.runtimeBody : `${JSON.stringify(canonical(runtimePackage), null, 2)}\n`;
       const contentHash = createHash("sha256").update(runtimeBody, "utf8").digest("hex");
       const stateValue = {
-        schemaVersion: v3 ? 3 : 2, packageVersion, releaseId, contentHash,
+        schemaVersion: v3 ? 4 : 2, packageVersion, releaseId, contentHash,
         publishedAtMs: now().getTime(), deliveryEnabled: false,
-        ...(v3 ? { kind: "well-pump-event-v3-staging-state", executionEnabled: false } : {})
+        ...(v3 ? { kind: "well-pump-event-v3-runtime-state", executionEnabled: true } : {})
       };
       if (v3) verifiedRulesV3State(stateValue);
       const release = {
         ...stateValue,
+        ...(v3 ? { schemaVersion: 3 } : {}),
         authoringPackage: authoringDraft,
         runtimeBody,
         requestedBy: v3 ? "netlify-rules-engine-v3-checkpoint1" : "netlify-rules-engine-pilot"

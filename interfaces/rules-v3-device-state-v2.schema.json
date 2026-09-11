@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/rules-v3-device-state-v2.schema.json",
+  "title": "Event V3 device running and restart-staging status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "siteId", "deviceId", "sessionId", "executionEnabled", "executionState", "reportedAtMs", "running", "desired", "staged", "rejected"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "kind": { "const": "rules-v3-runtime-state" },
+    "siteId": { "const": "well-main" },
+    "deviceId": { "const": "tab5-well-main" },
+    "sessionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "executionEnabled": { "type": "boolean" },
+    "executionState": { "type": "string", "enum": ["running", "unavailable"] },
+    "reportedAtMs": { "type": "integer", "minimum": 0 },
+    "running": { "$ref": "#/$defs/nullableReference" },
+    "desired": { "$ref": "#/$defs/nullableReference" },
+    "staged": { "$ref": "#/$defs/nullableReference" },
+    "rejected": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason"],
+          "properties": {
+            "reason": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "releaseId": { "type": ["string", "null"] },
+            "packageVersion": { "type": ["integer", "null"], "minimum": 1 },
+            "contentHash": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "executionEnabled": { "const": true } }, "required": ["executionEnabled"] },
+      "then": { "properties": { "executionState": { "const": "running" }, "running": { "$ref": "#/$defs/reference" } } }
+    },
+    {
+      "if": { "properties": { "executionEnabled": { "const": false } }, "required": ["executionEnabled"] },
+      "then": { "properties": { "executionState": { "const": "unavailable" }, "running": { "type": "null" } } }
+    }
+  ],
+  "$defs": {
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["releaseId", "packageVersion", "runtimeSchemaVersion", "contentHash"],
+      "properties": {
+        "releaseId": { "type": "string", "pattern": "^[0-9]{14}-event-v3-v[1-9][0-9]*$" },
+        "packageVersion": { "type": "integer", "minimum": 1 },
+        "runtimeSchemaVersion": { "const": 3 },
+        "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "nullableReference": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/reference" }] }
+  }
+}

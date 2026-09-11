@@ -25,7 +25,7 @@ function request(releaseId, query = { version: "3", releaseId }, token = "test-k
   return { httpMethod: "GET", headers: { "X-Pilot-Key": token }, queryStringParameters: query };
 }
 
-test("V3 release serves exact immutable bytes and a closed execution-disabled staging pointer", async () => {
+test("V3 release serves exact immutable bytes and a closed execution-enabled runtime pointer", async () => {
   const immutable = release();
   let v2Calls = 0;
   const handler = _createHandler({
@@ -39,10 +39,10 @@ test("V3 release serves exact immutable bytes and a closed execution-disabled st
   assert.equal(v2Calls, 0);
   const verified = verifiedRuntimeV3Release(immutable, immutable.releaseId);
   assert.deepEqual(verified.metadata, {
-    schemaVersion: 3, kind: "well-pump-event-v3-staging-pointer", siteId: "well-main",
+    schemaVersion: 4, kind: "well-pump-event-v3-runtime-pointer", siteId: "well-main",
     releaseId: immutable.releaseId, packageVersion: 1, runtimeSchemaVersion: 3,
     contentHash: immutable.contentHash, hashAlgorithm: "sha256", byteLength: Buffer.byteLength(immutable.runtimeBody, "utf8"),
-    publishedAtMs: immutable.publishedAtMs, executionEnabled: false,
+    publishedAtMs: immutable.publishedAtMs, executionEnabled: true,
     downloadPath: `/.netlify/functions/rules-engine-release?version=3&releaseId=${immutable.releaseId}`
   });
 });

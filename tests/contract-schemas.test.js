@@ -19,8 +19,11 @@ const schemas = [
   "contracts/rules-package-v1.schema.json",
   "contracts/rules-runtime-release-metadata-v2.schema.json",
   "contracts/rules-runtime-release-metadata-v3.schema.json",
+  "contracts/rules-runtime-release-metadata-v4.schema.json",
   "contracts/rules-v3-state-v1.schema.json",
+  "contracts/rules-v3-state-v4.schema.json",
   "contracts/rules-v3-device-state-v1.schema.json",
+  "contracts/rules-v3-device-state-v2.schema.json",
   "contracts/rules-runtime-package-v3.schema.json"
 ];
 
@@ -208,6 +211,35 @@ test("V3 device staging state is closed and execution-disabled", () => {
   assert.deepEqual(validate(schema, state), []);
   assert.notDeepEqual(validate(schema, { ...state, executionEnabled: true }), []);
   assert.notDeepEqual(validate(schema, { ...state, extra: true }), []);
+});
+
+test("V3 runtime pointer and device state report actual restart-only execution", () => {
+  const pointerSchema = readJson("contracts/rules-runtime-release-metadata-v4.schema.json");
+  const pointer = {
+    schemaVersion: 4, kind: "well-pump-event-v3-runtime-pointer", siteId: "well-main",
+    releaseId: "20260830123456-event-v3-v1", packageVersion: 1, runtimeSchemaVersion: 3,
+    contentHash: "a".repeat(64), hashAlgorithm: "sha256", byteLength: 1234,
+    publishedAtMs: 1788266096000, executionEnabled: true,
+    downloadPath: "/.netlify/functions/rules-engine-release?version=3&releaseId=20260830123456-event-v3-v1"
+  };
+  assert.deepEqual(validate(pointerSchema, pointer), []);
+  assert.notDeepEqual(validate(pointerSchema, { ...pointer, executionEnabled: false }), []);
+
+  const reference = {
+    releaseId: pointer.releaseId, packageVersion: pointer.packageVersion,
+    runtimeSchemaVersion: 3, contentHash: pointer.contentHash
+  };
+  const stateSchema = readJson("contracts/rules-v3-device-state-v2.schema.json");
+  const running = {
+    schemaVersion: 2, kind: "rules-v3-runtime-state", siteId: "well-main",
+    deviceId: "tab5-well-main", sessionId: "boot_12345678",
+    executionEnabled: true, executionState: "running", reportedAtMs: 1788266096000,
+    running: reference, desired: reference, staged: reference, rejected: null
+  };
+  assert.deepEqual(validate(stateSchema, running), []);
+  assert.notDeepEqual(validate(stateSchema, { ...running, executionEnabled: false }), []);
+  const unavailable = { ...running, executionEnabled: false, executionState: "unavailable", running: null };
+  assert.deepEqual(validate(stateSchema, unavailable), []);
 });
 
 test("V3 runtime schema accepts typed generic session working fields", () => {

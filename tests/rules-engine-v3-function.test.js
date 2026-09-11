@@ -28,8 +28,8 @@ function harness(options = {}) {
     async markDelivered(releaseId, contentHash, metadata, nowMs) {
       assert.equal(releaseId, current?.releaseId);
       assert.equal(contentHash, current?.contentHash);
-      assert.equal(metadata.executionEnabled, false);
-      current = { ...current, deliveryEnabled: true, executionEnabled: false, deliveredAtMs: nowMs, delivery: metadata };
+      assert.equal(metadata.executionEnabled, true);
+      current = { ...current, deliveryEnabled: true, executionEnabled: true, deliveredAtMs: nowMs, delivery: metadata };
       return current;
     },
     async restoreRelease(releaseId, expectedRevisions) {
@@ -95,16 +95,16 @@ test("V3 endpoint validates, publishes, reopens, and restores an isolated immuta
   assert.equal(restoredBody.draft.events[0].web.notifyOnClose, false);
 });
 
-test("V3 endpoint delivers only an execution-disabled staging pointer without constructing the V2 factory", async () => {
+test("V3 endpoint delivers an execution-enabled restart-staged pointer without constructing the V2 factory", async () => {
   const delivered = [];
   const harnessed = harness({ createV3Delivery: () => ({ async publishPointer(metadata) { delivered.push(metadata); } }) });
   const published = JSON.parse((await harnessed.handler(request("POST", { action: "publish", basePackageVersion: 0 }))).body);
   const result = await harnessed.handler(request("POST", { action: "deliver", releaseId: published.current.releaseId }));
-  assert.equal(result.statusCode, 200);
+  assert.equal(result.statusCode, 200, result.body);
   const body = JSON.parse(result.body);
   assert.equal(body.current.deliveryEnabled, true);
-  assert.equal(body.current.executionEnabled, false);
-  assert.equal(body.metadata.executionEnabled, false);
+  assert.equal(body.current.executionEnabled, true);
+  assert.equal(body.metadata.executionEnabled, true);
   assert.equal(body.metadata.downloadPath, `/.netlify/functions/rules-engine-release?version=3&releaseId=${published.current.releaseId}`);
   assert.equal(delivered.length, 1);
   assert.equal(harnessed.deliveryFactoryCalls, 0);

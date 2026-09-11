@@ -148,12 +148,12 @@ test("fixed publisher can replace only a complete rules pointer", async () => {
   await assertFails(set(ref(publisherDatabase, `${SITE}/control/globalEnable`), true));
 });
 
-test("separate V3 staging publisher can replace only a closed execution-disabled V3 pointer", async () => {
+test("separate V3 publisher can replace only a closed execution-enabled V3 runtime pointer", async () => {
   const current = {
-    schemaVersion: 3, kind: "well-pump-event-v3-staging-pointer", siteId: "well-main",
+    schemaVersion: 4, kind: "well-pump-event-v3-runtime-pointer", siteId: "well-main",
     releaseId: "20260830123456-event-v3-v1", packageVersion: 1,
     runtimeSchemaVersion: 3, contentHash: "a".repeat(64), hashAlgorithm: "sha256",
-    byteLength: 1234, publishedAtMs: 1788266096000, executionEnabled: false,
+    byteLength: 1234, publishedAtMs: 1788266096000, executionEnabled: true,
     downloadPath: "/.netlify/functions/rules-engine-release?version=3&releaseId=20260830123456-event-v3-v1"
   };
   const path = `${SITE}/rules/v3/current`;
@@ -162,7 +162,7 @@ test("separate V3 staging publisher can replace only a closed execution-disabled
   await assertSucceeds(get(ref(deviceDatabase, path)));
   await assertFails(set(ref(publisherDatabase, path), current));
   for (const invalid of [
-    { ...current, executionEnabled: true },
+    { ...current, executionEnabled: false },
     { ...current, releaseId: "20260830123456-parameters-v1" },
     { ...current, byteLength: 65537 },
     { ...current, downloadPath: "/.netlify/functions/rules-engine-release?releaseId=20260830123456-event-v3-v1" },
@@ -171,22 +171,27 @@ test("separate V3 staging publisher can replace only a closed execution-disabled
   await assertFails(set(ref(v3PublisherDatabase, `${SITE}/rules/current`), { packageVersion: 2 }));
 });
 
-test("only the fixed device can report closed execution-disabled V3 staging state", async () => {
+test("only the fixed device can report closed V3 running and restart-staging state", async () => {
   const statePath = `${DEVICE}/rulesV3State`;
   const reference = {
     releaseId: "20260830123456-event-v3-v1", packageVersion: 1,
-    runtimeSchemaVersion: 3, contentHash: "a".repeat(64), executionEnabled: false
+    runtimeSchemaVersion: 3, contentHash: "a".repeat(64)
   };
   const state = {
-    schemaVersion: 1, kind: "rules-v3-staging-state", siteId: "well-main",
-    deviceId: "tab5-well-main", sessionId: "boot_12345678", executionEnabled: false,
-    reportedAtMs: serverTimestamp(), desired: reference, staged: reference, rejected: null
+    schemaVersion: 2, kind: "rules-v3-runtime-state", siteId: "well-main",
+    deviceId: "tab5-well-main", sessionId: "boot_12345678", executionEnabled: true,
+    executionState: "running", reportedAtMs: serverTimestamp(),
+    running: reference, desired: reference, staged: reference, rejected: null
   };
   await assertSucceeds(set(ref(deviceDatabase, statePath), state));
   await assertSucceeds(get(ref(deviceDatabase, statePath)));
+  await assertSucceeds(set(ref(deviceDatabase, statePath), {
+    ...state, executionEnabled: false, executionState: "unavailable", running: null
+  }));
+  await assertSucceeds(set(ref(deviceDatabase, statePath), state));
   await assertFails(set(ref(v3PublisherDatabase, statePath), state));
   for (const invalid of [
-    { ...state, executionEnabled: true },
+    { ...state, executionEnabled: false },
     { ...state, kind: "active" },
     { ...state, desired: { ...reference, contentHash: "b".repeat(63) } },
     { ...state, extra: true },

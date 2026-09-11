@@ -31,8 +31,11 @@ function createRulesEngineV3Delivery(dependencies = {}) {
 
   return {
     async publishPointer(metadata) {
-      // Event V3 is staging only.  Its RTDB pointer is never execution-enabled.
-      if (!metadata || metadata.executionEnabled !== false) throw new RulesEngineV3DeliveryError("execution_must_remain_disabled");
+      if (!metadata || metadata.schemaVersion !== 4 ||
+          metadata.kind !== "well-pump-event-v3-runtime-pointer" ||
+          metadata.executionEnabled !== true) {
+        throw new RulesEngineV3DeliveryError("runtime_pointer_required");
+      }
       const token = await publisherToken();
       const path = `${rtdbUrl}/v1/sites/${SITE_ID}/rules/v3/current.json?auth=${encodeURIComponent(token)}`;
       const current = await fetchImpl(path, { method: "GET", headers: { "X-Firebase-ETag": "true" } });
