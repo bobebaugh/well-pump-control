@@ -1,4 +1,4 @@
-# Release: 2026-08-30 M6.28 — stage, report, and never execute V3 rule bytes.
+# Release: 2026-09-11 M6.30 — transport V3 runtime intent and actual device state.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -411,6 +411,7 @@ _transport_status = {
     'durableLastAttemptTicksMs': None,
     'durableLastSuccessTicksMs': None,
     'durableLastAttemptOk': None,
+    'durableRecordsLost': 0,
 }
 
 _command_lock = _thread.allocate_lock()
@@ -548,6 +549,7 @@ def submit_durable_record(record):
             record.get('recordType') not in (
                 'observation', 'rule-adoption', 'rule-rejection')):
         return False
+    record_lost = False
     _durable_lock.acquire()
     try:
         if len(_pending_durable_records) >= DURABLE_QUEUE_DEPTH:
@@ -559,15 +561,26 @@ def submit_durable_record(record):
                 for index, pending in enumerate(_pending_durable_records):
                     if pending.get('recordType') == 'observation':
                         _pending_durable_records.pop(index)
+                        record_lost = True
                         break
                 else:
+                    record_lost = True
                     return False
             else:
+                record_lost = True
                 return False
         _pending_durable_records.append(record)
         return True
     finally:
         _durable_lock.release()
+        if record_lost:
+            _transport_status_lock.acquire()
+            try:
+                previous_lost = _transport_status.get('durableRecordsLost')
+                _transport_status['durableRecordsLost'] = (
+                    previous_lost + 1 if isinstance(previous_lost, int) else 1)
+            finally:
+                _transport_status_lock.release()
 
 
 def _peek_durable_record():
@@ -732,9 +745,11 @@ def _queue_rules_v3_pointer(pointer):
 
 
 def set_rules_v3_state(state):
-    """Receive a CPU-A-authored staging status for separate device reporting."""
+    """Receive CPU A's truthful V3 running/staged status for device reporting."""
     global _rules_v3_state
-    if not isinstance(state, dict) or state.get('executionEnabled') is not False:
+    if (not isinstance(state, dict) or
+            not isinstance(state.get('executionEnabled'), bool) or
+            state.get('executionState') not in ('running', 'unavailable')):
         return False
     _rules_v3_state_lock.acquire()
     try:
@@ -1160,11 +1175,12 @@ def _rules_pointer_key_summary(value):
 
 
 def _run_rules_v3_staging_step(schedule, rtdb_action):
-    """Perform one V3 staging/report operation outside V2 coordination.
+    """Perform one V3 download/report operation outside V2 coordination.
 
     V2 coordination remains its fixed global-enable/rules/commands exchange.
     This independent, low-priority step never adds a V2 stage or changes the
-    V2 schedule outcome.  It carries status and bytes only; CPU A validates.
+    V2 schedule outcome. It carries status and bytes only; CPU A validates,
+    stages, and adopts only at restart.
     """
     if rtdb_action not in (None, 'current-observation'):
         return None
@@ -1175,11 +1191,10 @@ def _run_rules_v3_staging_step(schedule, rtdb_action):
     try:
         if state is not None:
             report = dict(state)
-            report['schemaVersion'] = 1
+            report['schemaVersion'] = 2
             report['siteId'] = SITE_ID
             report['deviceId'] = RTDB_DEVICE_ID
             report['sessionId'] = _session_id
-            report['executionEnabled'] = False
             report['reportedAtMs'] = {'.sv': 'timestamp'}
             _rtdb_put(auth, 'v1/sites/{}/devices/{}/rulesV3State'.format(
                 SITE_ID, RTDB_DEVICE_ID), report)

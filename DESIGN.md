@@ -21,6 +21,11 @@ never required for immediate protection.
 Unavailable or incomplete evidence remains unavailable. It is never converted into
 a safe value or an unlocked control state.
 
+V3 is the target and is progressively replacing V2. Once V3 owns event evaluation
+and device writes, the normal loop must not execute V2 events or silently fall back
+to V2 authority. Script-supplied Shelly lock evidence is required before any V3
+re-enable write; absence or invalidity cannot authorize that write.
+
 ## Shared records
 
 Pilot publishes an immutable runtime package and a pointer identifying its exact
@@ -30,6 +35,17 @@ and event records for Pilot to retain and display.
 
 Existing versioned record meanings do not change silently. An incompatible record
 gets a new version.
+
+For the initial real-world V3 pilot, package adoption is restart-only. A successful
+download stages the next package atomically and does not replace the running
+kernel. Restart validates and adopts the last valid staged file with fresh event,
+ownership, and calculation state. Reports keep running and staged identities
+distinct and describe execution according to the running source behavior.
+
+The Shelly 1 read record joins two sequential RPC responses from one acquisition
+cycle. It is intentionally not described as a simultaneous hardware snapshot.
+Dynamic script number components are discovered by name; Tab5 reads but never
+resets or manipulates them.
 
 ## Work and acceptance
 

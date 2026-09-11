@@ -126,7 +126,7 @@ class CloudTransportTests(unittest.TestCase):
         self.cloud._applied_rules_reference = dict(
             self.cloud.PRE_M6_TRANSPORT_ONLY_RULES_REFERENCE)
         for key in self.cloud._transport_status:
-            self.cloud._transport_status[key] = None
+            self.cloud._transport_status[key] = (0 if key == "durableRecordsLost" else None)
 
     def test_retry_delay_is_exponential_and_bounded(self):
         self.assertEqual(self.cloud._retry_delay_ms(1), 5000)
@@ -515,12 +515,12 @@ class CloudTransportTests(unittest.TestCase):
 
     def test_v3_staging_transport_uses_exact_versioned_endpoint_and_separate_queue(self):
         metadata = {
-            "schemaVersion": 3, "kind": "well-pump-event-v3-staging-pointer",
+            "schemaVersion": 4, "kind": "well-pump-event-v3-runtime-pointer",
             "siteId": "well-main", "releaseId": "20260830000000-event-v3-v1",
             "packageVersion": 1, "runtimeSchemaVersion": 3, "contentHash": "b" * 64,
             "hashAlgorithm": "sha256", "byteLength": 57, "publishedAtMs": 1788048000000,
             "downloadPath": "/.netlify/functions/rules-engine-release?version=3&releaseId=20260830000000-event-v3-v1",
-            "executionEnabled": False,
+            "executionEnabled": True,
         }
         raw_release = '{"schemaVersion":3,"kind":"well-pump-event-runtime-v3"}'
         self.requests.queue({}, text=raw_release)
@@ -558,11 +558,13 @@ class CloudTransportTests(unittest.TestCase):
             captured = []
             self.cloud._rtdb_put = lambda _auth, path, value: captured.append((path, value))
             self.assertTrue(self.cloud.set_rules_v3_state({
-                "kind": "rules-v3-staging-state", "executionEnabled": False,
+                "kind": "rules-v3-runtime-state", "executionEnabled": True,
+                "executionState": "running", "running": {"releaseId": "A"},
                 "desired": None, "staged": None, "rejected": None}))
             self.assertEqual(self.cloud._run_rules_v3_staging_step(schedule, None), "rules-v3-state")
             self.assertEqual(captured[0][0], "v1/sites/well-main/devices/tab5-well-main/rulesV3State")
-            self.assertFalse(captured[0][1]["executionEnabled"])
+            self.assertTrue(captured[0][1]["executionEnabled"])
+            self.assertEqual(captured[0][1]["schemaVersion"], 2)
         finally:
             self.cloud._rtdb_get = original_get
             self.cloud._rtdb_put = original_put

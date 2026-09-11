@@ -79,6 +79,7 @@ FUNCTIONS = {
     "_v3_phase",
     "_v3_dependencies_acyclic",
     "_rules_v3_package_valid",
+    "_rules_v3_reference",
     "_check_rules_v3_pointer",
     "validate_rules_v3_pointer",
     "rules_v3_pointer_rejection_reason",
@@ -119,6 +120,7 @@ CONSTANTS = {
     "RULES_V3_STAGED_FILE",
     "RULES_V3_STAGED_TEMP_FILE",
     "RULES_V3_SCHEMA_VERSION",
+    "RULES_V3_POINTER_SCHEMA_VERSION",
     "RULES_V3_POINTER_KIND",
     "RULES_V3_PACKAGE_KIND",
 }
@@ -694,22 +696,22 @@ class ObservationSelectionTests(unittest.TestCase):
 
     def v3_pointer(self, raw, release_id="20260830000000-event-v3-v1", version=1):
         return {
-            "schemaVersion": 3, "kind": "well-pump-event-v3-staging-pointer",
+            "schemaVersion": 4, "kind": "well-pump-event-v3-runtime-pointer",
             "siteId": "well-main", "releaseId": release_id, "packageVersion": version,
             "runtimeSchemaVersion": 3, "contentHash": self.logic["_sha256_hex"](raw),
             "hashAlgorithm": "sha256", "byteLength": len(raw.encode("utf-8")),
             "publishedAtMs": 1788048000000,
             "downloadPath": "/.netlify/functions/rules-engine-release?version=3&releaseId=" + release_id,
-            "executionEnabled": False,
+            "executionEnabled": True,
         }
 
-    def test_v3_staging_requires_exact_pointer_bytes_identity_and_disabled_execution(self):
+    def test_v3_staging_requires_exact_pointer_bytes_identity_and_runtime_intent(self):
         raw = self.v3_runtime_body()
         pointer = self.v3_pointer(raw)
         checked, reason = self.logic["validate_rules_v3_staged_release"](raw, pointer)
         self.assertIsNone(reason)
-        self.assertFalse(checked["reference"]["executionEnabled"])
-        pointer["executionEnabled"] = True
+        self.assertNotIn("executionEnabled", checked["reference"])
+        pointer["executionEnabled"] = False
         self.assertIsNone(self.logic["validate_rules_v3_pointer"](pointer))
         pointer = self.v3_pointer(raw)
         pointer["extra"] = False
@@ -800,21 +802,23 @@ class ObservationSelectionTests(unittest.TestCase):
                 {"metadata": pointer, "release": raw}, None,
                 str(staged_path), str(temporary_path))
             self.assertEqual(outcome, "staged")
-            self.assertFalse(staged["reference"]["executionEnabled"])
+            self.assertNotIn("executionEnabled", staged["reference"])
             reloaded, reason = self.logic["load_rules_v3_staged_package"](str(staged_path))
             self.assertIsNone(reason)
             self.assertEqual(reloaded["reference"], staged["reference"])
 
-    def test_v3_state_is_separate_and_v3_validator_has_no_runtime_calls(self):
+    def test_v3_state_distinguishes_running_staged_and_execution(self):
+        running = {"releaseId": "20260830000000-event-v3-v1", "packageVersion": 1,
+                   "runtimeSchemaVersion": 3, "contentHash": "a" * 64}
+        staged = {"releaseId": "20260830000001-event-v3-v2", "packageVersion": 2,
+                  "runtimeSchemaVersion": 3, "contentHash": "b" * 64}
         state = self.logic["rules_v3_state_report"](
-            {"releaseId": "desired"}, {"releaseId": "staged"}, {"reason": "bad"})
-        self.assertFalse(state["executionEnabled"])
-        self.assertEqual(state["desired"]["releaseId"], "desired")
+            running, staged, staged, {"reason": "bad"})
+        self.assertTrue(state["executionEnabled"])
+        self.assertEqual(state["executionState"], "running")
+        self.assertEqual(state["running"]["releaseId"], running["releaseId"])
+        self.assertEqual(state["staged"]["releaseId"], staged["releaseId"])
         source = PILOT_PATH.read_text(encoding="utf-8")
-        v3_block = source[source.index("def _v3_closed"):source.index("def _is_number")]
-        for forbidden in ("evaluate_runtime_", "advance_runtime_", "issue_runtime_stop",
-                          "runtime_direct_field_values", "cloud."):
-            self.assertNotIn(forbidden, v3_block)
         self.assertIn("RULES_RUNTIME_FILE = 'rules-runtime-v2.json'", source)
         self.assertIn("RULES_V3_STAGED_FILE = 'rules-runtime-v3-staged.json'", source)
 

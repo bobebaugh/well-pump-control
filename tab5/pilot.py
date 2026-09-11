@@ -1,4 +1,4 @@
-# Release: 2026-08-30 M6.29 — add the host-tested pure V3 semantic kernel.
+# Release: 2026-09-11 M6.30 — run V3 from trustworthy, restart-only inputs.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -7,9 +7,10 @@
 # Shelly EM + ADS1110 at 1 Hz,
 # publish to Netlify on change or heartbeat, show live status on screen.
 #
-# Observational except for the reviewed STOP-only `PumpEnable: false` rules
-# consequence. Rules can never command Output 0 ON. Battery charge control is
-# the separate exception: an automatic hysteresis policy keeps the pack between
+# V3 may inhibit the relay and may restore its declared normal value only after
+# all owners release and current script lock evidence is exactly zero. It never
+# creates ordinary pump demand; the mechanical switch remains authoritative.
+# Battery charge control is the separate exception: a hysteresis policy keeps the pack between
 # BATTERY_LOW_PCT and BATTERY_HIGH_PCT - see the battery section below.
 
 import M5
@@ -26,6 +27,8 @@ import cloud
 # --- config (values from firmware/tab5/main/pilot_config.h) ---
 SHELLY_EM_URL = 'http://192.168.50.141/emeter/0'
 SHELLY_1_STATUS_URL = 'http://192.168.50.201/rpc/Shelly.GetStatus'
+SHELLY_1_COMPONENTS_URL = ('http://192.168.50.201/rpc/Shelly.GetComponents?'
+                           'dynamic_only=true&include=%5B%22config%22%2C%22status%22%5D')
 SHELLY_1_STOP_URL = 'http://192.168.50.201/rpc/Switch.Set?id=0&on=false'
 SHELLY_1_SWITCH_URL = 'http://192.168.50.201/rpc/Switch.Set?id={}&on={}'
 SAMPLE_PERIOD_MS = 1000
@@ -40,7 +43,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.27'
+SOFTWARE_RELEASE = 'M6.30'
 
 # CPU A validates and adopts the v2 runtime package. CPU B carries only the
 # RTDB pointer and exact downloaded bytes; it never interprets package meaning.
@@ -63,6 +66,8 @@ MATERIAL_EXACT_CHANGE_PATHS = (
     'values.battery_charge_enabled',
     'values.shelly1_sw0',
     'values.shelly1_rly0',
+    'values.shelly1_lock',
+    'values.shelly1_lockout_count',
     'status.adc_available',
     'status.battery_available',
     'status.clock_synced',
@@ -78,6 +83,8 @@ MATERIAL_CHANGE_LABELS = {
     'values.battery_charge_enabled': 'Tab5 battery',
     'values.shelly1_sw0': 'Shelly 1',
     'values.shelly1_rly0': 'Shelly 1',
+    'values.shelly1_lock': 'Shelly 1',
+    'values.shelly1_lockout_count': 'Shelly 1',
     'status.adc_available': 'pressure ADC',
     'status.battery_available': 'Tab5 battery',
     'status.clock_synced': 'Tab5 clock',
@@ -94,7 +101,8 @@ RUNTIME_PACKAGE_KIND = 'well-pump-parameter-runtime'
 RUNTIME_POINTER_KIND = 'well-pump-runtime-release-pointer'
 RUNTIME_SCHEMA_VERSION = 2
 RULES_V3_SCHEMA_VERSION = 3
-RULES_V3_POINTER_KIND = 'well-pump-event-v3-staging-pointer'
+RULES_V3_POINTER_SCHEMA_VERSION = 4
+RULES_V3_POINTER_KIND = 'well-pump-event-v3-runtime-pointer'
 RULES_V3_PACKAGE_KIND = 'well-pump-event-runtime-v3'
 RUNTIME_DIRECT_BINDINGS = {
     'shelly-gen1-em': {
@@ -422,9 +430,28 @@ def _read_json(url):
         return None
 
 
-def read_shelly():
-    """Read the house-side Gen-1 Shelly EM channel."""
-    return _read_json(SHELLY_EM_URL)
+def normalize_shelly_em_status(data):
+    """Accept one complete, source-valid Gen-1 EM record or reject all of it."""
+    if not isinstance(data, dict):
+        return None
+    number_fields = ('power', 'reactive', 'pf', 'voltage', 'total', 'total_returned')
+    if any(not _is_number(data.get(name)) for name in number_fields):
+        return None
+    if data.get('is_valid') is not True:
+        return None
+    if not -1 <= data['pf'] <= 1 or data['voltage'] < 0:
+        return None
+    return {name: data[name] for name in number_fields + ('is_valid',)}
+
+
+def read_shelly(read_json=None):
+    """Read and validate the complete house-side Gen-1 Shelly EM channel."""
+    getter = read_json if callable(read_json) else _read_json
+    try:
+        response = getter(SHELLY_EM_URL)
+    except Exception:
+        response = None
+    return normalize_shelly_em_status(response)
 
 
 def normalize_shelly1_status(data):
@@ -442,9 +469,57 @@ def normalize_shelly1_status(data):
     return {'sw0': sw0, 'rly0': rly0}
 
 
-def read_shelly1():
-    """Read SW0 and RLY0 without changing either one."""
-    return normalize_shelly1_status(_read_json(SHELLY_1_STATUS_URL))
+def normalize_shelly1_components(data):
+    """Discover both named script numbers without assuming dynamic component IDs."""
+    if not isinstance(data, dict) or not isinstance(data.get('components'), list):
+        return None
+    found = {}
+    for component in data['components']:
+        if not isinstance(component, dict):
+            continue
+        key = component.get('key')
+        config = component.get('config')
+        status = component.get('status')
+        if (not isinstance(key, str) or not key.startswith('number:') or
+                not isinstance(config, dict) or not isinstance(status, dict)):
+            continue
+        name = config.get('name')
+        if name in ('IsLocked', 'loCntr'):
+            if name in found:  # ambiguous discovery is not usable evidence
+                return None
+            found[name] = status.get('value')
+    locked = found.get('IsLocked')
+    counter = found.get('loCntr')
+    if (not isinstance(locked, int) or isinstance(locked, bool) or
+            not -1 <= locked <= 86400 or
+            not isinstance(counter, int) or isinstance(counter, bool) or
+            not 0 <= counter <= 3):
+        return None
+    return {'is_locked': locked, 'lockout_count': counter}
+
+
+def normalize_shelly1_cycle(status_data, components_data):
+    """Join two sequential RPC replies into one all-or-unavailable acquisition."""
+    status = normalize_shelly1_status(status_data)
+    components = normalize_shelly1_components(components_data)
+    if status is None or components is None:
+        return None
+    status.update(components)
+    return status
+
+
+def read_shelly1(read_json=None):
+    """Read one two-RPC Shelly cycle; never manipulate its script numbers."""
+    getter = read_json if callable(read_json) else _read_json
+    try:
+        status_data = getter(SHELLY_1_STATUS_URL)
+    except Exception:
+        status_data = None
+    try:
+        components_data = getter(SHELLY_1_COMPONENTS_URL)
+    except Exception:
+        components_data = None
+    return normalize_shelly1_cycle(status_data, components_data)
 
 
 def format_observed_at(clock_is_synced):
@@ -512,6 +587,10 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
             'battery_charge_enabled': battery_charge_is_enabled,
             'shelly1_sw0': shelly1.get('sw0') if isinstance(shelly1, dict) else None,
             'shelly1_rly0': shelly1.get('rly0') if isinstance(shelly1, dict) else None,
+            'shelly1_lock': (shelly1.get('is_locked')
+                             if isinstance(shelly1, dict) else None),
+            'shelly1_lockout_count': (shelly1.get('lockout_count')
+                                      if isinstance(shelly1, dict) else None),
         },
         'status': {
             'shelly_available': shelly_is_available,
@@ -543,6 +622,36 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
             'wifi_disconnect_count': wifi_disconnect_count,
         },
     }
+
+
+def add_transport_evidence(observation, transport_status, current_ticks_ms):
+    """Add only measured CPU-B queue/result evidence needed by the V3 package."""
+    if not isinstance(observation, dict) or not isinstance(transport_status, dict):
+        return observation
+    status = observation.get('status')
+    if not isinstance(status, dict):
+        return observation
+    depth = transport_status.get('durableQueueDepth')
+    capacity = transport_status.get('durableQueueCapacity')
+    lost = transport_status.get('durableRecordsLost')
+    if (isinstance(depth, int) and not isinstance(depth, bool) and depth >= 0 and
+            isinstance(capacity, int) and not isinstance(capacity, bool) and capacity > 0 and
+            depth <= capacity):
+        status['buffer_used_pct'] = (100.0 * depth) / capacity
+    if isinstance(lost, int) and not isinstance(lost, bool) and lost >= 0:
+        status['records_lost'] = lost
+    telemetry_ok = transport_status.get('telemetryLastAttemptOk')
+    rtdb_ok = transport_status.get('rtdbLastAttemptOk')
+    if isinstance(telemetry_ok, bool) and isinstance(rtdb_ok, bool):
+        telemetry_age = transport_age_ms(
+            transport_status, 'telemetryLastSuccessTicksMs', current_ticks_ms)
+        rtdb_age = transport_age_ms(
+            transport_status, 'rtdbLastSuccessTicksMs', current_ticks_ms)
+        status['cloud_available'] = (
+            telemetry_ok and rtdb_ok and _is_number(telemetry_age) and
+            telemetry_age <= CLOUD_TELEMETRY_FRESH_MS and _is_number(rtdb_age) and
+            rtdb_age <= CLOUD_RTDB_FRESH_MS)
+    return observation
 
 
 def new_event_history(depth=EVENT_HISTORY_DEPTH):
@@ -791,6 +900,8 @@ def issue_rules_v3_action(resolved, action, observation):
         return 'unsupported-value:{}'.format(value)
     if observation.get('status', {}).get('shelly1_available') is not True:
         return 'shelly-unavailable'
+    if value is True and observation.get('values', {}).get('shelly1_lock') != 0:
+        return 'lock-evidence-unavailable-or-locked'
     switch_id = spec.get('parameters', {}).get('id', 0)
     url = SHELLY_1_SWITCH_URL.format(switch_id, 'true' if value else 'false')
     try:
@@ -2046,7 +2157,8 @@ def _check_rules_v3_pointer(pointer):
     version = pointer.get('packageVersion')
     release_id = pointer.get('releaseId')
     expected_path = '/.netlify/functions/rules-engine-release?version=3&releaseId={}'.format(release_id)
-    if (pointer.get('schemaVersion') != 3 or pointer.get('kind') != RULES_V3_POINTER_KIND or
+    if (pointer.get('schemaVersion') != RULES_V3_POINTER_SCHEMA_VERSION or
+            pointer.get('kind') != RULES_V3_POINTER_KIND or
             pointer.get('siteId') != SITE_ID or not _v3_integer(version) or version < 1 or
             not isinstance(release_id, str) or release_id != '{}-event-v3-v{}'.format(release_id[:14], version) or
             not release_id[:14].isdigit() or pointer.get('runtimeSchemaVersion') != 3 or
@@ -2054,7 +2166,7 @@ def _check_rules_v3_pointer(pointer):
             not _v3_integer(pointer.get('byteLength')) or
             not 1 <= pointer['byteLength'] <= MAX_RULES_RELEASE_BYTES or
             not _v3_integer(pointer.get('publishedAtMs')) or pointer['publishedAtMs'] < 0 or
-            pointer.get('downloadPath') != expected_path or pointer.get('executionEnabled') is not False):
+            pointer.get('downloadPath') != expected_path or pointer.get('executionEnabled') is not True):
         return None, 'pointer-invalid'
     return dict(pointer), None
 
@@ -2099,7 +2211,7 @@ def validate_rules_v3_staged_release(raw_release, pointer=None):
         return None, 'release-pointer-mismatch'
     reference = {'releaseId': package['releaseId'], 'packageVersion': package['packageVersion'],
                  'runtimeSchemaVersion': 3, 'contentHash': content_hash,
-                 'executionEnabled': False}
+                 'version': package['packageVersion']}
     return {'package': package, 'reference': reference, 'pointer': normalized}, None
 
 
@@ -2140,15 +2252,79 @@ def stage_rules_v3_release(candidate, staged_reference,
     return checked, 'staged'
 
 
-def rules_v3_state_report(desired=None, staged=None, rejected=None):
-    """Describe staging only; V3 execution is permanently disabled at Gate 1."""
+def _rules_v3_reference(value):
+    if not isinstance(value, dict):
+        return None
+    required = ('releaseId', 'packageVersion', 'runtimeSchemaVersion', 'contentHash')
+    if any(name not in value for name in required):
+        return None
+    return {name: value[name] for name in required}
+
+
+def rules_v3_state_report(running=None, desired=None, staged=None, rejected=None):
+    """Report distinct runtime and next-restart package identities truthfully."""
+    running_reference = _rules_v3_reference(running)
     return {
-        'kind': 'rules-v3-staging-state',
-        'executionEnabled': False,
-        'desired': dict(desired) if isinstance(desired, dict) else None,
-        'staged': dict(staged) if isinstance(staged, dict) else None,
+        'kind': 'rules-v3-runtime-state',
+        'executionEnabled': running_reference is not None,
+        'executionState': ('running' if running_reference is not None else 'unavailable'),
+        'running': running_reference,
+        'desired': _rules_v3_reference(desired),
+        'staged': _rules_v3_reference(staged),
         'rejected': dict(rejected) if isinstance(rejected, dict) else None,
     }
+
+
+def _rules_v3_runtime_supported(package):
+    """Reject schema-valid declarations that this device application cannot execute."""
+    for device in package.get('devices', []):
+        bindings = RUNTIME_DIRECT_BINDINGS.get(device.get('driver'))
+        if not isinstance(bindings, dict):
+            return False
+        for field in device.get('fields', []):
+            binding = bindings.get(field.get('object'))
+            if binding != (field.get('type'), field.get('unit'), field.get('access')):
+                return False
+            if field.get('access') == 'readWrite':
+                write = field.get('write')
+                if (device.get('driver') != 'shelly-gen4-switch' or
+                        not isinstance(write, dict) or write.get('method') != 'Switch.Set' or
+                        write.get('parameters') != {'id': 0, 'valueParameter': 'on'} or
+                        write.get('normalValue') is not True):
+                    return False
+    for calculation in package.get('calculations', []):
+        if calculation.get('kind') == 'expression':
+            if calculation.get('output', {}).get('type') != 'number':
+                return False
+        elif calculation.get('kind') == 'function':
+            parameters = calculation.get('parameters', {})
+            outputs = calculation.get('outputs', [])
+            if (calculation.get('functionId') != 'boyle_tank' or
+                    len(outputs) != 5 or
+                    [item.get('type') for item in outputs] !=
+                    ['number', 'number', 'number', 'number', 'enum'] or
+                    not _v3_number(parameters.get('effectiveTankGallons')) or
+                    parameters['effectiveTankGallons'] <= 0 or
+                    not _v3_number(parameters.get('atmosphericPressurePsi')) or
+                    parameters['atmosphericPressurePsi'] <= 0 or
+                    not _v3_number(parameters.get('prechargeGaugePsi')) or
+                    not _v3_number(parameters.get('regressionWindowSeconds')) or
+                    parameters['regressionWindowSeconds'] <= 0 or
+                    not _v3_integer(parameters.get('minimumSamples')) or
+                    parameters['minimumSamples'] < 2):
+                return False
+            required_quality = {
+                'VALID', 'INSUFFICIENT_HISTORY', 'PRESSURE_INVALID',
+                'SAMPLE_GAP', 'TREND_UNRESOLVED', 'TANK_MODEL_INVALID'}
+            if set(outputs[4].get('enumValues') or ()) != required_quality:
+                return False
+        else:
+            return False
+    for event in package.get('events', []):
+        summary = event.get('summary', {})
+        if summary.get('durationOutput') is not None or summary.get('aggregates'):
+            return False
+    return True
 
 
 def resolve_rules_v3_package(package):
@@ -2158,7 +2334,7 @@ def resolve_rules_v3_package(package):
             package = ujson.loads(package)
         except Exception:
             return None
-    if not _rules_v3_package_valid(package):
+    if not _rules_v3_package_valid(package) or not _rules_v3_runtime_supported(package):
         return None
     devices = {}
     writable = {}
@@ -2200,6 +2376,27 @@ def resolve_rules_v3_package(package):
             operating_mode_target = field['systemName']
     pump_target = 'PumpEnable' if 'PumpEnable' in writable else None
     lock_field = 'IsLocked' if 'IsLocked' in field_types else None
+    available = set(field['systemName'] for device in package['devices']
+                    for field in device['fields'])
+    available.update(field['systemName'] for field in package['systemFields'])
+    remaining = list(package['calculations'])
+    calculation_plan = []
+    while remaining:
+        progressed = False
+        for calculation in list(remaining):
+            dependencies = ([token[1] for token in calculation.get('program', [])
+                             if token[0] == 'field']
+                            if calculation['kind'] == 'expression' else
+                            [calculation['inputs']['pressure']])
+            if all(name in available for name in dependencies):
+                calculation_plan.append(calculation)
+                outputs = ([calculation['output']] if calculation['kind'] == 'expression'
+                           else calculation['outputs'])
+                available.update(output['systemName'] for output in outputs)
+                remaining.remove(calculation)
+                progressed = True
+        if not progressed:
+            return None
     return {
         'releaseId': package['releaseId'],
         'packageVersion': package['packageVersion'],
@@ -2211,6 +2408,7 @@ def resolve_rules_v3_package(package):
         'operatingModeTarget': operating_mode_target,
         'pumpTarget': pump_target,
         'lockField': lock_field,
+        'calculations': calculation_plan,
     }
 
 
@@ -2253,6 +2451,155 @@ def freeze_rules_v3_snapshot(resolved, device_records, system_values=None):
                     _v3_typed_value(value, checked['type'], checked.get('enumValues'))):
                 snapshot[name] = value
     return snapshot
+
+
+def collect_rules_v3_device_records(resolved, observation):
+    """Atomically accept each enabled device from this cycle's observation only."""
+    accepted = {}
+    unavailable = []
+    for device_id, device in resolved.get('devices', {}).items():
+        if device.get('enabled') is not True:
+            continue
+        record = {}
+        for field in device.get('fields', []):
+            driver = device.get('driver')
+            path = (field.get('object') if driver == 'tab5-runtime' else
+                    RUNTIME_OBJECT_PATHS.get(driver, {}).get(field.get('object')))
+            if isinstance(path, str):
+                record[field['object']] = runtime_observation_path_value(observation, path)
+        checked = accept_rules_v3_device_record(resolved, device_id, record)
+        if checked is None:
+            unavailable.append(device_id)
+        else:
+            accepted[device_id] = checked
+    return accepted, unavailable
+
+
+def new_rules_v3_calculation_state():
+    return {'histories': {}}
+
+
+def _rules_v3_linear_slope(history):
+    if not isinstance(history, list) or len(history) < 2:
+        return None
+    origin = history[-1][0]
+    points = [(time.ticks_diff(item[0], origin) / 1000.0, item[1])
+              for item in history]
+    mean_x = sum(item[0] for item in points) / len(points)
+    mean_y = sum(item[1] for item in points) / len(points)
+    denominator = sum((item[0] - mean_x) ** 2 for item in points)
+    if denominator <= 0:
+        return None
+    return (sum((item[0] - mean_x) * (item[1] - mean_y)
+                for item in points) / denominator) * 60.0
+
+
+def _rules_v3_boyle_outputs(calculation, fields, state, now_ms):
+    """Evaluate the package's five positional Boyle outputs from real tick history."""
+    parameters = calculation['parameters']
+    outputs = calculation['outputs']
+    names = [item['systemName'] for item in outputs]
+    result = {names[4]: 'TANK_MODEL_INVALID'}
+    volume = parameters['effectiveTankGallons']
+    precharge = parameters['prechargeGaugePsi']
+    atmosphere = parameters['atmosphericPressurePsi']
+    window_ms = int(parameters['regressionWindowSeconds'] * 1000)
+    minimum_samples = parameters['minimumSamples']
+    if (volume <= 0 or atmosphere <= 0 or precharge + atmosphere <= 0 or
+            window_ms <= 0 or minimum_samples < 2):
+        return result
+    pressure = fields.get(calculation['inputs']['pressure'])
+    if (not _v3_number(pressure) or pressure + atmosphere <= 0):
+        result[names[4]] = 'PRESSURE_INVALID'
+        return result
+    air_gallons = volume * (precharge + atmosphere) / (pressure + atmosphere)
+    water_gallons = volume - air_gallons
+    if water_gallons < 0 or water_gallons > volume:
+        result[names[4]] = 'PRESSURE_INVALID'
+        return result
+    result[names[0]] = water_gallons
+    histories = state.setdefault('histories', {})
+    history = histories.setdefault(calculation['id'], [])
+    history.append((now_ms, pressure))
+    tolerance_ms = 350
+    history[:] = [item for item in history
+                  if 0 <= time.ticks_diff(now_ms, item[0]) <= window_ms + tolerance_ms]
+    if len(history) < minimum_samples:
+        result[names[4]] = 'INSUFFICIENT_HISTORY'
+        return result
+    ordered = sorted(history, key=lambda item: time.ticks_diff(item[0], now_ms))
+    ages = [time.ticks_diff(now_ms, item[0]) for item in ordered]
+    if max(ages) < max(0, window_ms - tolerance_ms):
+        result[names[4]] = 'INSUFFICIENT_HISTORY'
+        return result
+    forward = ordered
+    if any(time.ticks_diff(forward[index][0], forward[index - 1][0]) > 2500
+           for index in range(1, len(forward))):
+        result[names[4]] = 'SAMPLE_GAP'
+        return result
+    slope = _rules_v3_linear_slope(forward)
+    if slope is None:
+        result[names[4]] = 'TREND_UNRESOLVED'
+        return result
+    dwater_dpressure = volume * (precharge + atmosphere) / ((pressure + atmosphere) ** 2)
+    net_flow = dwater_dpressure * slope
+    result.update({names[1]: slope, names[2]: net_flow,
+                   names[3]: max(0.0, -net_flow), names[4]: 'VALID'})
+    return result
+
+
+def evaluate_rules_v3_calculations(resolved, fields, state, now_ms):
+    """Run the resolved V3 plan and preserve unavailable-input propagation."""
+    values = dict(fields) if isinstance(fields, dict) else {}
+    state = state if isinstance(state, dict) else new_rules_v3_calculation_state()
+    for calculation in resolved.get('calculations', []):
+        if calculation['kind'] == 'expression':
+            value = evaluate_runtime_program(calculation['program'], values)
+            if _v3_number(value):
+                values[calculation['output']['systemName']] = value
+        elif calculation['kind'] == 'function':
+            values.update(_rules_v3_boyle_outputs(calculation, values, state, now_ms))
+        else:
+            raise ValueError('unsupported V3 calculation')
+    return values, state
+
+
+def start_rules_v3_runtime(path=RULES_V3_STAGED_FILE):
+    """Adopt the last valid staged file only at process start with fresh state."""
+    checked, reason = load_rules_v3_staged_package(path)
+    if checked is None:
+        return None, reason
+    resolved = resolve_rules_v3_package(checked['package'])
+    if resolved is None:
+        return None, 'release-runtime-unsupported'
+    return {
+        'package': checked['package'], 'reference': checked['reference'],
+        'resolved': resolved, 'kernel': restart_rules_v3_kernel(resolved),
+        'calculations': new_rules_v3_calculation_state(),
+    }, None
+
+
+def run_rules_v3_cycle(runtime, observation, now_ms, occurrences=None,
+                       clear_event_ids=None):
+    """Run one integrated atomic-input, calculation, snapshot, and V3 event cycle."""
+    if not isinstance(runtime, dict) or not isinstance(observation, dict):
+        raise ValueError('invalid V3 application cycle')
+    resolved = runtime['resolved']
+    device_records, unavailable = collect_rules_v3_device_records(resolved, observation)
+    inputs = freeze_rules_v3_snapshot(resolved, device_records)
+    calculated, calculation_state = evaluate_rules_v3_calculations(
+        resolved, inputs, runtime.get('calculations'), now_ms)
+    snapshot = dict(calculated)  # one cycle image shared by every event
+    kernel, actions, records = advance_rules_v3_kernel(
+        resolved, runtime.get('kernel'), snapshot, now_ms,
+        occurrences=occurrences, clear_event_ids=clear_event_ids)
+    runtime['kernel'] = kernel
+    runtime['calculations'] = calculation_state
+    return {
+        'snapshot': snapshot, 'actions': actions, 'records': records,
+        'acceptedDeviceIds': list(device_records.keys()),
+        'unavailableDeviceIds': unavailable,
+    }
 
 
 def rules_v3_condition_value(condition, fields, previous_fields=None, occurrences=None):
@@ -2653,11 +3000,11 @@ def rules_alignment_status(adopted_reference, published_reference):
 
 
 def shelly_local_lock_status(shelly1_available, reported_lock=None):
-    """Reserve the later Shelly flag contract without inventing lock state."""
+    """Display only current script-supplied lock evidence."""
     if not shelly1_available:
         return 'UNAVAILABLE'
-    if reported_lock in ('NORMAL', 'LOCKED'):
-        return reported_lock
+    if isinstance(reported_lock, int) and not isinstance(reported_lock, bool):
+        return 'NORMAL' if reported_lock == 0 else 'LOCKED'
     return 'NOT REPORTED'
 
 
@@ -2789,7 +3136,8 @@ def build_now_hmi_model(observation, transport_status=None,
         'pressure_psi': pressure_psi,
         'pressure_status': pressure_status,
         'shelly1': shelly1_text,
-        'shelly_lock': shelly_local_lock_status(shelly1_available),
+        'shelly_lock': shelly_local_lock_status(
+            shelly1_available, values.get('shelly1_lock')),
         'shelly_age_ms': shelly_age_ms,
         'shelly1_age_ms': shelly1_age_ms,
         'adc_age_ms': adc_age_ms,
@@ -2813,13 +3161,14 @@ def build_now_hmi_model(observation, transport_status=None,
                           else 'yellow'
                           if _is_number(adc_age_ms) and
                           adc_age_ms <= STALE_AFTER_MS else 'red'),
+        'event_engine': status.get('rules_runtime_state', 'UNAVAILABLE'),
     }
 
 
 def build_system_hmi_model(observation, adopted_reference, rules_package,
                            published_reference=None, transport_status=None,
                            current_ticks_ms=None):
-    """Create system status; override and rule processing remain unavailable."""
+    """Create truthful V3 runtime status without adding HMI control commands."""
     if not isinstance(observation, dict):
         observation = {}
     values = observation.get('values')
@@ -2835,7 +3184,7 @@ def build_system_hmi_model(observation, adopted_reference, rules_package,
     return {
         'release': SOFTWARE_RELEASE,
         'collection': 'ACTIVE',
-        'rule_engine': ('PACKAGE ADOPTION ONLY' if isinstance(adopted_reference, dict)
+        'rule_engine': ('V3 RUNNING' if isinstance(adopted_reference, dict)
                         else 'RULES UNAVAILABLE'),
         'system_override': 'NOT AVAILABLE',
         'wifi': 'UP' if status.get('wifi_connected') is True else 'DOWN',
@@ -2873,18 +3222,23 @@ def build_system_hmi_model(observation, adopted_reference, rules_package,
 
 
 def build_events_hmi_model(observation):
-    """Reserve event and override surfaces without inventing M7 state."""
+    """Show only the active V3 state presently available in CPU-A memory."""
     if not isinstance(observation, dict):
         observation = {}
     status = observation.get('status')
     status = status if isinstance(status, dict) else {}
     shelly1_available = status.get('shelly1_available') is True
+    active = status.get('v3_active_event_ids')
+    active = active if isinstance(active, list) else None
     return {
-        'event_engine': 'NOT IMPLEMENTED',
-        'active_events': 'UNAVAILABLE',
+        'event_engine': status.get('rules_runtime_state', 'UNAVAILABLE'),
+        'active_events': (', '.join(active) if active else
+                          'NONE' if active is not None else 'UNAVAILABLE'),
         'event_override': 'NOT AVAILABLE',
         'system_override': 'NOT AVAILABLE',
-        'shelly_lock': shelly_local_lock_status(shelly1_available),
+        'shelly_lock': shelly_local_lock_status(
+            shelly1_available,
+            observation.get('values', {}).get('shelly1_lock')),
         'shelly_override': 'NOT AVAILABLE',
     }
 
@@ -2980,7 +3334,7 @@ def _draw_page_frame(page):
              'WELL PUMP - EVENTS' if page == HMI_PAGE_EVENTS else
              'WELL PUMP - SYSTEM')
     draw_label(title, 40, 22, M5.Lcd.FONTS.DejaVu40, WHITE)
-    draw_label('{}  OBSERVE ONLY'.format(SOFTWARE_RELEASE), 965, 36,
+    draw_label('{}  V3 PILOT'.format(SOFTWARE_RELEASE), 965, 36,
                M5.Lcd.FONTS.Montserrat18, CYAN)
     _draw_navigation(page)
 
@@ -3024,7 +3378,7 @@ def render_now(model):
                 M5.Lcd.FONTS.DejaVu40, cache_key='now.data_age')
     draw_label('COMMUNICATIONS', 665, 465, M5.Lcd.FONTS.Montserrat18, CYAN)
     _draw_communications(model)
-    _draw_field('EVENT ENGINE: NOT IMPLEMENTED', 45, 575, 1190, 35,
+    _draw_field('EVENT ENGINE: {}'.format(model['event_engine']), 45, 575, 1190, 35,
                 M5.Lcd.FONTS.Montserrat24, YELLOW, 'now.event')
 
 
@@ -3052,7 +3406,7 @@ def render_system(model):
                 _indicator_color(model['cloud_state']), 'system.cloud')
 
     draw_label('RULES PACKAGE', 45, 315, M5.Lcd.FONTS.Montserrat18, CYAN)
-    adopted = 'ADOPTED v{} {}'.format(
+    adopted = 'RUNNING v{} {}'.format(
         model['adopted_version'] if model['adopted_version'] is not None else '?',
         model['adopted_hash_prefix'] or 'UNKNOWN')
     published = 'PUBLISHED v{} {}'.format(
@@ -3107,7 +3461,7 @@ def render_events(model):
                 665, 370, 570, 42, M5.Lcd.FONTS.Montserrat24, YELLOW,
                 'events.shelly_override')
 
-    _draw_field('NO EVENT OR OVERRIDE ACTION IS IMPLEMENTED',
+    _draw_field('V3 EVENTS ACTIVE; COMMANDS AND RETAINED EVENT BROWSER PENDING',
                 45, 480, 1190, 42, M5.Lcd.FONTS.Montserrat24, YELLOW,
                 'events.boundary')
     _draw_field('HISTORY AND PARAMETERS ARE MANAGED ON THE WEB APP',
@@ -3817,62 +4171,41 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.19: touch serviced throughout acquisition cycle')
+log('CPU A release M6.30: V3 is the sole event and device-write authority')
 
-_installed_runtime, _runtime_error = load_runtime_package()
-active_rules = None
-active_rules_reference = None
-rules_runtime_state = 'UNAVAILABLE'
-rules_runtime_reason = _runtime_error
-if _installed_runtime is not None:
-    active_rules = _installed_runtime['package']
-    active_rules_reference = _installed_runtime['reference']
-    rules_runtime_state = 'ADOPTED'
-    rules_runtime_reason = None
-    if not cloud.set_applied_rules(active_rules_reference):
-        raise RuntimeError('validated runtime reference handoff failed')
-    log('Rules runtime loaded: release={}, hash={}'.format(
-        active_rules_reference['releaseId'], active_rules_reference['contentHash'][:12]))
-else:
-    # v1 rules.json is intentionally not a fallback.  CPU A remains
-    # observational and cannot evaluate or request consequences until an
-    # intact v2 runtime package has been adopted.
-    log('Rules runtime unavailable: {}'.format(_runtime_error))
-
-# The staged V3 file is reloaded and ADOPTED into a live semantic kernel.
-_staged_rules_v3, _rules_v3_error = load_rules_v3_staged_package()
-rules_v3_resolved = None
-rules_v3_kernel_state = None
+# The last validated staged V3 file becomes running only across this restart
+# boundary. A later download can replace the staged file, never this object.
+rules_v3_runtime, _rules_v3_error = start_rules_v3_runtime()
 rules_v3_last_actions = []
 rules_v3_last_mode = 'Normal'
 rules_v3_desired_reference = None
 rules_v3_staged_reference = None
+rules_v3_running_reference = None
 rules_v3_rejected = None
-if _staged_rules_v3 is not None:
-    rules_v3_staged_reference = _staged_rules_v3['reference']
-    log('V3 rules staged file reloaded: release={}, hash={}'.format(
-        rules_v3_staged_reference['releaseId'],
-        rules_v3_staged_reference['contentHash'][:12]))
-    rules_v3_resolved = resolve_rules_v3_package(_staged_rules_v3['package'])
-    if rules_v3_resolved is None:
-        log('V3 ENGINE: resolve FAILED - package will not run')
-    else:
-        rules_v3_kernel_state = new_rules_v3_kernel(rules_v3_resolved)
-        _v3_enabled = [e['id'] for e in rules_v3_resolved['events']
-                       if e.get('enabled') is True]
-        log('V3 ENGINE ACTIVE: release={} version={}'.format(
-            rules_v3_resolved['releaseId'], rules_v3_resolved['packageVersion']))
-        log('V3 ENGINE: enabled events={} pumpTarget={} lockField={} modeTarget={}'.format(
-            _v3_enabled, rules_v3_resolved.get('pumpTarget'),
-            rules_v3_resolved.get('lockField'),
-            rules_v3_resolved.get('operatingModeTarget')))
-        log('V3 ENGINE: writable targets={}'.format(
-            list(rules_v3_resolved.get('writableTargets', {}).keys())))
+active_rules = None
+active_rules_reference = None
+rules_runtime_state = 'UNAVAILABLE'
+rules_runtime_reason = _rules_v3_error
+if rules_v3_runtime is not None:
+    active_rules = rules_v3_runtime['package']
+    active_rules_reference = rules_v3_runtime['reference']
+    rules_v3_running_reference = active_rules_reference
+    rules_v3_staged_reference = active_rules_reference
+    rules_runtime_state = 'RUNNING V3'
+    rules_runtime_reason = None
+    if not cloud.set_applied_rules(active_rules_reference):
+        raise RuntimeError('validated V3 runtime reference handoff failed')
+    rules_v3_last_mode = rules_v3_effective_mode(
+        rules_v3_runtime['resolved'], rules_v3_runtime['kernel'])
+    log('V3 ENGINE RUNNING: release={} version={} hash={}'.format(
+        active_rules_reference['releaseId'], active_rules_reference['packageVersion'],
+        active_rules_reference['contentHash'][:12]))
 else:
     rules_v3_rejected = {'reason': _rules_v3_error}
-    log('V3 rules staged file unavailable: {}'.format(_rules_v3_error))
+    log('V3 ENGINE UNAVAILABLE: {}'.format(_rules_v3_error))
 cloud.set_rules_v3_state(rules_v3_state_report(
-    rules_v3_desired_reference, rules_v3_staged_reference, rules_v3_rejected))
+    rules_v3_running_reference, rules_v3_desired_reference,
+    rules_v3_staged_reference, rules_v3_rejected))
 
 # Assume charging is permitted until the first battery poll below says otherwise -
 # M5.Power has no getter for the enable pin itself (only isCharging(), which reflects
@@ -3903,12 +4236,10 @@ shelly_availability_confirmation = new_shelly_availability_confirmation()
 shelly1_availability_confirmation = new_shelly_availability_confirmation()
 last_durable_observation = None
 last_durable_observation_ms = None
-next_rules_request_ms = 0
 next_rules_v3_request_ms = 0
 published_rules_reference = None
-event_board = {}
 
-log('Operational HMI foundation initialized; no event or control authority')
+log('Operational HMI initialized; V3 runs only when a valid startup package exists')
 render_hmi(hmi_page, {}, active_rules_reference, active_rules,
            published_rules_reference)
 
@@ -3929,9 +4260,8 @@ while True:
         shelly_resume_confirmation_pending = True
         shelly1_resume_confirmation_pending = True
 
-    # V3 staging is a sealed path.  These bytes are never supplied to V2 and
-    # never reach field resolution, qualification, events, ownership, Monitor,
-    # guarded actions, records, or device writes in this Gate 1 release.
+    # Downloads may replace only the next-restart staged file. They never
+    # replace rules_v3_runtime or its volatile event/ownership state here.
     rules_v3_pointer = cloud.take_rules_v3_pointer()
     if rules_v3_pointer is not None:
         v3_metadata = validate_rules_v3_pointer(rules_v3_pointer)
@@ -3944,8 +4274,9 @@ while True:
                 'packageVersion': v3_metadata['packageVersion'],
                 'runtimeSchemaVersion': 3,
                 'contentHash': v3_metadata['contentHash'],
-                'executionEnabled': False,
             }
+            published_rules_reference = dict(rules_v3_desired_reference)
+            published_rules_reference['version'] = v3_metadata['packageVersion']
             rules_v3_rejected = None
             if (rules_v3_staged_reference is None or
                     rules_v3_staged_reference.get('contentHash') !=
@@ -3956,7 +4287,8 @@ while True:
                     log('V3 staging release request queued: {}'.format(
                         v3_metadata['releaseId']))
         cloud.set_rules_v3_state(rules_v3_state_report(
-            rules_v3_desired_reference, rules_v3_staged_reference, rules_v3_rejected))
+            rules_v3_running_reference, rules_v3_desired_reference,
+            rules_v3_staged_reference, rules_v3_rejected))
     v3_candidate = cloud.take_rules_v3_release()
     if v3_candidate is not None:
         staged_v3, v3_outcome = stage_rules_v3_release(
@@ -3979,64 +4311,8 @@ while True:
             }
             log('V3 staging release rejected: {}'.format(v3_outcome))
         cloud.set_rules_v3_state(rules_v3_state_report(
-            rules_v3_desired_reference, rules_v3_staged_reference, rules_v3_rejected))
-
-    # CPU B exposes the RTDB pointer and later an exact downloaded body. CPU A
-    # decides whether it is safe to request, validate, and adopt the release;
-    # it never waits for either network operation.
-    rules_pointer = cloud.take_rules_pointer()
-    if rules_pointer is not None:
-        metadata = validate_runtime_pointer(rules_pointer)
-        if metadata is None:
-            rules_runtime_state = 'REJECTED'
-            rules_runtime_reason = runtime_pointer_rejection_reason(rules_pointer)
-            log('Runtime pointer ignored: {} [keys={}]'.format(
-                rules_runtime_reason, runtime_pointer_key_summary(rules_pointer)))
-        else:
-            published_rules_reference = {
-                'releaseId': metadata['releaseId'],
-                'packageVersion': metadata['packageVersion'],
-                'runtimeSchemaVersion': metadata['runtimeSchemaVersion'],
-                'version': metadata['packageVersion'],
-                'contentHash': metadata['contentHash'],
-            }
-        if (metadata is not None and
-                (active_rules_reference is None or
-                 metadata.get('contentHash') != active_rules_reference.get('contentHash')) and
-                time.ticks_diff(now, next_rules_request_ms) >= 0):
-            log('Runtime pointer accepted: release={}'.format(metadata['releaseId']))
-            if cloud.request_rules_release(metadata):
-                next_rules_request_ms = time.ticks_add(now, RULES_FETCH_RETRY_MS)
-                log('Runtime release request queued for CPU B')
-    release_candidate = cloud.take_rules_release()
-    if release_candidate is not None:
-        candidate_metadata = validate_runtime_pointer(
-            release_candidate.get('metadata') if isinstance(release_candidate, dict) else None)
-        adopted, outcome = adopt_runtime_release(
-            release_candidate, active_rules_reference)
-        if adopted is not None and outcome == 'adopted':
-            active_rules = adopted['package']
-            active_rules_reference = adopted['reference']
-            rules_runtime_state = 'ADOPTED'
-            rules_runtime_reason = None
-            # A new package begins with no inherited events.  The evaluator is
-            # deliberately not enabled in this acceptance release, so there
-            # are no events to migrate or consequences to issue.
-            event_board, closed_by_sync = clear_runtime_event_board(event_board)
-            for transition in closed_by_sync:
-                log('Runtime event closed on package sync: {}'.format(
-                    transition['eventId']))
-            if not cloud.set_applied_rules(active_rules_reference):
-                raise RuntimeError('adopted runtime reference handoff failed')
-            log('Runtime release adopted: release={}, hash={}'.format(
-                active_rules_reference['releaseId'],
-                active_rules_reference['contentHash'][:12]))
-        elif outcome != 'already-active':
-            # The last validated v2 file remains active. A later coordination
-            # pass may retry; this field-level reason is visible on the HMI.
-            rules_runtime_state = 'REJECTED'
-            rules_runtime_reason = outcome
-            log('Runtime release rejected: {}'.format(outcome))
+            rules_v3_running_reference, rules_v3_desired_reference,
+            rules_v3_staged_reference, rules_v3_rejected))
 
     # The five fresh 15-SPS conversions occupy a material portion of every
     # cycle. Service touch inside their DRDY waits instead of limiting touch
@@ -4116,59 +4392,43 @@ while True:
         shelly1_sample, shelly1_sample is not None,
         shelly1_poll_attempted, last_valid_shelly1_ms,
         shelly1_failure_count, ads_raw_count=ads_raw_count)
+    transport_status = cloud.transport_status_snapshot()
+    add_transport_evidence(observation, transport_status, observation_ticks_ms)
     observation['status']['rules_runtime_state'] = rules_runtime_state
     observation['status']['rules_runtime_reason'] = rules_runtime_reason
     runtime_logging_changes = []
-    if active_rules is not None:
-        runtime_values = runtime_direct_field_values(active_rules, observation)
-        evaluate_runtime_calculations(active_rules, runtime_values)
-        # Named values are additive to the complete observation envelope. This
-        # is how the published package's ADC-count pressure expression becomes
-        # visible without a second voltage conversion or a cloud calculation.
-        observation['values'].update(runtime_values)
-        event_board, runtime_transitions = evaluate_runtime_events(
-            active_rules, event_board, runtime_values, observation_ticks_ms)
-        events_by_id = {event.get('id'): event for event in active_rules.get('events', [])
-                        if isinstance(event, dict) and isinstance(event.get('id'), str)}
-        # Event records remain a later work unit. The only permitted device
-        # consequence is one reviewed STOP request on an opening transition.
-        for transition in runtime_transitions:
-            log('Runtime event {}: {}'.format(
-                transition['type'], transition['eventId']))
-            event = events_by_id.get(transition['eventId'])
-            if transition['type'] == 'open' and runtime_stop_only_action(event):
-                outcome = issue_runtime_stop(observation)
-                log('Runtime STOP {}: {}'.format(transition['eventId'], outcome))
-        if last_durable_observation is not None:
-            runtime_logging_changes = runtime_logging_change_details(
-                runtime_values, last_durable_observation.get('values', {}),
-                runtime_logging_policies(active_rules))
-    # --- V3 semantic kernel: evaluate and act -------------------------------
-    if rules_v3_resolved is not None and rules_v3_kernel_state is not None:
-        # No Shelly lockout script is installed yet, so there is no UDF to read.
-        # Report 0 (not locked) whenever the Shelly answered, and leave it
-        # absent when it did not, so missing evidence stays missing.
-        if observation['status'].get('shelly1_available') is True:
-            observation['values']['shelly1_lock'] = 0
-        v3_fields = rules_v3_field_values(rules_v3_resolved, observation)
+    if rules_v3_runtime is not None:
         v3_actions = []
         v3_records = []
         try:
-            rules_v3_kernel_state, v3_actions, v3_records = advance_rules_v3_kernel(
-                rules_v3_resolved, rules_v3_kernel_state, v3_fields,
-                observation_ticks_ms)
+            v3_cycle = run_rules_v3_cycle(
+                rules_v3_runtime, observation, observation_ticks_ms)
+            v3_actions = v3_cycle['actions']
+            v3_records = v3_cycle['records']
+            observation['values'].update(v3_cycle['snapshot'])
+            observation['status']['v3_unavailable_devices'] = v3_cycle['unavailableDeviceIds']
+            observation['status']['v3_active_event_ids'] = [
+                event_id for event_id, state in
+                rules_v3_runtime['kernel']['events'].items()
+                if state.get('active') is True]
+            if last_durable_observation is not None:
+                runtime_logging_changes = runtime_logging_change_details(
+                    v3_cycle['snapshot'], last_durable_observation.get('values', {}),
+                    runtime_logging_policies(active_rules))
         except Exception as v3_error:
             log('V3 ENGINE ERROR: {}'.format(v3_error))
         for record in v3_records:
             log('V3 EVENT {}: id={} instance={} reason={}'.format(
                 str(record.get('type')).upper(), record.get('eventId'),
                 record.get('eventInstanceId'), record.get('reason')))
-        mode_now = rules_v3_effective_mode(rules_v3_resolved, rules_v3_kernel_state)
+        mode_now = rules_v3_effective_mode(
+            rules_v3_runtime['resolved'], rules_v3_runtime['kernel'])
         if mode_now != rules_v3_last_mode:
             log('V3 MODE: {} -> {}'.format(rules_v3_last_mode, mode_now))
             rules_v3_last_mode = mode_now
         if v3_actions:
-            keep, dropped = rules_v3_collapse_actions(rules_v3_resolved, v3_actions)
+            keep, dropped = rules_v3_collapse_actions(
+                rules_v3_runtime['resolved'], v3_actions)
             for action in dropped:
                 log('V3 ACTION DROPPED (conflict): {}={} reason={}'.format(
                     action.get('target'), action.get('value'), action.get('reason')))
@@ -4180,7 +4440,7 @@ while True:
                     action.get('target'), action.get('value'),
                     action.get('reason'), action.get('eventId')))
                 outcome = issue_rules_v3_action(
-                    rules_v3_resolved, action, observation)
+                    rules_v3_runtime['resolved'], action, observation)
                 log('V3 ACTION ISSUED: {}={} -> {}'.format(
                     signature[0], signature[1], outcome))
                 if outcome == 'issued':

@@ -180,7 +180,7 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertEqual(model["cloud_indicator"], "green")
         self.assertEqual(model["adc_indicator"], "green")
 
-    def test_system_model_does_not_claim_unimplemented_authority(self):
+    def test_system_model_reports_running_v3_without_override_authority(self):
         adopted_hash = "aeca11754cae" + ("1" * 52)
         adopted = {"version": 2, "contentHash": adopted_hash}
         model = self.logic["build_system_hmi_model"](
@@ -191,7 +191,7 @@ class HmiFoundationTests(unittest.TestCase):
             10000,
         )
         self.assertEqual(model["collection"], "ACTIVE")
-        self.assertEqual(model["rule_engine"], "PACKAGE ADOPTION ONLY")
+        self.assertEqual(model["rule_engine"], "V3 RUNNING")
         self.assertEqual(model["system_override"], "NOT AVAILABLE")
         self.assertEqual(model["pressure"], "NOT COMMISSIONED")
         self.assertEqual(model["rules_status"], "ACTIVE")
@@ -203,9 +203,12 @@ class HmiFoundationTests(unittest.TestCase):
         )
 
     def test_events_model_is_truthful_and_has_no_override_authority(self):
-        model = self.logic["build_events_hmi_model"](observation())
-        self.assertEqual(model["event_engine"], "NOT IMPLEMENTED")
-        self.assertEqual(model["active_events"], "UNAVAILABLE")
+        sample = observation()
+        sample["status"].update({"rules_runtime_state": "RUNNING V3",
+                                 "v3_active_event_ids": ["E007"]})
+        model = self.logic["build_events_hmi_model"](sample)
+        self.assertEqual(model["event_engine"], "RUNNING V3")
+        self.assertEqual(model["active_events"], "E007")
         self.assertEqual(model["event_override"], "NOT AVAILABLE")
         self.assertEqual(model["system_override"], "NOT AVAILABLE")
         self.assertEqual(model["shelly_lock"], "NOT REPORTED")
@@ -247,15 +250,15 @@ class HmiFoundationTests(unittest.TestCase):
                     if isinstance(item, ast.FunctionDef) and
                     item.name == "render_events")
         events_source = ast.get_source_segment(source, node)
-        self.assertIn("NO EVENT OR OVERRIDE ACTION IS IMPLEMENTED",
+        self.assertIn("V3 EVENTS ACTIVE; COMMANDS AND RETAINED EVENT BROWSER PENDING",
                       events_source)
         self.assertNotIn("relay", events_source.lower())
         self.assertNotIn("request", events_source.lower())
         self.assertNotIn("submit", events_source.lower())
         self.assertNotIn("cloud.", events_source)
 
-    def test_release_is_m624(self):
-        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.27")
+    def test_release_is_m630(self):
+        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.30")
 
     def test_touch_service_is_not_limited_to_remaining_cycle_sleep(self):
         source = PILOT_PATH.read_text(encoding="utf-8")
@@ -280,7 +283,7 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertIn("check_navigation", service_source)
 
         boot_loop = source[source.index("while True:\n", source.index(
-            "Operational HMI foundation initialized")):]
+            "Operational HMI initialized")):]
         self.assertIn(
             "read_ads1110_filtered_raw_count(service_navigation)", boot_loop)
         self.assertGreaterEqual(boot_loop.count("service_navigation()"), 5)
@@ -297,7 +300,7 @@ class HmiFoundationTests(unittest.TestCase):
 
         now_source = function_source("render_now")
         self.assertGreaterEqual(now_source.count("M5.Lcd.FONTS.DejaVu40"), 6)
-        self.assertIn("EVENT ENGINE: NOT IMPLEMENTED", now_source)
+        self.assertIn("EVENT ENGINE: {}", now_source)
         self.assertIn("_draw_communications", now_source)
         field_source = function_source("_draw_field")
         self.assertIn("_field_cache.get(cache_key)", field_source)

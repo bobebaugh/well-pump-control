@@ -9,8 +9,10 @@ The same files must be byte-for-byte identical in pilot-working and tab5-working
 
 | Record | Direction and use | Current state |
 |---|---|---|
-| runtime-package-v3.schema.json | Pilot → Tab5: immutable Event V3 runtime package downloaded by Tab5 and validated before staging/adoption. | Its accompanying pointer declares executionEnabled: false; existing Tab5 source nevertheless loads/evaluates staged V3. This is a known discrepancy, not proof that V3 execution is disabled. |
-| release-pointer-v3.schema.json | Pilot → Tab5: RTDB pointer identifying exact package bytes, hash, length, and download path. | The schema requires executionEnabled: false. Existing Tab5 source can still evaluate V3 and reach its Shelly write path; reconcile the metadata and runtime in a future bounded unit. |
+| runtime-package-v3.schema.json | Pilot → Tab5: immutable Event V3 runtime package downloaded and validated before restart staging. | A valid staged file becomes running only at process startup with fresh event, owner, and calculation state. |
+| release-pointer-v3.schema.json | Pilot → Tab5: retired staging-only pointer. | Preserved unchanged for version history; it declares execution disabled and is not accepted by the current consumer. |
+| release-pointer-v4.schema.json | Pilot → Tab5: current RTDB pointer identifying exact Event V3 bytes, hash, length, download path, and execution intent. | Downloads stage the next restart package; they never replace the running kernel. |
+| rules-v3-device-state-v2.schema.json | Tab5 → Pilot: actual running, desired, and staged identities plus execution state. | `running` is distinct from the package staged for the next restart. |
 | current-observation-v1.schema.json | Tab5 → Pilot: disposable current RTDB observation. | Existing interface. |
 | durable-observation-v1.schema.json | Tab5 → Pilot: selected immutable observation retained in Firestore. | Existing interface. |
 | event-record-v1.schema.json | Tab5 → Pilot: immutable event-open or event-close record retained in Firestore. | Existing interface. |

@@ -16,7 +16,7 @@ FUNCTIONS = {
     "_v3_scalar", "_v3_logging", "_v3_typed_value", "_v3_enum_values",
     "_v3_field", "_v3_output", "_v3_system_field", "_v3_clause",
     "_v3_condition", "_v3_phase", "_v3_dependencies_acyclic",
-    "_rules_v3_package_valid", "resolve_rules_v3_package",
+    "_rules_v3_package_valid", "_rules_v3_runtime_supported", "resolve_rules_v3_package",
     "accept_rules_v3_device_record", "freeze_rules_v3_snapshot",
     "rules_v3_condition_value", "_new_rules_v3_event_state",
     "new_rules_v3_kernel", "_copy_rules_v3_kernel", "_rules_v3_qualified",
@@ -25,7 +25,8 @@ FUNCTIONS = {
     "rules_v3_effective_mode", "_rules_v3_action", "_rules_v3_append_action",
     "advance_rules_v3_kernel", "restart_rules_v3_kernel",
 }
-CONSTANTS = {"RULES_V3_SCHEMA_VERSION", "RULES_V3_PACKAGE_KIND"}
+CONSTANTS = {"RULES_V3_SCHEMA_VERSION", "RULES_V3_PACKAGE_KIND",
+             "RUNTIME_DIRECT_BINDINGS"}
 
 
 def load_kernel():
@@ -364,7 +365,7 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
         """
         source = PILOT_PATH.read_text(encoding="utf-8")
         tree = ast.parse(source)
-        names = set(FUNCTIONS)
+        names = set(FUNCTIONS) - {"_rules_v3_runtime_supported"}
         nodes = [node for node in tree.body
                  if isinstance(node, ast.FunctionDef) and node.name in names]
         kernel_source = "\n".join(ast.get_source_segment(source, node) for node in nodes)
@@ -373,7 +374,7 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
             self.assertNotIn(forbidden, kernel_source)
         # The engine is wired in, and issuing is a separate call from selecting.
         loop_source = source[source.index("while True:"):]
-        self.assertIn("advance_rules_v3_kernel", loop_source)
+        self.assertIn("run_rules_v3_cycle", loop_source)
         self.assertIn("issue_rules_v3_action", loop_source)
         self.assertNotIn("issue_rules_v3_action", kernel_source)
 

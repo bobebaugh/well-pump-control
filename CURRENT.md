@@ -1,25 +1,57 @@
 # Current status — Tab5 line
 
-**Verified operating base:** Tab5 at 39b0d81e1a0eb989677f78f1f7f29605fc1485a3 on 2026-09-06.
+**Verified operating/working base:** `Tab5` and `tab5-working` at
+`cd61954d2538abcc996987aa7d2ecfec85dbbd8f` on 2026-09-11. This hash remains
+the pre-promotion review base; the work below is committed only on the working
+branch.
 
-Tab5 is the interpreted MicroPython device application under tab5/. Its current upload set is small and separate from the Pilot web/cloud application. This checkpoint is source-reviewed only; it did not inspect the installed device image, run host tests, upload a package, or touch connected equipment.
-
-## Known V3 discrepancy
-
-The current source loads a staged V3 package into a live kernel, evaluates it, and can reach the Shelly write path. At the same time, the V3 release pointer requires executionEnabled: false. That field is therefore not reliable evidence that V3 execution is disabled. This documentation records the discrepancy; it does not change runtime behavior or resolve the mismatch.
+Tab5 is the interpreted MicroPython device application under `tab5/`. Its upload
+set remains separate from the Pilot web/cloud application. This unit is host-tested
+source work only: no package was delivered or uploaded, no device was restarted,
+and no connected equipment was operated.
 
 ## Now
 
-Review the new Project Context and mirrored interfaces/ seed on tab5-working. No device runtime behavior has changed.
+V3 is the sole event evaluator and device-write owner in the normal application
+loop. V2 observation, HMI, transport, and durable-record support needed by the
+current application remains, but V2 event evaluation and STOP dispatch have been
+removed from the repeating loop. An unavailable V3 runtime does not fall back to
+V2 execution.
+
+The integrated V3 cycle atomically accepts complete records for Tab5/ADC, Shelly
+EM, and Shelly 1; evaluates supported package calculations; freezes one snapshot;
+then advances the V3 kernel. Missing, malformed, failed, or wrong-type device
+fields make that whole device record unavailable. Shelly 1 evidence comes from
+two sequential RPC responses: `Shelly.GetStatus` plus dynamically discovered
+`IsLocked` and `loCntr` number components. These are one acquisition cycle, not a
+simultaneous hardware snapshot.
+
+Downloads validate and atomically replace only the next-restart staged file. The
+running package and its kernel/ownership/calculation state remain unchanged until
+restart. Startup adopts the last valid staged package with fresh state. Pointer
+schema 4 and device-state schema 2 distinguish actual V3 runtime intent, running
+identity, and staged identity without changing the meanings of the older schemas.
+
+Host evidence: `python -m unittest discover -s tests -v` passes 137 tests,
+including mocked integrated acquisition/cycle/startup boundaries and the existing
+V3 semantic replay suite. `python -m py_compile tab5/pilot.py tab5/cloud.py`
+passes. No live Shelly response has been captured.
 
 ## Next
 
-Reconcile tab5/pilot.py and its current V3 work with the shared interface definitions before selecting a bounded implementation unit.
+Owner design review, followed by a separately authorized bench acceptance that
+verifies the supplied Shelly RPC mappings and restart-only package adoption on the
+test installation.
 
 ## Later
 
-Build and host-test the next trustworthy V3 input/snapshot path before retiring working V2 behavior.
+Integrate real occurrence/command inputs, retained event-record production and
+browser handling, and V3 summary accumulation. Write and separately accept the
+production Shelly protection script. Continue retiring obsolete V2 transport and
+source only after their remaining observation/coordination uses are replaced.
 
 ## Boundaries
 
-Do not promote this branch to Tab5, upload/adopt a package, flash/erase a board, or test connected equipment without a separately approved work unit.
+Do not promote this branch to `Tab5`, deliver or upload a runtime package,
+flash/erase/restart a board, or test connected equipment without separate owner
+approval.
