@@ -1,0 +1,82 @@
+{
+  "fixture": "bounded RAM queue saturation keeps control work nonblocking and distinguishes observation loss from transition loss",
+  "limits": {
+    "maxBatches": 4,
+    "maxRecords": 260,
+    "maxEncodedBytes": 393216,
+    "maxRecordsPerBatch": 65,
+    "maxBatchBytes": 294912,
+    "maxObservationBytes": 32768,
+    "maxEventRecordBytes": 4096,
+    "highWater": {
+      "batches": 3,
+      "records": 195,
+      "encodedBytes": 294912
+    }
+  },
+  "cases": [
+    {
+      "name": "protected event batch evicts only oldest ordinary observation batches",
+      "before": {
+        "batches": 4,
+        "records": 68,
+        "encodedBytes": 89000,
+        "oldestAgeMs": 486000,
+        "orderedKinds": ["observation-only", "observation-only", "event", "event"]
+      },
+      "incoming": {
+        "kind": "event",
+        "records": 65,
+        "eventTransitions": 64,
+        "encodedBytes": 70000
+      },
+      "decision": {
+        "acceptedWholeBatch": true,
+        "evictedOldestObservationOnlyBatches": 1,
+        "producerRetryRetained": false,
+        "controlPathBlocked": false
+      },
+      "lossDelta": {
+        "batches": 1,
+        "ordinaryObservations": 1,
+        "eventTransitions": 0,
+        "oversizeBatches": 0
+      }
+    },
+    {
+      "name": "protected capacity exhausted rejects a new event batch all-or-none",
+      "before": {
+        "batches": 4,
+        "records": 260,
+        "encodedBytes": 280000,
+        "oldestAgeMs": 912000,
+        "orderedKinds": ["event", "event", "event", "rule-audit"]
+      },
+      "incoming": {
+        "kind": "event",
+        "records": 3,
+        "eventTransitions": 2,
+        "encodedBytes": 5100
+      },
+      "decision": {
+        "acceptedWholeBatch": false,
+        "acceptedRecords": 0,
+        "producerRetryRetained": false,
+        "controlPathBlocked": false,
+        "baselinesAdvance": false,
+        "eventBoardContinues": true
+      },
+      "lossDelta": {
+        "batches": 1,
+        "ordinaryObservations": 1,
+        "eventTransitions": 2,
+        "oversizeBatches": 0
+      },
+      "visibility": {
+        "channel": "replaceable transport-status snapshot",
+        "requiresQueueInsertion": false,
+        "note": "RAM counters and high-water values remain visible to current status/HMI even though the durable FIFO is full; they reset on restart."
+      }
+    }
+  ]
+}

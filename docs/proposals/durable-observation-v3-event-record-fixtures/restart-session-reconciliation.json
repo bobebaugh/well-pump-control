@@ -1,5 +1,28 @@
 {
-  "fixture": "restart creates a fresh board and reconciles an old open occurrence without inventing an end time",
+  "fixture": "a token-validated higher session epoch reconciles an old open occurrence without inventing an end time",
+  "serverSessionRegistry": {
+    "deviceId": "tab5-well-main",
+    "registered": [
+      { "sessionId": "s_11112222333344445555666677778888", "sessionEpoch": 41 },
+      { "sessionId": "s_9999aaaabbbbccccddddeeeeffff0000", "sessionEpoch": 42 }
+    ],
+    "note": "Opaque session tokens are transport credentials and are intentionally omitted. Registration alone does not advance currentSessionEpoch."
+  },
+  "serverProcessing": [
+    {
+      "recordId": "evt_s_11112222333344445555666677778888_0000000900_01",
+      "tokenValidated": true,
+      "sessionEpoch": 41,
+      "orderingStatus": "ordered"
+    },
+    {
+      "recordId": "obs_s_9999aaaabbbbccccddddeeeeffff0000_0000000001",
+      "tokenValidated": true,
+      "sessionEpoch": 42,
+      "orderingStatus": "ordered",
+      "advancesCurrentSession": true
+    }
+  ],
   "records": [
     {
       "schemaVersion": 2,
@@ -100,6 +123,8 @@
       "relatedObservationId": "obs_s_9999aaaabbbbccccddddeeeeffff0000_0000000001",
       "reconciliation": {
         "detectedBySessionId": "s_9999aaaabbbbccccddddeeeeffff0000",
+        "detectedBySessionEpoch": 42,
+        "endedSessionEpoch": 41,
         "newSessionFirstReceivedAt": "2026-09-12T16:40:12.500Z"
       }
     }

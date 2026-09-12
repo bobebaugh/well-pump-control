@@ -10,4 +10,8 @@ Files:
 - `event-transitions-same-cycle.json`: two distinct transitions referencing that same observation.
 - `observation-unavailable-field.json`: an event-selected observation with one selected field explicitly unavailable.
 - `observation-periodic.json`: the ten-minute maximum interval with no field or event reason.
-- `restart-session-reconciliation.json`: an old opening, an unsynchronized new-session observation, and a server reconciliation close with no invented end time.
+- `restart-session-reconciliation.json`: a registered old opening, a higher-epoch unsynchronized new-session observation, and a server reconciliation close with no invented end time.
+- `delayed-session-start.json`: a delayed lower-epoch start and an unordered start arrive after the current session without superseding it or ending its events.
+- `queue-saturation.json`: finite RAM limits, observation-first eviction, protected-batch rejection, and out-of-FIFO loss visibility.
+
+The last two files describe queue/projection decisions as synthetic state transitions, not wire records. Server-owned session epochs, ordering status, tokens, queue metrics, and loss counters are deliberately outside immutable Tab5 record bodies.

@@ -1,0 +1,67 @@
+{
+  "fixture": "delayed or unordered session-start evidence cannot supersede the token-validated current session",
+  "deviceId": "tab5-well-main",
+  "initialProjection": {
+    "currentSessionId": "s_current_9999aaaabbbbccccddddeeeeffff0000",
+    "currentSessionEpoch": 42,
+    "openOccurrences": [
+      "occ_s_current_9999aaaabbbbccccddddeeeeffff0000_E012_0000000010_01"
+    ]
+  },
+  "arrivals": [
+    {
+      "record": {
+        "schemaVersion": 2,
+        "recordType": "observation",
+        "recordId": "obs_s_old_11112222333344445555666677778888_0000000001",
+        "deviceId": "tab5-well-main",
+        "sessionId": "s_old_11112222333344445555666677778888",
+        "cycleSequence": 1,
+        "time": { "utcStatus": "unsynchronized", "uptimeMs": 900 },
+        "triggerReasons": [{ "kind": "session-start" }]
+      },
+      "serverEvidence": {
+        "tokenValidated": true,
+        "registeredSessionEpoch": 41,
+        "receivedAfterCurrentEpoch": 42
+      },
+      "decision": {
+        "orderingStatus": "ordered-old",
+        "storeImmutableRecord": true,
+        "advanceCurrentSession": false,
+        "closeCurrentOccurrences": false,
+        "reason": "A lower registered epoch remains older regardless of arrival order or missing UTC."
+      }
+    },
+    {
+      "record": {
+        "schemaVersion": 2,
+        "recordType": "observation",
+        "recordId": "obs_s_unknown_aaaaaaaa11111111bbbbbbbb22222222_0000000001",
+        "deviceId": "tab5-well-main",
+        "sessionId": "s_unknown_aaaaaaaa11111111bbbbbbbb22222222",
+        "cycleSequence": 1,
+        "time": { "utcStatus": "unsynchronized", "uptimeMs": 650 },
+        "triggerReasons": [{ "kind": "session-start" }]
+      },
+      "serverEvidence": {
+        "tokenValidated": false,
+        "registeredSessionEpoch": null
+      },
+      "decision": {
+        "orderingStatus": "unknown",
+        "storeAsUnorderedAuditEvidence": true,
+        "advanceCurrentSession": false,
+        "closeAnyOccurrences": false,
+        "reason": "Random session IDs, receivedAt, and unsynchronized device time cannot establish chronology."
+      }
+    }
+  ],
+  "finalProjection": {
+    "currentSessionId": "s_current_9999aaaabbbbccccddddeeeeffff0000",
+    "currentSessionEpoch": 42,
+    "currentOccurrenceStillOpen": true,
+    "inventedOrdering": false
+  },
+  "delayedRegistrationFence": "A registration processed after its device session has died cannot advance current on its own because no live client can present the returned opaque token on a durable upload."
+}
