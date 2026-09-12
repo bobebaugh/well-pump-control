@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/current-event-board-v1.schema.json",
+  "title": "Complete current V3 event board v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "siteId", "deviceId", "sessionId", "boardSequence", "complete", "producedUptimeMs", "rulesRelease", "openEvents"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "current-event-board" },
+    "siteId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "deviceId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "sessionId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "boardSequence": { "type": "integer", "minimum": 1 },
+    "complete": { "const": true },
+    "producedUptimeMs": { "type": "integer", "minimum": 0 },
+    "producedAt": { "type": "string", "format": "date-time" },
+    "rulesRelease": { "$ref": "#/$defs/rulesRelease" },
+    "openEvents": { "type": "object", "maxProperties": 100, "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$" }, "additionalProperties": { "$ref": "#/$defs/slot" } }
+  },
+  "$defs": {
+    "rulesRelease": { "type": "object", "additionalProperties": false, "required": ["releaseId", "packageVersion", "contentHash"], "properties": { "releaseId": { "type": "string", "pattern": "^[0-9]{14}-event-v3-v[1-9][0-9]*$" }, "packageVersion": { "type": "integer", "minimum": 1 }, "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" } } },
+    "opening": { "type": "object", "additionalProperties": false, "required": ["kind", "cycleSequence", "uptimeMs"], "properties": { "kind": { "enum": ["condition-qualified", "occurrence-qualified", "unknown"] }, "cycleSequence": { "type": "integer", "minimum": 0 }, "uptimeMs": { "type": "integer", "minimum": 0 }, "observedAt": { "type": "string", "format": "date-time" } } },
+    "slot": { "type": "object", "additionalProperties": false, "required": ["occurrenceId", "displayName", "severity", "eventClass", "opening"], "properties": { "occurrenceId": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,192}$" }, "displayName": { "type": "string", "minLength": 1, "maxLength": 160 }, "severity": { "enum": ["Info", "Yellow", "Red"] }, "eventClass": { "enum": ["transient", "latched", "monitor"] }, "opening": { "$ref": "#/$defs/opening" } } }
+  }
+}

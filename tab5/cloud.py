@@ -1,4 +1,4 @@
-# Release: 2026-09-11 M6.31 — transport for corrected V3 authority runtime.
+# Release: 2026-09-12 M6.35 — bounded observations and event-board transport.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -19,6 +19,10 @@ import ubinascii
 import network
 import ntptime
 import requests
+try:
+    import ujson
+except ImportError:  # host-only test fallback
+    import json as ujson
 
 from device_secrets import INGEST_TOKEN
 
@@ -39,9 +43,15 @@ INGEST_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/in
 PUBLISH_TIMEOUT_S = 3
 DURABLE_INGEST_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/ingest-record'
 DURABLE_INGEST_TIMEOUT_S = 3
-DURABLE_QUEUE_DEPTH = 8
+DURABLE_QUEUE_DEPTH = 100
+DURABLE_QUEUE_MAX_BYTES = 393216
 DURABLE_RETRY_BASE_MS = 5000
 DURABLE_RETRY_MAX_MS = 60000
+EVENT_BOARD_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/event-board'
+EVENT_BOARD_TIMEOUT_S = 3
+EVENT_BOARD_RETRY_BASE_MS = 5000
+EVENT_BOARD_RETRY_MAX_MS = 60000
+EVENT_BOARD_MAX_BYTES = 65536
 RULES_RELEASE_ORIGIN = 'https://pilot--well-pump-control.netlify.app'
 MAX_RULES_RELEASE_BYTES = 65536
 
@@ -102,6 +112,12 @@ def _durable_retry_delay_ms(failure_count):
     if shift > 4:
         shift = 4
     return min(DURABLE_RETRY_BASE_MS * (1 << shift), DURABLE_RETRY_MAX_MS)
+
+
+def _is_permanent_http_reject(status_code):
+    """Classify client errors, retaining timeout/rate-limit responses."""
+    return (isinstance(status_code, int) and 400 <= status_code < 500 and
+            status_code not in (408, 429))
 
 
 def _rtdb_url(base_url, path, id_token):
@@ -399,6 +415,10 @@ _pending_observation = None
 
 _durable_lock = _thread.allocate_lock()
 _pending_durable_records = []
+_durable_queue_bytes = 0
+
+_event_board_lock = _thread.allocate_lock()
+_pending_event_board = None
 
 _transport_status_lock = _thread.allocate_lock()
 _transport_status = {
@@ -412,6 +432,23 @@ _transport_status = {
     'durableLastSuccessTicksMs': None,
     'durableLastAttemptOk': None,
     'durableRecordsLost': 0,
+    'durableQueueHighWaterRecords': 0,
+    'durableQueueHighWaterBytes': 0,
+    'durableEvictions': 0,
+    'durableAdmissionRejects': 0,
+    'durableTransientFailures': 0,
+    'durablePermanentRejects': 0,
+    'eventBoardLastSubmittedSequence': None,
+    'eventBoardLastAttemptSequence': None,
+    'eventBoardLastAcceptedSequence': None,
+    'eventBoardLastSuccessTicksMs': None,
+    'eventBoardSuperseded': 0,
+    'eventBoardTransientFailures': 0,
+    'eventBoardPermanentRejects': 0,
+    'eventBoardBuildRejects': 0,
+    'eventBoardLastResult': None,
+    'eventBoardActiveSlots': 0,
+    'eventBoardEncodedBytes': 0,
 }
 
 _command_lock = _thread.allocate_lock()
@@ -512,8 +549,22 @@ def transport_status_snapshot():
     try:
         snapshot['durableQueueDepth'] = len(_pending_durable_records)
         snapshot['durableQueueCapacity'] = DURABLE_QUEUE_DEPTH
+        snapshot['durableQueueBytes'] = _durable_queue_bytes
+        snapshot['durableQueueByteCapacity'] = DURABLE_QUEUE_MAX_BYTES
+        snapshot['durableOldestAgeMs'] = (
+            None if not _pending_durable_records else
+            time.ticks_diff(time.ticks_ms(),
+                            _pending_durable_records[0]['enqueuedTicksMs']))
     finally:
         _durable_lock.release()
+    _event_board_lock.acquire()
+    try:
+        snapshot['eventBoardPending'] = _pending_event_board is not None
+        snapshot['eventBoardPendingSequence'] = (
+            _pending_event_board['board'].get('boardSequence')
+            if _pending_event_board is not None else None)
+    finally:
+        _event_board_lock.release()
     return snapshot
 
 
@@ -543,44 +594,79 @@ def _take_pending_observation():
         _observation_lock.release()
 
 
-def submit_durable_record(record):
-    """Queue one complete CPU A-authored record without blocking CPU A."""
-    if (not isinstance(record, dict) or record.get('schemaVersion') != 1 or
-            record.get('recordType') not in (
-                'observation', 'rule-adoption', 'rule-rejection')):
+def _valid_durable_record(record):
+    if not isinstance(record, dict):
         return False
-    record_lost = False
+    if record.get('schemaVersion') == 1:
+        return record.get('recordType') in (
+            'observation', 'rule-adoption', 'rule-rejection')
+    if record.get('schemaVersion') != 2 or record.get('recordType') != 'observation':
+        return False
+    required = ('recordId', 'siteId', 'deviceId', 'sessionId', 'cycleSequence',
+                'time', 'source', 'rulesRelease', 'snapshotPhase',
+                'triggerReasons', 'fields')
+    if any(name not in record for name in required):
+        return False
+    if (not isinstance(record['recordId'], str) or
+            not isinstance(record['cycleSequence'], int) or
+            not isinstance(record['time'], dict) or
+            not isinstance(record['time'].get('uptimeMs'), int) or
+            not isinstance(record['triggerReasons'], list) or
+            not record['triggerReasons'] or not isinstance(record['fields'], dict)):
+        return False
+    if any(not isinstance(reason, dict) or not isinstance(reason.get('kind'), str)
+           for reason in record['triggerReasons']):
+        return False
+    for field in record['fields'].values():
+        if not isinstance(field, dict) or field.get('state') not in (
+                'available', 'unavailable'):
+            return False
+        if field['state'] == 'available':
+            value = field.get('value')
+            if (not isinstance(value, (str, int, float, bool)) or
+                    (isinstance(value, float) and
+                     (value != value or value in (float('inf'), -float('inf'))))):
+                return False
+        elif not isinstance(field.get('reason'), str):
+            return False
+    return True
+
+
+def submit_durable_record(record):
+    """Compact-encode once; evict oldest records until this record fits."""
+    global _durable_queue_bytes
+    valid = _valid_durable_record(record)
+    try:
+        encoded = ujson.dumps(record) if valid else None
+        encoded_bytes = len(encoded.encode('utf-8')) if isinstance(encoded, str) else 0
+    except Exception:
+        encoded = None
+        encoded_bytes = 0
+    if not valid or not encoded or encoded_bytes > DURABLE_QUEUE_MAX_BYTES:
+        _increment_transport_counter('durableAdmissionRejects')
+        return False
+    entry = {
+        'record': record, 'encoded': encoded, 'encodedBytes': encoded_bytes,
+        'recordId': record.get('recordId'), 'enqueuedTicksMs': time.ticks_ms(),
+    }
+    evictions = 0
     _durable_lock.acquire()
     try:
-        if len(_pending_durable_records) >= DURABLE_QUEUE_DEPTH:
-            # Rules results outrank disposable/sparse observation history. If
-            # the bounded queue filled during an ingest outage, discard the
-            # oldest observation rather than permanently lose the one adoption
-            # or rejection record that confirms the rules outcome to cloud.
-            if record.get('recordType') in ('rule-adoption', 'rule-rejection'):
-                for index, pending in enumerate(_pending_durable_records):
-                    if pending.get('recordType') == 'observation':
-                        _pending_durable_records.pop(index)
-                        record_lost = True
-                        break
-                else:
-                    record_lost = True
-                    return False
-            else:
-                record_lost = True
-                return False
-        _pending_durable_records.append(record)
+        while (_pending_durable_records and
+               (len(_pending_durable_records) >= DURABLE_QUEUE_DEPTH or
+                _durable_queue_bytes + encoded_bytes > DURABLE_QUEUE_MAX_BYTES)):
+            removed = _pending_durable_records.pop(0)
+            _durable_queue_bytes -= removed['encodedBytes']
+            evictions += 1
+        _pending_durable_records.append(entry)
+        _durable_queue_bytes += encoded_bytes
+        _update_durable_high_water_locked()
         return True
     finally:
         _durable_lock.release()
-        if record_lost:
-            _transport_status_lock.acquire()
-            try:
-                previous_lost = _transport_status.get('durableRecordsLost')
-                _transport_status['durableRecordsLost'] = (
-                    previous_lost + 1 if isinstance(previous_lost, int) else 1)
-            finally:
-                _transport_status_lock.release()
+        if evictions:
+            _increment_transport_counter('durableEvictions', evictions)
+            _increment_transport_counter('durableRecordsLost', evictions)
 
 
 def _peek_durable_record():
@@ -592,26 +678,123 @@ def _peek_durable_record():
 
 
 def _discard_durable_record(record):
+    global _durable_queue_bytes
     _durable_lock.acquire()
     try:
         if _pending_durable_records and _pending_durable_records[0] is record:
-            _pending_durable_records.pop(0)
+            removed = _pending_durable_records.pop(0)
+            _durable_queue_bytes -= removed['encodedBytes']
             return True
         return False
     finally:
         _durable_lock.release()
 
 
-def _publish_durable_record(record):
+def _publish_durable_record(entry):
     """Transport the exact CPU A record; the cloud performs no reselection."""
-    reply = _http_json('POST', DURABLE_INGEST_URL, body=record, headers={
+    reply = _http_json('POST', DURABLE_INGEST_URL, headers={
         'Content-Type': 'application/json',
         'X-Pilot-Key': INGEST_TOKEN,
-    }, timeout=DURABLE_INGEST_TIMEOUT_S)
+    }, timeout=DURABLE_INGEST_TIMEOUT_S, form_body=entry['encoded'])
+    record = entry['record']
     if (not isinstance(reply, dict) or reply.get('accepted') is not True or
             reply.get('recordId') != record.get('recordId')):
         raise TransportError('durable ingest response mismatch')
     return bool(reply.get('duplicate'))
+
+
+def _increment_transport_counter(name, amount=1):
+    _transport_status_lock.acquire()
+    try:
+        current = _transport_status.get(name)
+        current = current if isinstance(current, int) else 0
+        _transport_status[name] = min(2147483647, current + amount)
+    finally:
+        _transport_status_lock.release()
+
+
+def _update_durable_high_water_locked():
+    _transport_status_lock.acquire()
+    try:
+        _transport_status['durableQueueHighWaterRecords'] = max(
+            _transport_status.get('durableQueueHighWaterRecords') or 0,
+            len(_pending_durable_records))
+        _transport_status['durableQueueHighWaterBytes'] = max(
+            _transport_status.get('durableQueueHighWaterBytes') or 0,
+            _durable_queue_bytes)
+    finally:
+        _transport_status_lock.release()
+
+
+def submit_event_board(board):
+    """Replace the independent latest-value board after bounded local validation."""
+    global _pending_event_board
+    valid = (isinstance(board, dict) and board.get('schemaVersion') == 1 and
+             board.get('kind') == 'current-event-board' and
+             board.get('complete') is True and
+             isinstance(board.get('boardSequence'), int) and
+             isinstance(board.get('openEvents'), dict) and
+             len(board['openEvents']) <= 100)
+    try:
+        encoded = ujson.dumps(board) if valid else None
+        encoded_bytes = len(encoded.encode('utf-8')) if isinstance(encoded, str) else 0
+    except Exception:
+        encoded = None
+        encoded_bytes = 0
+    if not valid or not encoded or encoded_bytes > EVENT_BOARD_MAX_BYTES:
+        reject_event_board_candidate()
+        return False
+    item = {'board': board, 'encoded': encoded, 'encodedBytes': encoded_bytes}
+    _event_board_lock.acquire()
+    try:
+        if _pending_event_board is not None:
+            _increment_transport_counter('eventBoardSuperseded')
+        _pending_event_board = item
+    finally:
+        _event_board_lock.release()
+    _transport_status_lock.acquire()
+    try:
+        _transport_status['eventBoardLastSubmittedSequence'] = board['boardSequence']
+        _transport_status['eventBoardActiveSlots'] = len(board['openEvents'])
+        _transport_status['eventBoardEncodedBytes'] = encoded_bytes
+    finally:
+        _transport_status_lock.release()
+    return True
+
+
+def reject_event_board_candidate():
+    """Count a poison candidate without disturbing an older valid handoff."""
+    _increment_transport_counter('eventBoardBuildRejects')
+
+
+def _peek_event_board():
+    _event_board_lock.acquire()
+    try:
+        return _pending_event_board
+    finally:
+        _event_board_lock.release()
+
+
+def _discard_event_board(item):
+    global _pending_event_board
+    _event_board_lock.acquire()
+    try:
+        if _pending_event_board is item:
+            _pending_event_board = None
+            return True
+        return False
+    finally:
+        _event_board_lock.release()
+
+
+def _publish_event_board(item):
+    reply = _http_json('POST', EVENT_BOARD_URL, headers={
+        'Content-Type': 'application/json', 'X-Pilot-Key': INGEST_TOKEN,
+    }, timeout=EVENT_BOARD_TIMEOUT_S, form_body=item['encoded'])
+    if (not isinstance(reply, dict) or reply.get('accepted') is not True or
+            reply.get('boardSequence') != item['board'].get('boardSequence')):
+        raise TransportError('event board response mismatch')
+    return reply.get('decision')
 
 
 def take_command():
@@ -1388,6 +1571,10 @@ def _run():
     next_durable_attempt = time.ticks_ms()
     durable_failure_count = 0
     durable_yield_to_rtdb = False
+    event_board_yield_to_other = False
+    next_event_board_attempt = time.ticks_ms()
+    event_board_failure_count = 0
+    last_event_board_item = None
 
     while True:
         now = time.ticks_ms()
@@ -1476,12 +1663,67 @@ def _run():
                             reason, PUBLISH_RETRY_MS))
 
             # Legacy Netlify publication above retains first service priority.
-            # Sparse durable records outrank disposable RTDB work, but CPU B
-            # performs at most one additional bounded network call per pass and
-            # yields to RTDB after every accepted durable record.
+            # The replaceable board and durable FIFO are independent. Each pass
+            # performs at most one of their network calls before yielding to RTDB.
+            board_attempted = False
+            event_board = _peek_event_board()
+            if event_board is not None and event_board is not last_event_board_item:
+                last_event_board_item = event_board
+                event_board_failure_count = 0
+                next_event_board_attempt = now
+            if (event_board is not None and not event_board_yield_to_other and
+                    time.ticks_diff(now, next_event_board_attempt) >= 0):
+                board_attempted = True
+                event_board_yield_to_other = True
+                board_sequence = event_board['board'].get('boardSequence')
+                _transport_status_lock.acquire()
+                try:
+                    _transport_status['eventBoardLastAttemptSequence'] = board_sequence
+                finally:
+                    _transport_status_lock.release()
+                try:
+                    decision = _publish_event_board(event_board)
+                    _discard_event_board(event_board)
+                    event_board_failure_count = 0
+                    next_event_board_attempt = time.ticks_ms()
+                    _transport_status_lock.acquire()
+                    try:
+                        _transport_status['eventBoardLastAcceptedSequence'] = board_sequence
+                        _transport_status['eventBoardLastSuccessTicksMs'] = time.ticks_ms()
+                        _transport_status['eventBoardLastResult'] = decision
+                    finally:
+                        _transport_status_lock.release()
+                    log('Current event board accepted: sequence={}, result={}'.format(
+                        board_sequence, decision))
+                except Exception as e:
+                    status_code = getattr(e, 'status_code', None)
+                    if _is_permanent_http_reject(status_code):
+                        _discard_event_board(event_board)
+                        _increment_transport_counter('eventBoardPermanentRejects')
+                        _transport_status_lock.acquire()
+                        try:
+                            _transport_status['eventBoardLastResult'] = 'rejected'
+                        finally:
+                            _transport_status_lock.release()
+                        event_board_failure_count = 0
+                        next_event_board_attempt = time.ticks_ms()
+                        log('Current event board permanently rejected: sequence={}, error={}'.format(
+                            board_sequence, e))
+                    else:
+                        _increment_transport_counter('eventBoardTransientFailures')
+                        event_board_failure_count += 1
+                        delay = min(
+                            EVENT_BOARD_RETRY_BASE_MS *
+                            (1 << min(max(event_board_failure_count - 1, 0), 4)),
+                            EVENT_BOARD_RETRY_MAX_MS)
+                        next_event_board_attempt = time.ticks_add(time.ticks_ms(), delay)
+                        log('Current event board transport error: {}; retry in {} ms'.format(
+                            e, delay))
+
             durable_attempted = False
             durable_record = _peek_durable_record()
-            if (durable_record is not None and not durable_yield_to_rtdb and
+            if (not board_attempted and durable_record is not None and
+                    not durable_yield_to_rtdb and
                     time.ticks_diff(now, next_durable_attempt) >= 0):
                 durable_attempted = True
                 try:
@@ -1492,22 +1734,32 @@ def _run():
                     durable_failure_count = 0
                     next_durable_attempt = time.ticks_ms()
                     durable_yield_to_rtdb = True
-                    if durable_record.get('recordType') == 'observation':
+                    record = durable_record['record']
+                    if record.get('recordType') == 'observation':
                         log('Durable observation accepted: sequence={}, duplicate={}'.format(
-                            durable_record.get('sequence'), duplicate))
+                            record.get('cycleSequence', record.get('sequence')), duplicate))
                     else:
                         log('Rules audit accepted: type={}, sequence={}, duplicate={}'.format(
-                            durable_record.get('recordType'),
-                            durable_record.get('sequence'), duplicate))
+                            record.get('recordType'),
+                            record.get('sequence'), duplicate))
                 except Exception as e:
                     _record_transport_result(
                         'durable', False, time.ticks_ms())
-                    durable_failure_count += 1
-                    delay = _durable_retry_delay_ms(durable_failure_count)
-                    next_durable_attempt = time.ticks_add(time.ticks_ms(), delay)
-                    log('Durable observation transport error: {}; retry in {} ms'.format(
-                        e, delay))
-            if not durable_attempted:
+                    status_code = getattr(e, 'status_code', None)
+                    if _is_permanent_http_reject(status_code):
+                        _discard_durable_record(durable_record)
+                        _increment_transport_counter('durablePermanentRejects')
+                        durable_failure_count = 0
+                        next_durable_attempt = time.ticks_ms()
+                        log('Durable record permanently rejected: {}'.format(e))
+                    else:
+                        _increment_transport_counter('durableTransientFailures')
+                        durable_failure_count += 1
+                        delay = _durable_retry_delay_ms(durable_failure_count)
+                        next_durable_attempt = time.ticks_add(time.ticks_ms(), delay)
+                        log('Durable observation transport error: {}; retry in {} ms'.format(
+                            e, delay))
+            if not board_attempted and not durable_attempted:
                 rtdb_action = _run_rtdb_step(rtdb_schedule, latest_observation)
                 durable_yield_to_rtdb = False
                 # V3 has an independent pointer/report channel.  This runs
@@ -1543,6 +1795,11 @@ def _run():
                         except Exception as e:
                             log('V3 staging release transport error: {}'.format(e))
 
+            # One board HTTP attempt must yield at least one pass to the
+            # durable/RTDB side, even if CPU A supersedes it immediately.
+            if not board_attempted:
+                event_board_yield_to_other = False
+
         time.sleep_ms(100)
 
 
@@ -1563,7 +1820,7 @@ def start():
         if _started:
             return False
         _started = True
-        log('CPU B release M6.20: cloud response and queue status')
+        log('CPU B release M6.35: bounded observations and event-board transport')
         _thread.start_new_thread(_worker, ())
         return True
     finally:

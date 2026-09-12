@@ -30,12 +30,30 @@ re-enable write; absence or invalidity cannot authorize that write.
 
 Pilot publishes an immutable runtime package and a pointer identifying its exact
 bytes, hash, length, and download path. Tab5 validates and stages a package before
-it can adopt it. Tab5 emits current and selected durable observations. V3 event transitions are
-currently printed locally; durable V3 event production/retention/browser work is
-still incomplete. The event-record interface is not proof of that integration.
+it can adopt it. Tab5 emits current and selected durable observations plus a
+complete sparse current-event board. Pilot derives and retains v2 open/close
+history from accepted boards. Event browsing and summaries remain later work.
 
 Existing versioned record meanings do not change silently. An incompatible record
 gets a new version.
+
+Durable observation v2 contains a small identity/time/release header and the fixed
+set of every logging-enabled Device, Calculated, and System field in the running
+package. Unavailable selected fields stay present with a reason. Change and Delta
+compare with the last available value in a successfully admitted RAM record;
+Include never independently triggers and None is excluded. Field, event-boundary,
+session-start, and ten-minute reasons coalesce into one pre-dispatch record per
+cycle. Schema-v1 ingestion remains valid during rollout.
+
+CPU A publishes a complete sparse current-event board from committed kernel state
+after first evaluation, changes, and about every 30 seconds. CPU B transports one
+replaceable latest board independently of the 100-record / 384-KiB oldest-first
+observation FIFO. Pilot immediately reconciles strictly newer complete boards in a
+Firestore transaction and derives deterministic v2 open/close history. Silence
+never closes; inferred and restart ends have unknown device close time. A monotonic
+accepted-board revision prevents delayed RTDB mirrors from overwriting newer state.
+Neither channel acknowledges or controls the local kernel, and neither guarantees
+delivery of the other.
 
 For the initial real-world V3 pilot, package adoption is restart-only. A successful
 download stages the next package atomically and does not replace the running

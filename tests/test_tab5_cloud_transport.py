@@ -123,6 +123,9 @@ class CloudTransportTests(unittest.TestCase):
         self.cloud._pending_rules_v3_release = None
         self.cloud._pending_rules_v3_pointer = None
         self.cloud._rules_v3_state = None
+        self.cloud._pending_durable_records = []
+        self.cloud._durable_queue_bytes = 0
+        self.cloud._pending_event_board = None
         self.cloud._applied_rules_reference = dict(
             self.cloud.PRE_M6_TRANSPORT_ONLY_RULES_REFERENCE)
         for key in self.cloud._transport_status:
@@ -135,6 +138,11 @@ class CloudTransportTests(unittest.TestCase):
         self.assertEqual(self.cloud._retry_delay_ms(50), 60000)
         self.assertEqual(self.cloud._durable_retry_delay_ms(1), 5000)
         self.assertEqual(self.cloud._durable_retry_delay_ms(50), 60000)
+        self.assertTrue(self.cloud._is_permanent_http_reject(400))
+        self.assertTrue(self.cloud._is_permanent_http_reject(409))
+        self.assertFalse(self.cloud._is_permanent_http_reject(408))
+        self.assertFalse(self.cloud._is_permanent_http_reject(429))
+        self.assertFalse(self.cloud._is_permanent_http_reject(503))
 
     def test_cpu_a_session_identity_is_stable(self):
         first = self.cloud.device_session_id()
@@ -146,7 +154,10 @@ class CloudTransportTests(unittest.TestCase):
         original_durable = self.cloud._pending_durable_records
         try:
             self.cloud._pending_observation = {"sequence": 4}
-            self.cloud._pending_durable_records = [{"recordId": "one"}]
+            self.cloud._pending_durable_records = [{
+                "recordId": "one", "encodedBytes": 3, "enqueuedTicksMs": 900,
+            }]
+            self.cloud._durable_queue_bytes = 3
             self.assertTrue(
                 self.cloud._record_transport_result("telemetry", True, 1000))
             self.assertTrue(
@@ -182,11 +193,11 @@ class CloudTransportTests(unittest.TestCase):
             ]
             for record in records[:-1]:
                 self.assertTrue(self.cloud.submit_durable_record(record))
-            self.assertFalse(self.cloud.submit_durable_record(records[-1]))
+            self.assertTrue(self.cloud.submit_durable_record(records[-1]))
             first = self.cloud._peek_durable_record()
-            self.assertIs(first, records[0])
+            self.assertIs(first["record"], records[1])
             self.assertTrue(self.cloud._discard_durable_record(first))
-            self.assertIs(self.cloud._peek_durable_record(), records[1])
+            self.assertIs(self.cloud._peek_durable_record()["record"], records[2])
         finally:
             self.cloud._pending_durable_records = original
 
@@ -201,12 +212,47 @@ class CloudTransportTests(unittest.TestCase):
         try:
             self.cloud._pending_durable_records = []
             self.assertTrue(self.cloud.submit_durable_record(record))
-            self.assertIs(self.cloud._peek_durable_record(), record)
+            self.assertIs(self.cloud._peek_durable_record()["record"], record)
         finally:
             self.cloud._pending_durable_records = original
 
-    def test_rules_audit_evicts_oldest_observation_from_full_queue(self):
-        original = self.cloud._pending_durable_records
+    def test_byte_overflow_oversize_and_inflight_eviction_are_bounded(self):
+        first = {"schemaVersion": 1, "recordType": "observation", "recordId": "first", "padding": "a" * 210000}
+        second = {"schemaVersion": 1, "recordType": "observation", "recordId": "second", "padding": "b" * 210000}
+        self.assertTrue(self.cloud.submit_durable_record(first))
+        in_flight = self.cloud._peek_durable_record()
+        self.assertTrue(self.cloud.submit_durable_record(second))
+        self.assertIs(self.cloud._peek_durable_record()["record"], second)
+        self.assertFalse(self.cloud._discard_durable_record(in_flight))
+        before = list(self.cloud._pending_durable_records)
+        oversize = {"schemaVersion": 1, "recordType": "observation", "recordId": "huge", "padding": "x" * self.cloud.DURABLE_QUEUE_MAX_BYTES}
+        self.assertFalse(self.cloud.submit_durable_record(oversize))
+        self.assertEqual(self.cloud._pending_durable_records, before)
+        self.assertLessEqual(self.cloud._durable_queue_bytes, self.cloud.DURABLE_QUEUE_MAX_BYTES)
+        self.assertFalse(self.cloud.submit_durable_record({
+            "schemaVersion": 2, "recordType": "observation", "recordId": "invalid"
+        }))
+
+    def test_event_board_latest_slot_is_independent_from_saturated_fifo(self):
+        for sequence in range(self.cloud.DURABLE_QUEUE_DEPTH):
+            self.assertTrue(self.cloud.submit_durable_record({
+                "schemaVersion": 1, "recordType": "observation", "recordId": str(sequence)
+            }))
+        queue_ids = [entry["recordId"] for entry in self.cloud._pending_durable_records]
+        board = {"schemaVersion": 1, "kind": "current-event-board", "complete": True,
+                 "boardSequence": 44, "openEvents": {}}
+        self.assertTrue(self.cloud.submit_event_board(board))
+        newer = {**board, "boardSequence": 45}
+        self.assertTrue(self.cloud.submit_event_board(newer))
+        self.assertIs(self.cloud._peek_event_board()["board"], newer)
+        self.assertFalse(self.cloud.submit_event_board({"invalid": True}))
+        self.assertIs(self.cloud._peek_event_board()["board"], newer)
+        self.assertEqual([entry["recordId"] for entry in self.cloud._pending_durable_records], queue_ids)
+        pending = self.cloud._peek_event_board()
+        self.assertTrue(self.cloud._discard_event_board(pending))
+        self.assertIsNone(self.cloud._peek_event_board())
+
+    def test_all_record_classes_use_same_oldest_first_eviction(self):
         observations = [
             {"schemaVersion": 1, "recordType": "observation", "sequence": sequence}
             for sequence in range(self.cloud.DURABLE_QUEUE_DEPTH)
@@ -217,16 +263,19 @@ class CloudTransportTests(unittest.TestCase):
             "sequence": 99,
         }
         try:
-            self.cloud._pending_durable_records = list(observations)
+            for observation in observations:
+                self.assertTrue(self.cloud.submit_durable_record(observation))
             self.assertTrue(self.cloud.submit_durable_record(audit))
-            self.assertNotIn(observations[0], self.cloud._pending_durable_records)
-            self.assertIn(audit, self.cloud._pending_durable_records)
+            queued = [entry["record"] for entry in self.cloud._pending_durable_records]
+            self.assertNotIn(observations[0], queued)
+            self.assertIn(audit, queued)
             self.assertEqual(
                 len(self.cloud._pending_durable_records),
                 self.cloud.DURABLE_QUEUE_DEPTH,
             )
         finally:
-            self.cloud._pending_durable_records = original
+            self.cloud._pending_durable_records = []
+            self.cloud._durable_queue_bytes = 0
 
     def test_pending_rules_download_can_follow_disposable_current_only(self):
         self.assertTrue(self.cloud._rules_download_may_follow_rtdb(None))
@@ -266,11 +315,14 @@ class CloudTransportTests(unittest.TestCase):
             "duplicate": True,
             "recordId": record["recordId"],
         }, status_code=200)
-        self.assertTrue(self.cloud._publish_durable_record(record))
+        self.assertTrue(self.cloud.submit_durable_record(record))
+        entry = self.cloud._peek_durable_record()
+        encoded = entry["encoded"]
+        self.assertTrue(self.cloud._publish_durable_record(entry))
         method, url, kwargs = self.requests.calls[-1]
         self.assertEqual(method, "POST")
         self.assertEqual(url, self.cloud.DURABLE_INGEST_URL)
-        self.assertIs(kwargs["json"], record)
+        self.assertEqual(kwargs["data"], encoded)
         self.assertEqual(kwargs["headers"]["X-Pilot-Key"], "EXAMPLE_ONLY_INGEST_TOKEN")
 
         self.requests.queue({
@@ -279,8 +331,8 @@ class CloudTransportTests(unittest.TestCase):
             "duplicate": True,
             "recordId": record["recordId"],
         }, status_code=200)
-        self.cloud._publish_durable_record(record)
-        self.assertIs(self.requests.calls[-1][2]["json"], record)
+        self.cloud._publish_durable_record(entry)
+        self.assertEqual(self.requests.calls[-1][2]["data"], encoded)
 
     def test_unavailable_current_observation_does_not_replace_legacy_sample(self):
         valid = {

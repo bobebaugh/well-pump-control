@@ -1,5 +1,27 @@
 # Current status — Tab5 line
 
+## Now — M6.35 working-branch implementation
+
+M6.35 implements rules-driven durable observations and current-event-board
+synchronization on `tab5-working`, pending owner sync/review. The running package's
+logging-enabled Device, Calculated, and System fields form one fixed record shape;
+None excludes, Include stores without triggering, Change/Delta select against the
+last available successfully admitted value, and gaps remain explicitly unavailable.
+Session start, all same-cycle event boundaries, and the ten-minute deadline coalesce
+with field reasons into at most one pre-dispatch observation.
+
+CPU B compact-encodes each record once and keeps at most 100 records / 384 KiB,
+evicting oldest entries. A separate replaceable board slot carries the first board,
+changes, and approximately 30-second heartbeats without waiting for observation
+capacity or networking. M6.34 battery, timing, heap, staging/adoption, and local
+control behavior are preserved. Nothing is promoted, installed, delivered, or
+operated; owner sync/review is next.
+
+Host sizing with the current representative fixture measured 1,753 encoded bytes
+for a 24-field observation and 25,617 bytes for a synthetic 64-slot board using
+160-character display names. Full-device heap with a near-full FIFO and one active
+HTTP body remains an explicit owner bench check.
+
 ## Now — Tab5 implementation
 
 Tab5 is interpreted MicroPython under tab5/. V3 is the sole normal-loop event and
@@ -60,6 +82,10 @@ included.
   M6.34 retains the signed number and uses `isCharging()` separately. Hardware
   read cadence, setter behavior, screen fit and heap values remain owner bench
   checks; no device result is claimed by host fixtures.
+- Tab5 M6.35: 168 host tests pass with syntax and whitespace checks. The tests
+  cover fixed logging fields, unavailable gaps, coalesced reasons, bounded FIFO
+  admission/eviction, exact retry bodies, independent board replacement, and
+  representative encoded sizes. Device heap and network timing remain bench-only.
 - Owner bench logs show E007 opening/inhibiting, reasserting OFF after owner ON
   operations, qualifying closure and acknowledged/observed ON recovery; positive
   and sticky lock handling; package download/staging without live replacement,
@@ -84,10 +110,10 @@ included.
 
 ## Next
 
-After the reviewed M6.34 commit is available, the owner may install it on Tab5 and
-bench-check the startup charging request, 75/80 transitions, battery failure/age
-display, approximately 1 Hz read updates, SYSTEM layout/touch behavior and timing/
-heap plausibility. Promotion to Tab5 remains a separate owner decision.
+After syncing and reviewing both M6.35 working commits, the owner may promote and
+deploy Pilot, publish the checked-in RTDB rules, then separately promote/install
+Tab5 and run the observation/board/FIFO/heap checklist. Promotion, deployment and
+installation remain separate owner decisions.
 
 ## Later / unresolved
 
@@ -97,8 +123,8 @@ heap plausibility. Promotion to Tab5 remains a separate owner decision.
 - Normal/Monitor kernel exists; web operator requests, required-source occurrence
   generation and Clear Events integration remain incomplete. S020 availability
   correction does not wire automatic Monitor behavior. Separate design/work unit.
-- Retained V3 event records/browser and summaries remain incomplete. Desired
-  standard close-record duration is a proposal, not implemented. Pilot permits
+- V3 event browsing and summaries remain incomplete. Board-derived inferred and
+  restart closes intentionally have unknown close time. Pilot permits
   some declarations that Tab5 rejects; review the full compatibility surface.
 - Issue #5: https://github.com/bobebaugh/well-pump-control/issues/5 . Monitor the
   script named AntiFastCycle (currently script:2, copied test code) when online

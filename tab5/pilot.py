@@ -1,4 +1,4 @@
-# Release: 2026-09-12 M6.34 — bounded battery, loop, and heap diagnostics.
+# Release: 2026-09-12 M6.35 — rules-driven observations and current event board.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -44,13 +44,14 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.34'
+SOFTWARE_RELEASE = 'M6.35'
 
 # CPU A validates and adopts the v2 runtime package. CPU B carries only the
 # RTDB pointer and exact downloaded bytes; it never interprets package meaning.
 SITE_ID = 'well-main'
 DEVICE_ID = 'tab5-well-main'
 MAX_DURABLE_OBSERVATION_INTERVAL_MS = 600000
+EVENT_BOARD_HEARTBEAT_MS = 30000
 EVENT_HISTORY_DEPTH = 600
 SHELLY_AVAILABILITY_CONFIRMATION_SAMPLES = 3
 ADC_FILTER_SAMPLE_COUNT = 5
@@ -843,7 +844,7 @@ def runtime_direct_field_values(package, observation):
     if not isinstance(package, dict) or not isinstance(observation, dict):
         return values
     for device in package.get('devices', []):
-        if not isinstance(device, dict) or device.get('enabled') is not True:
+        if not isinstance(device, dict):
             continue
         driver = device.get('driver')
         for field in device.get('fields', []):
@@ -954,18 +955,20 @@ def evaluate_runtime_calculations(package, named_values):
 
 
 def runtime_logging_policies(package):
-    """Return the enabled v2 field logging policies keyed by system name."""
+    """Return every V3 field logging policy and its stable field metadata."""
     policies = {}
     if not isinstance(package, dict):
         return policies
     for device in package.get('devices', []):
-        if not isinstance(device, dict) or device.get('enabled') is not True:
+        if not isinstance(device, dict):
             continue
         for field in device.get('fields', []):
             if isinstance(field, dict) and isinstance(field.get('systemName'), str):
                 logging = field.get('logging')
                 if isinstance(logging, dict):
-                    policies[field['systemName']] = dict(logging)
+                    policy = dict(logging)
+                    policy.update({'fieldKind': 'Device', 'type': field.get('type')})
+                    policies[field['systemName']] = policy
     for calculation in package.get('calculations', []):
         if not isinstance(calculation, dict):
             continue
@@ -975,8 +978,88 @@ def runtime_logging_policies(package):
             if isinstance(output, dict) and isinstance(output.get('systemName'), str):
                 logging = output.get('logging')
                 if isinstance(logging, dict):
-                    policies[output['systemName']] = dict(logging)
+                    policy = dict(logging)
+                    policy.update({'fieldKind': 'Calculated', 'type': output.get('type')})
+                    policies[output['systemName']] = policy
+    for field in package.get('systemFields', []):
+        if isinstance(field, dict) and isinstance(field.get('systemName'), str):
+            logging = field.get('logging')
+            if isinstance(logging, dict):
+                policy = dict(logging)
+                policy.update({'fieldKind': 'System', 'type': field.get('type')})
+                policies[field['systemName']] = policy
     return policies
+
+
+def durable_field_states(snapshot, policies, unavailable_reason='source-unavailable'):
+    """Project the package-fixed logging-enabled field set from frozen evidence."""
+    if not isinstance(snapshot, dict) or not isinstance(policies, dict):
+        return None
+    fields = {}
+    for name, policy in policies.items():
+        if not isinstance(name, str) or not isinstance(policy, dict):
+            return None
+        mode = policy.get('mode')
+        if mode == 'none':
+            continue
+        if mode not in ('always', 'change', 'delta'):
+            return None
+        value = snapshot.get(name)
+        if value is None or (isinstance(value, (int, float)) and
+                             not isinstance(value, bool) and not _runtime_number(value)):
+            fields[name] = {'state': 'unavailable', 'reason': unavailable_reason}
+        else:
+            fields[name] = {'state': 'available', 'value': value}
+    return fields
+
+
+def durable_trigger_reasons(fields, baselines, policies):
+    """Select change/delta reasons against last admitted available values."""
+    if not all(isinstance(item, dict) for item in (fields, baselines, policies)):
+        return []
+    reasons = []
+    for name, field in fields.items():
+        policy = policies.get(name, {})
+        if field.get('state') != 'available' or name not in baselines:
+            continue
+        current = field.get('value')
+        previous = baselines.get(name)
+        mode = policy.get('mode')
+        if mode == 'change' and current != previous:
+            reasons.append({'kind': 'change', 'field': name,
+                            'from': previous, 'to': current})
+        elif mode == 'delta':
+            threshold = policy.get('threshold')
+            if (_runtime_number(current) and _runtime_number(previous) and
+                    _runtime_number(threshold) and threshold > 0 and
+                    abs(current - previous) >= threshold):
+                reasons.append({'kind': 'delta', 'field': name,
+                                'from': previous, 'to': current,
+                                'threshold': threshold})
+    return reasons
+
+
+def event_boundary_reasons(records):
+    reasons = []
+    for record in records if isinstance(records, list) else ():
+        if (isinstance(record, dict) and record.get('type') in ('open', 'close') and
+                isinstance(record.get('eventId'), str) and
+                isinstance(record.get('eventInstanceId'), str)):
+            reasons.append({
+                'kind': 'event-boundary', 'transition': record['type'],
+                'eventKey': record['eventId'],
+                'occurrenceId': record['eventInstanceId'],
+            })
+    return reasons
+
+
+def admitted_durable_baselines(fields, previous=None):
+    """Advance only available values after CPU B admits the encoded record."""
+    baselines = dict(previous) if isinstance(previous, dict) else {}
+    for name, field in fields.items() if isinstance(fields, dict) else ():
+        if isinstance(field, dict) and field.get('state') == 'available':
+            baselines[name] = field.get('value')
+    return baselines
 
 
 def runtime_logging_change_details(values, previous_values, policies):
@@ -1602,6 +1685,125 @@ def build_durable_observation(observation, session_id, publish_reason,
         'rulesRelease': legacy_rules_reference,
     })
     return record
+
+
+def build_durable_observation_v2(observation, session_id, rules_reference,
+                                 trigger_reasons, fields, uptime_ms=None):
+    """Build one rules-selected, pre-dispatch observation without invented time."""
+    sequence = observation.get('sequence') if isinstance(observation, dict) else None
+    if uptime_ms is None:
+        uptime_ms = observation.get('observedTicksMs') if isinstance(observation, dict) else None
+    if (not isinstance(session_id, str) or len(session_id) < 8 or
+            not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0 or
+            not isinstance(uptime_ms, int) or isinstance(uptime_ms, bool) or uptime_ms < 0 or
+            not isinstance(rules_reference, dict) or
+            not isinstance(trigger_reasons, list) or not trigger_reasons or
+            not isinstance(fields, dict)):
+        return None
+    release_id = rules_reference.get('releaseId')
+    package_version = rules_reference.get('packageVersion')
+    content_hash = rules_reference.get('contentHash')
+    if (not isinstance(release_id, str) or
+            not isinstance(package_version, int) or package_version < 1 or
+            not _valid_rules_hash(content_hash)):
+        return None
+    time_evidence = {'uptimeMs': uptime_ms}
+    observed_at = observation.get('observedAt')
+    if isinstance(observed_at, str):
+        time_evidence['observedAt'] = observed_at
+    return {
+        'schemaVersion': 2,
+        'recordType': 'observation',
+        'recordId': 'obs_{}_{:010d}'.format(session_id, sequence),
+        'siteId': SITE_ID,
+        'deviceId': DEVICE_ID,
+        'sessionId': session_id,
+        'cycleSequence': sequence,
+        'time': time_evidence,
+        'source': 'tab5',
+        'rulesRelease': {
+            'releaseId': release_id,
+            'packageVersion': package_version,
+            'contentHash': content_hash,
+        },
+        'snapshotPhase': 'observed-pre-dispatch',
+        'triggerReasons': list(trigger_reasons),
+        'fields': dict(fields),
+    }
+
+
+def _event_opening_kind(event):
+    trigger = event.get('opening', {}).get('trigger', {}) if isinstance(event, dict) else {}
+    return ('condition-qualified' if trigger.get('type') == 'condition'
+            else 'occurrence-qualified' if trigger.get('type') in ('manual', 'internal')
+            else 'unknown')
+
+
+def build_current_event_board(runtime, session_id, board_sequence,
+                              cycle_sequence, produced_uptime_ms,
+                              produced_at=None):
+    """Copy the committed sparse kernel board; never derive it from transitions."""
+    if (not isinstance(runtime, dict) or not isinstance(session_id, str) or
+            not isinstance(board_sequence, int) or board_sequence < 1 or
+            not isinstance(cycle_sequence, int) or cycle_sequence < 0 or
+            not isinstance(produced_uptime_ms, int) or produced_uptime_ms < 0):
+        return None
+    resolved = runtime.get('resolved')
+    kernel = runtime.get('kernel')
+    reference = runtime.get('reference')
+    if not all(isinstance(item, dict) for item in (resolved, kernel, reference)):
+        return None
+    definitions = {event.get('id'): event for event in resolved.get('events', [])
+                   if isinstance(event, dict) and isinstance(event.get('id'), str)}
+    open_events = {}
+    for event_id, state in kernel.get('events', {}).items():
+        if not isinstance(state, dict) or state.get('active') is not True:
+            continue
+        event = definitions.get(event_id)
+        occurrence_id = state.get('instanceId')
+        if not isinstance(event, dict) or not isinstance(occurrence_id, str):
+            return None
+        opening = state.get('opening')
+        if not isinstance(opening, dict):
+            opening = {'kind': _event_opening_kind(event),
+                       'cycleSequence': cycle_sequence,
+                       'uptimeMs': produced_uptime_ms}
+        open_events[event_id] = {
+            'occurrenceId': occurrence_id,
+            'displayName': event.get('displayName'),
+            'severity': event.get('severity'),
+            'eventClass': event.get('eventClass'),
+            'opening': dict(opening),
+        }
+    board = {
+        'schemaVersion': 1,
+        'kind': 'current-event-board',
+        'siteId': SITE_ID,
+        'deviceId': DEVICE_ID,
+        'sessionId': session_id,
+        'boardSequence': board_sequence,
+        'complete': True,
+        'producedUptimeMs': produced_uptime_ms,
+        'rulesRelease': {
+            'releaseId': reference.get('releaseId'),
+            'packageVersion': reference.get('packageVersion'),
+            'contentHash': reference.get('contentHash'),
+        },
+        'openEvents': open_events,
+    }
+    if isinstance(produced_at, str):
+        board['producedAt'] = produced_at
+    return board
+
+
+def event_board_signature(board):
+    """Return the only content whose change requires a prompt new board."""
+    if not isinstance(board, dict) or not isinstance(board.get('openEvents'), dict):
+        return None
+    try:
+        return ujson.dumps(board['openEvents'])
+    except Exception:
+        return None
 
 
 def build_rules_audit_record(record_type, observed_at, session_id, sequence,
@@ -2820,7 +3022,8 @@ def start_rules_v3_runtime(path=RULES_V3_STAGED_FILE):
 
 
 def run_rules_v3_cycle(runtime, observation, now_ms, occurrences=None,
-                       clear_event_ids=None):
+                       clear_event_ids=None, cycle_sequence=None,
+                       observed_at=None, opening_uptime_ms=None):
     """Run one integrated atomic-input, calculation, snapshot, and V3 event cycle."""
     if not isinstance(runtime, dict) or not isinstance(observation, dict):
         raise ValueError('invalid V3 application cycle')
@@ -2834,8 +3037,27 @@ def run_rules_v3_cycle(runtime, observation, now_ms, occurrences=None,
     kernel, actions, records = advance_rules_v3_kernel(
         resolved, runtime.get('kernel'), snapshot, now_ms,
         occurrences=occurrences, clear_event_ids=clear_event_ids)
+    mode_target = resolved.get('operatingModeTarget')
+    if isinstance(mode_target, str):
+        snapshot[mode_target] = rules_v3_effective_mode(resolved, kernel)
     runtime['kernel'] = kernel
     runtime['calculations'] = calculation_state
+    for record in records:
+        if record.get('type') != 'open':
+            continue
+        state = kernel.get('events', {}).get(record.get('eventId'))
+        event = next((item for item in resolved.get('events', [])
+                      if item.get('id') == record.get('eventId')), None)
+        if isinstance(state, dict) and isinstance(event, dict):
+            opening = {'kind': _event_opening_kind(event),
+                       'uptimeMs': (opening_uptime_ms
+                                    if isinstance(opening_uptime_ms, int)
+                                    else now_ms)}
+            if isinstance(cycle_sequence, int) and cycle_sequence >= 0:
+                opening['cycleSequence'] = cycle_sequence
+            if isinstance(observed_at, str):
+                opening['observedAt'] = observed_at
+            state['opening'] = opening
     return {
         'snapshot': snapshot, 'actions': actions, 'records': records,
         'acceptedDeviceIds': list(device_records.keys()),
@@ -2905,7 +3127,7 @@ def _new_rules_v3_event_state(event_id):
     return {
         'eventId': event_id, 'active': False, 'instanceId': None,
         'nextInstance': 1, 'openCount': 0, 'openSinceMs': None,
-        'closeCount': 0, 'closeSinceMs': None,
+        'closeCount': 0, 'closeSinceMs': None, 'opening': None,
     }
 
 
@@ -4485,7 +4707,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.34: bounded battery, loop, and heap diagnostics; V3 authority')
+log('CPU A release M6.35: rules-driven observations and current event board; V3 authority')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.
@@ -4554,14 +4776,17 @@ last_battery_diagnostic_ms = time.ticks_ms()
 observation_sequence = 0
 device_session_id = cloud.device_session_id()
 event_history = new_event_history()
-shelly_availability_confirmation = new_shelly_availability_confirmation()
-shelly1_availability_confirmation = new_shelly_availability_confirmation()
-last_durable_observation = None
-last_durable_observation_ms = None
+durable_available_baselines = {}
+last_durable_admission_ms = None
+durable_session_started = False
+event_board_sequence = 0
+last_event_board_signature = None
+last_event_board_submit_ms = None
 next_rules_v3_request_ms = 0
 published_rules_reference = None
 last_cycle_start_ms = None
 last_cycle_work_ms = None
+session_uptime_ms = 0
 heap_min_free_bytes = None
 
 log('Operational HMI initialized; V3 runs only when a valid startup package exists')
@@ -4573,6 +4798,8 @@ while True:
     cycle_started_ms = now
     cycle_interval_ms = (None if last_cycle_start_ms is None else
                          elapsed_ticks_ms(last_cycle_start_ms, now))
+    if isinstance(cycle_interval_ms, int) and cycle_interval_ms >= 0:
+        session_uptime_ms += cycle_interval_ms
     last_cycle_start_ms = now
     observation_sequence += 1
     # M5.update() drives M5.Touch and is REQUIRED for it to report anything.
@@ -4739,7 +4966,8 @@ while True:
     add_transport_evidence(observation, transport_status, observation_ticks_ms)
     observation['status']['rules_runtime_state'] = rules_runtime_state
     observation['status']['rules_runtime_reason'] = rules_runtime_reason
-    runtime_logging_changes = []
+    durable_fields = None
+    durable_reasons = []
     v3_processing_ms = None
     if rules_v3_runtime is not None:
         v3_actions = []
@@ -4747,7 +4975,10 @@ while True:
         v3_started_ms = time.ticks_ms()
         try:
             v3_cycle = run_rules_v3_cycle(
-                rules_v3_runtime, observation, observation_ticks_ms)
+                rules_v3_runtime, observation, observation_ticks_ms,
+                cycle_sequence=observation_sequence,
+                observed_at=observation.get('observedAt'),
+                opening_uptime_ms=session_uptime_ms)
             v3_actions = v3_cycle['actions']
             v3_records = v3_cycle['records']
             observation['values'].update(v3_cycle['snapshot'])
@@ -4756,10 +4987,33 @@ while True:
                 event_id for event_id, state in
                 rules_v3_runtime['kernel']['events'].items()
                 if state.get('active') is True]
-            if last_durable_observation is not None:
-                runtime_logging_changes = runtime_logging_change_details(
-                    v3_cycle['snapshot'], last_durable_observation.get('values', {}),
-                    runtime_logging_policies(active_rules))
+            logging_policies = runtime_logging_policies(active_rules)
+            durable_fields = durable_field_states(
+                v3_cycle['snapshot'], logging_policies)
+            if durable_fields is not None:
+                durable_reasons.extend(durable_trigger_reasons(
+                    durable_fields, durable_available_baselines,
+                    logging_policies))
+                durable_reasons.extend(event_boundary_reasons(v3_records))
+
+            candidate_board = build_current_event_board(
+                rules_v3_runtime, device_session_id,
+                event_board_sequence + 1, observation_sequence,
+                session_uptime_ms, observation.get('observedAt'))
+            candidate_signature = event_board_signature(candidate_board)
+            board_due = (
+                last_event_board_submit_ms is None or
+                candidate_signature != last_event_board_signature or
+                time.ticks_diff(observation_ticks_ms,
+                                last_event_board_submit_ms) >=
+                EVENT_BOARD_HEARTBEAT_MS)
+            if board_due:
+                if (candidate_board is not None and
+                        candidate_signature is not None and
+                        cloud.submit_event_board(candidate_board)):
+                    event_board_sequence += 1
+                    last_event_board_signature = candidate_signature
+                last_event_board_submit_ms = observation_ticks_ms
         except Exception as v3_error:
             log('V3 ENGINE ERROR: {}'.format(v3_error))
         for record in v3_records:
@@ -4795,53 +5049,31 @@ while True:
                     time.ticks_diff(time.ticks_ms(), dispatch_started)))
     last_observation = observation
     append_event_history(event_history, observation)
-    shelly_availability_pending = shelly_availability_change_pending(
-        shelly_availability_confirmation,
-        observation['status']['shelly_available'])
-    shelly1_availability_pending = shelly_availability_change_pending(
-        shelly1_availability_confirmation,
-        observation['status']['shelly1_available'])
     cloud.submit_observation(observation)
-    elapsed_since_durable_ms = None
-    if last_durable_observation_ms is not None:
-        elapsed_since_durable_ms = time.ticks_diff(
-            now, last_durable_observation_ms)
-    durable_reason = durable_observation_reason(
-        observation, last_durable_observation,
-        elapsed_since_durable_ms,
-        confirmed_shelly_availability_change=shelly_availability_pending,
-        confirmed_shelly1_availability_change=shelly1_availability_pending)
-    if runtime_logging_changes:
-        durable_reason = 'material-change'
-    if durable_reason is not None and active_rules_reference is not None:
-        material_changes = (material_change_details(
-            observation, last_durable_observation,
-            confirmed_shelly_availability_change=shelly_availability_pending,
-            confirmed_shelly1_availability_change=shelly1_availability_pending)
-            if durable_reason == 'material-change' else None)
-        if material_changes is not None and runtime_logging_changes:
-            material_changes.extend(runtime_logging_changes)
-        durable_record = build_durable_observation(
-            observation, device_session_id, durable_reason,
-            active_rules_reference)
-        if (durable_record is not None and
-                cloud.submit_durable_record(durable_record)):
-            last_durable_observation = observation
-            last_durable_observation_ms = now
-            if shelly_availability_pending:
-                acknowledge_shelly_availability_change(
-                    shelly_availability_confirmation)
-            if shelly1_availability_pending:
-                acknowledge_shelly_availability_change(
-                    shelly1_availability_confirmation)
-            if durable_reason == 'material-change':
-                log('Durable observation selected: sequence={}, reason={}, '
-                    'changes={}'.format(
-                        observation_sequence, durable_reason,
-                        '; '.join(material_changes)))
-            else:
-                log('Durable observation selected: sequence={}, reason={}'.format(
-                    observation_sequence, durable_reason))
+    if durable_fields is not None and active_rules_reference is not None:
+        if not durable_session_started:
+            durable_reasons.insert(0, {'kind': 'session-start'})
+        elapsed_since_durable_ms = (
+            None if last_durable_admission_ms is None else
+            time.ticks_diff(now, last_durable_admission_ms))
+        if (elapsed_since_durable_ms is not None and
+                elapsed_since_durable_ms >= MAX_DURABLE_OBSERVATION_INTERVAL_MS):
+            durable_reasons.append({
+                'kind': 'maximum-interval',
+                'intervalMs': MAX_DURABLE_OBSERVATION_INTERVAL_MS,
+            })
+        if durable_reasons:
+            durable_record = build_durable_observation_v2(
+                observation, device_session_id, active_rules_reference,
+                durable_reasons, durable_fields, session_uptime_ms)
+            if (durable_record is not None and
+                    cloud.submit_durable_record(durable_record)):
+                durable_available_baselines = admitted_durable_baselines(
+                    durable_fields, durable_available_baselines)
+                last_durable_admission_ms = now
+                durable_session_started = True
+                log('Durable observation selected: sequence={}, reasons={}'.format(
+                    observation_sequence, len(durable_reasons)))
 
     heap_free_bytes, heap_allocated_bytes, heap_min_free_bytes = heap_diagnostics(
         gc, heap_min_free_bytes)

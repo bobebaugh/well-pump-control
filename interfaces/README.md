@@ -16,6 +16,9 @@ The same files must be byte-for-byte identical in pilot-working and tab5-working
 | current-observation-v1.schema.json | Tab5 → Pilot: disposable current RTDB observation. | Existing interface. |
 | durable-observation-v1.schema.json | Tab5 → Pilot: selected immutable observation retained in Firestore. | Existing interface. |
 | event-record-v1.schema.json | Tab5 → Pilot: immutable event-open or event-close record retained in Firestore. | Existing interface. |
+| durable-observation-v2.schema.json | Tab5 → Pilot: one rules-driven, fixed-field-set observation with explicit unavailability and coalesced trigger reasons. | Current V3 producer format; v1 ingestion remains supported during rollout. |
+| current-event-board-v1.schema.json | Tab5 → Pilot: complete sparse active-event board. Pilot adds receipt/revision/count fields only in its RTDB projection. | Current best-effort synchronization format. |
+| event-record-v2.schema.json | Pilot reconciliation → Firestore: deterministic open and uncertain inferred-close history derived from accepted boards. | Current V3 event history format; it never claims an exact inferred close time. |
 
 ## Change rule
 

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/durable-observation-v2.schema.json",
+  "title": "Rules-driven durable observation v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "recordType", "recordId", "siteId", "deviceId", "sessionId", "cycleSequence", "time", "source", "rulesRelease", "snapshotPhase", "triggerReasons", "fields"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "recordType": { "const": "observation" },
+    "recordId": { "type": "string", "pattern": "^obs_[A-Za-z0-9_-]{8,64}_[0-9]{10}$" },
+    "siteId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "deviceId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "sessionId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "cycleSequence": { "type": "integer", "minimum": 0 },
+    "time": { "type": "object", "additionalProperties": false, "required": ["uptimeMs"], "properties": { "uptimeMs": { "type": "integer", "minimum": 0 }, "observedAt": { "type": "string", "format": "date-time" } } },
+    "receivedAt": { "type": "string", "format": "date-time", "description": "Cloud-owned storage field." },
+    "source": { "const": "tab5" },
+    "rulesRelease": { "$ref": "#/$defs/rulesRelease" },
+    "snapshotPhase": { "const": "observed-pre-dispatch" },
+    "triggerReasons": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["kind"], "properties": { "kind": { "type": "string" } }, "additionalProperties": true } },
+    "fields": { "type": "object", "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$" }, "additionalProperties": { "$ref": "#/$defs/fieldState" } }
+  },
+  "$defs": {
+    "rulesRelease": { "type": "object", "additionalProperties": false, "required": ["releaseId", "packageVersion", "contentHash"], "properties": { "releaseId": { "type": "string", "pattern": "^[0-9]{14}-event-v3-v[1-9][0-9]*$" }, "packageVersion": { "type": "integer", "minimum": 1 }, "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" } } },
+    "fieldState": { "oneOf": [ { "type": "object", "additionalProperties": false, "required": ["state", "value"], "properties": { "state": { "const": "available" }, "value": { "type": ["string", "number", "integer", "boolean"] } } }, { "type": "object", "additionalProperties": false, "required": ["state", "reason"], "properties": { "state": { "const": "unavailable" }, "reason": { "type": "string", "minLength": 1, "maxLength": 128 } } } ] }
+  }
+}
