@@ -1,0 +1,45 @@
+{
+  "fixture": "bounded individual durable-observation FIFO independent from current board",
+  "limits": {
+    "maxRecords": 100,
+    "maxEncodedBytes": 393216
+  },
+  "policy": "evict oldest records until newest valid record fits; reject a single oversize record",
+  "cases": [
+    {
+      "name": "record-count overflow",
+      "before": { "records": 100, "encodedBytes": 200000, "oldestRecordId": "obs-1", "oldestEncodedBytes": 2000 },
+      "incoming": { "recordId": "obs-101", "encodedBytes": 2000 },
+      "expect": { "accepted": true, "evictedRecordIds": ["obs-1"], "afterRecords": 100, "afterEncodedBytes": 200000, "producerRetryRetained": false }
+    },
+    {
+      "name": "byte overflow evicts as many oldest records as needed",
+      "before": { "records": 90, "encodedBytes": 390000, "oldestEncodedBytes": [1800, 2200, 2500] },
+      "incoming": { "recordId": "obs-new", "encodedBytes": 6000 },
+      "expect": { "accepted": true, "evictedOldestCount": 2, "afterRecords": 89, "afterEncodedBytes": 392000 }
+    },
+    {
+      "name": "single oversize record",
+      "incoming": { "recordId": "obs-oversize", "encodedBytes": 393217 },
+      "expect": { "accepted": false, "oversizeRejectsDelta": 1, "queueUnchanged": true, "producerRetryRetained": false }
+    },
+    {
+      "name": "FIFO head transient retry preserves identity and content",
+      "head": { "recordId": "obs-55", "encodedBytes": 2100, "canonicalDigest": "same-on-every-attempt" },
+      "attemptResults": ["timeout", "503", "accepted"],
+      "expect": { "attemptRecordIds": ["obs-55", "obs-55", "obs-55"], "contentChanged": false, "removedOnlyAfterAccepted": true }
+    },
+    {
+      "name": "in-flight oldest head can be logically evicted",
+      "before": { "records": 100, "encodedBytes": 393000, "inFlightHead": "obs-old" },
+      "incoming": { "recordId": "obs-new", "encodedBytes": 1000 },
+      "expect": { "accepted": true, "logicallyEvictedRecordIds": ["obs-old"], "inFlightAttemptMayFinish": true, "failedInFlightReinserted": false, "normalIncomingRejected": false }
+    },
+    {
+      "name": "board synchronization continues while observation FIFO is saturated",
+      "before": { "observationRecords": 100, "observationEncodedBytes": 393216, "pendingBoardSequence": 44 },
+      "actions": ["submit replacement board sequence 45", "post board sequence 45", "Pilot accepts board sequence 45"],
+      "expect": { "boardAccepted": true, "boardWaitedForObservationSpace": false, "observationQueueChangedByBoard": false }
+    }
+  ]
+}
