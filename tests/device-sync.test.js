@@ -116,7 +116,8 @@ test("RTDB URL builder scopes JSON paths and token", () => {
 });
 
 test("RTDB rules are closed by default and scope the fixed device", () => {
-  const rules = JSON.parse(readFileSync(path.join(root, "firebase/rtdb.rules.json"), "utf8")).rules;
+  const rulesText = readFileSync(path.join(root, "firebase/rtdb.rules.json"), "utf8");
+  const rules = JSON.parse(rulesText).rules;
   assert.equal(rules[".read"], false);
   assert.equal(rules[".write"], false);
   const site = rules.v1.sites["well-main"];
@@ -133,6 +134,15 @@ test("RTDB rules are closed by default and scope the fixed device", () => {
   assert.match(site.rules.current[".write"], /auth\.uid == 'netlify-rules-publisher'/);
   assert.match(site.rules.current[".write"], /auth\.token\.siteId == 'well-main'/);
   assert.match(site.rules.current[".write"], /auth\.token\.purpose == 'rules-publication'/);
+  const board = device.currentEventBoard;
+  assert.doesNotMatch(rulesText, /numChildren\(|hasOnly\(/);
+  assert.match(board[".write"], /auth\.uid == 'netlify-event-board-writer'/);
+  assert.equal(board["$other"][".validate"], false);
+  assert.match(board.rulesRelease[".validate"], /hasChildren/);
+  assert.equal(board.rulesRelease["$other"][".validate"], false);
+  assert.match(board.rulesRelease.releaseId[".validate"], /matches/);
+  assert.match(board.rulesRelease.packageVersion[".validate"], /isNumber/);
+  assert.match(board.rulesRelease.contentHash[".validate"], /matches/);
 });
 
 test("published request example is accepted by runtime validation", () => {

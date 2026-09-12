@@ -57,9 +57,10 @@ do not discard it to align branches. The next unit brief is NEXT-UNIT.md.
 
 - M6.35 has 134 ordinary host tests passing, including strict v2 observation
   ingestion, board reconciliation, deterministic callback retry, mirror revision
-  ordering, and executable schema examples. The RTDB emulator gate could not run
-  in this environment because Firebase Tools requires Java 21 and only Java 17 is
-  installed; it remains an owner/environment check before rules publication.
+  ordering, and executable schema examples. The corrected current-event-board
+  rules have not completed the Java 21 RTDB emulator gate in this environment;
+  empty/nonempty-board and unauthorized-write coverage remains an owner check
+  before rules publication.
 
 - Pilot 2f02f158: 112 host tests passed. The owner-provided Windows Codex report
   confirms RTDB emulator acceptance using demo-well-pump-control on localhost,
@@ -133,13 +134,12 @@ do not discard it to align branches. The next unit brief is NEXT-UNIT.md.
   stopped script whose retained virtual values still validate. Final code will
   replace AntiFastCycle while preserving its agreed interface. Sticky -1 is
   intended to persist until restart; manual changes were test-harness operations.
-- Decide S020 startup-not-yet-polled semantics. Remove duplicate availability
-  records from named logging plus the older confirmation trigger (False -> False,
-  True -> True). Do not silently change qualification on unavailable cycles;
-  S010 bench logs showed qualification continuing across an unavailable sample.
-- Numeric delta alone does not guarantee zero/permanent-lock boundary records.
-  No additional boundary policy has been approved. Other fields can legitimately
-  trigger a durable record and update the shared comparison baseline.
+- Decide S020 startup-not-yet-polled semantics. Durable selection is now governed
+  by the running package's fixed logging field set plus session, event-boundary,
+  and maximum-interval reasons; no separate legacy availability/material trigger
+  remains. Do not silently change event qualification on unavailable cycles.
+- Numeric Delta alone does not guarantee a zero/permanent-lock boundary record.
+  No additional boundary policy has been approved.
 
 ## Boundaries
 

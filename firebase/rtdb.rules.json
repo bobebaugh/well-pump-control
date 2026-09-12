@@ -13,8 +13,28 @@
               "currentEventBoard": {
                 ".read": "auth != null && auth.uid == 'netlify-event-board-writer' && auth.token.siteId == 'well-main' && auth.token.deviceId == 'tab5-well-main' && auth.token.purpose == 'event-board-mirror'",
                 ".write": "auth != null && auth.uid == 'netlify-event-board-writer' && auth.token.siteId == 'well-main' && auth.token.deviceId == 'tab5-well-main' && auth.token.purpose == 'event-board-mirror'",
-                ".validate": "newData.hasChildren(['schemaVersion', 'kind', 'siteId', 'deviceId', 'sessionId', 'boardSequence', 'complete', 'producedUptimeMs', 'rulesRelease', 'openEventCount', 'receivedAtMs', 'acceptedBoardRevision']) && newData.child('schemaVersion').val() == 1 && newData.child('kind').val() == 'current-event-board' && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('sessionId').isString() && newData.child('boardSequence').isNumber() && newData.child('boardSequence').val() >= 1 && newData.child('complete').val() == true && newData.child('producedUptimeMs').isNumber() && newData.child('producedUptimeMs').val() >= 0 && newData.child('openEventCount').isNumber() && newData.child('openEventCount').val() >= 0 && ((newData.child('openEventCount').val() == 0 && !newData.child('openEvents').exists()) || (newData.child('openEventCount').val() > 0 && newData.child('openEvents').exists() && newData.child('openEvents').numChildren() == newData.child('openEventCount').val())) && newData.child('receivedAtMs').isNumber() && newData.child('receivedAtMs').val() >= 0 && newData.child('acceptedBoardRevision').isNumber() && newData.child('acceptedBoardRevision').val() >= 1 && newData.child('rulesRelease').hasChildren(['releaseId', 'packageVersion', 'contentHash'])",
-                "schemaVersion": { ".validate": true }, "kind": { ".validate": true }, "siteId": { ".validate": true }, "deviceId": { ".validate": true }, "sessionId": { ".validate": true }, "boardSequence": { ".validate": true }, "complete": { ".validate": true }, "producedUptimeMs": { ".validate": true }, "producedAt": { ".validate": "newData.isString()" }, "openEventCount": { ".validate": true }, "receivedAtMs": { ".validate": true }, "acceptedBoardRevision": { ".validate": true }, "rulesRelease": { ".validate": "newData.hasOnly(['releaseId', 'packageVersion', 'contentHash'])" }, "openEvents": {}, "$other": { ".validate": false }
+                ".validate": "newData.hasChildren(['schemaVersion', 'kind', 'siteId', 'deviceId', 'sessionId', 'boardSequence', 'complete', 'producedUptimeMs', 'rulesRelease', 'openEventCount', 'receivedAtMs', 'acceptedBoardRevision']) && newData.child('schemaVersion').val() == 1 && newData.child('kind').val() == 'current-event-board' && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('sessionId').isString() && newData.child('boardSequence').isNumber() && newData.child('boardSequence').val() >= 1 && newData.child('complete').val() == true && newData.child('producedUptimeMs').isNumber() && newData.child('producedUptimeMs').val() >= 0 && newData.child('openEventCount').isNumber() && newData.child('openEventCount').val() >= 0 && ((newData.child('openEventCount').val() == 0 && !newData.child('openEvents').exists()) || (newData.child('openEventCount').val() > 0 && newData.child('openEvents').exists())) && newData.child('receivedAtMs').isNumber() && newData.child('receivedAtMs').val() >= 0 && newData.child('acceptedBoardRevision').isNumber() && newData.child('acceptedBoardRevision').val() >= 1",
+                "schemaVersion": { ".validate": true },
+                "kind": { ".validate": true },
+                "siteId": { ".validate": true },
+                "deviceId": { ".validate": true },
+                "sessionId": { ".validate": true },
+                "boardSequence": { ".validate": true },
+                "complete": { ".validate": true },
+                "producedUptimeMs": { ".validate": true },
+                "producedAt": { ".validate": "newData.isString()" },
+                "openEventCount": { ".validate": true },
+                "receivedAtMs": { ".validate": true },
+                "acceptedBoardRevision": { ".validate": true },
+                "rulesRelease": {
+                  ".validate": "newData.hasChildren(['releaseId', 'packageVersion', 'contentHash'])",
+                  "releaseId": { ".validate": "newData.isString() && newData.val().matches(/^[0-9]{14}-event-v3-v[1-9][0-9]*$/)" },
+                  "packageVersion": { ".validate": "newData.isNumber() && newData.val() >= 1" },
+                  "contentHash": { ".validate": "newData.isString() && newData.val().matches(/^[a-f0-9]{64}$/)" },
+                  "$other": { ".validate": false }
+                },
+                "openEvents": {},
+                "$other": { ".validate": false }
               },
               "presence": {
                 ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.hasChildren(['schemaVersion', 'siteId', 'deviceId', 'sessionId', 'lastSeenAtMs']) && newData.child('schemaVersion').val() == 1 && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('sessionId').isString() && newData.child('lastSeenAtMs').isNumber()"

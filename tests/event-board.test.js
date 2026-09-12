@@ -159,4 +159,8 @@ test("RTDB mirror uses revision ordering and conditional retry so delayed older 
   assert.equal(current.boardSequence, 2);
   delete current.openEvents;
   assert.deepEqual(await mirror.mirror(board(2), 2, 2000), { duplicate: true });
+  const openEvents = { E007: slot("r15:E007:1"), E008: slot("r15:E008:1", "Second event") };
+  assert.deepEqual(await mirror.mirror(board(3, openEvents), 3, 3000), { written: true });
+  assert.equal(current.openEventCount, 2);
+  assert.equal(Object.keys(current.openEvents).length, current.openEventCount);
 });

@@ -18,6 +18,7 @@ let anonymousDatabase;
 let publisherDatabase;
 let v3PublisherDatabase;
 let eventBoardWriterDatabase;
+let wrongEventBoardWriterDatabase;
 
 function emulatorAddress() {
   const value = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
@@ -79,6 +80,18 @@ function currentEventBoard(changes = {}) {
   };
 }
 
+function currentEventSlot(changes = {}) {
+  return {
+    occurrenceId: "r15:E007:1", displayName: "Utility voltage high",
+    severity: "Red", eventClass: "transient",
+    opening: {
+      kind: "condition-qualified", cycleSequence: 20, uptimeMs: 20000,
+      observedAt: "2026-09-12T16:00:20Z"
+    },
+    ...changes
+  };
+}
+
 before(async () => {
   const database = {
     ...emulatorAddress(),
@@ -95,6 +108,9 @@ before(async () => {
   }).database();
   eventBoardWriterDatabase = environment.authenticatedContext("netlify-event-board-writer", {
     siteId: "well-main", deviceId: "tab5-well-main", purpose: "event-board-mirror"
+  }).database();
+  wrongEventBoardWriterDatabase = environment.authenticatedContext("netlify-event-board-writer", {
+    siteId: "well-main", deviceId: "other-device", purpose: "event-board-mirror"
   }).database();
   await environment.withSecurityRulesDisabled(async context => {
     const admin = context.database();
@@ -216,18 +232,30 @@ test("only the fixed device can report closed V3 running and restart-staging sta
 
 test("only the fixed Pilot writer can mirror complete ordered event boards", async () => {
   const path = `${DEVICE}/currentEventBoard`;
+  const nonempty = currentEventBoard({
+    boardSequence: 2, acceptedBoardRevision: 2,
+    openEvents: { E007: currentEventSlot() }, openEventCount: 1
+  });
   await assertSucceeds(set(ref(eventBoardWriterDatabase, path), currentEventBoard()));
+  await assertSucceeds(set(ref(eventBoardWriterDatabase, path), nonempty));
   await assertSucceeds(get(ref(eventBoardWriterDatabase, path)));
   await assertFails(set(ref(deviceDatabase, path), currentEventBoard()));
+  await assertFails(set(ref(anonymousDatabase, path), currentEventBoard()));
+  await assertFails(set(ref(wrongEventBoardWriterDatabase, path), currentEventBoard()));
+  await assertFails(set(ref(v3PublisherDatabase, path), currentEventBoard()));
   await assertFails(get(ref(deviceDatabase, path)));
+  await assertFails(get(ref(wrongEventBoardWriterDatabase, path)));
   for (const invalid of [
     currentEventBoard({ complete: false }),
     currentEventBoard({ deviceId: "other-device" }),
     currentEventBoard({ openEventCount: -1 }),
     currentEventBoard({ openEventCount: 1, openEvents: {} }),
-    currentEventBoard({ openEventCount: 2, openEvents: { E007: { occurrenceId: "one" } } }),
     currentEventBoard({ acceptedBoardRevision: 0 }),
-    currentEventBoard({ extra: true })
+    currentEventBoard({ extra: true }),
+    currentEventBoard({ rulesRelease: {
+      releaseId: "20260830123456-event-v3-v1", packageVersion: 1,
+      contentHash: "a".repeat(64), extra: true
+    } })
   ]) await assertFails(set(ref(eventBoardWriterDatabase, path), invalid));
 });
 
