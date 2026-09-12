@@ -1,6 +1,5 @@
 {
   "fixture": "KISS complete current-event-board reconciliation",
-  "confirmationDelayMs": 60000,
   "identity": {
     "siteId": "well-main",
     "deviceId": "tab5-well-main"
@@ -21,97 +20,128 @@
   "cases": [
     {
       "name": "first complete empty board",
-      "input": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "boardSequence": 1, "complete": true, "openEvents": {} },
-      "receivedAt": "2026-09-12T16:00:00.000Z",
+      "input": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "boardSequence": 1, "openEvents": {} },
+      "serverReceivedAt": "2026-09-12T16:00:00.000Z",
       "expect": { "decision": "accepted-new-session", "openCreates": [], "closeCreates": [], "onlineKeys": [] }
     },
     {
       "name": "new persistent event appears",
-      "input": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "boardSequence": 2, "complete": true, "openEvents": { "E007": { "occurrenceId": "r15:E007:1", "displayName": "Utility voltage high", "severity": "Red", "eventClass": "latched", "opening": { "kind": "condition-qualified", "cycleSequence": 20, "uptimeMs": 20000, "observedAt": "2026-09-12T16:00:20.000Z" } } } },
-      "receivedAt": "2026-09-12T16:00:20.100Z",
+      "input": {
+        "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "boardSequence": 2,
+        "producedUptimeMs": 20000,
+        "producedAt": "2026-09-12T16:00:20.000Z",
+        "openEvents": {
+          "E007": {
+            "occurrenceId": "r15:E007:1",
+            "displayName": "Utility voltage high",
+            "severity": "Red",
+            "eventClass": "latched",
+            "opening": { "kind": "condition-qualified", "cycleSequence": 20, "uptimeMs": 20000, "observedAt": "2026-09-12T16:00:20.000Z" }
+          }
+        }
+      },
+      "serverReceivedAt": "2026-09-12T16:00:20.100Z",
       "expect": { "decision": "accepted", "openCreates": ["E007/r15:E007:1"], "closeCreates": [], "onlineKeys": ["E007"], "openingEvidenceStatus": "exact-device" }
     },
     {
-      "name": "duplicate delivery",
-      "input": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "boardSequence": 2, "complete": true, "sameSemanticContentAsPrevious": true },
-      "receivedAt": "2026-09-12T16:00:21.000Z",
+      "name": "duplicate delivery cannot close",
+      "startingProjection": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "lastBoardSequence": 2, "openEvents": { "E007": "r15:E007:1" } },
+      "input": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "boardSequence": 2, "sameSemanticContentAsPrevious": true },
+      "serverReceivedAt": "2026-09-12T16:00:21.000Z",
       "expect": { "decision": "duplicate", "openCreates": [], "closeCreates": [], "onlineKeys": ["E007"] }
     },
     {
       "name": "missed opening transmission followed by rediscovery",
       "startingProjection": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "lastBoardSequence": 8, "openEvents": {} },
-      "input": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "boardSequence": 12, "complete": true, "openEvents": { "H001": { "occurrenceId": "r15:H001:1", "displayName": "Required source unavailable", "severity": "Yellow", "eventClass": "monitor", "opening": { "kind": "condition-qualified", "cycleSequence": 9, "uptimeMs": 9000 } } } },
-      "receivedAt": "2026-09-12T16:05:00.000Z",
-      "expect": { "decision": "accepted", "openCreates": ["H001/r15:H001:1"], "openingEvidenceStatus": "reported-open", "onlineKeys": ["H001"] }
+      "input": {
+        "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "boardSequence": 12,
+        "producedUptimeMs": 12000,
+        "openEvents": {
+          "H001": {
+            "occurrenceId": "r15:H001:1",
+            "displayName": "Required source unavailable",
+            "severity": "Yellow",
+            "eventClass": "monitor",
+            "opening": { "kind": "condition-qualified", "cycleSequence": 9, "uptimeMs": 9000 }
+          }
+        }
+      },
+      "serverReceivedAt": "2026-09-12T16:05:00.000Z",
+      "expect": { "decision": "accepted", "openCreates": ["H001/r15:H001:1"], "closeCreates": [], "openingEvidenceStatus": "reported-open", "onlineKeys": ["H001"] }
     },
     {
       "name": "event remains open across communications outage",
       "startingProjection": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "lastBoardSequence": 12, "openEvents": { "E007": "r15:E007:1" } },
-      "input": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "boardSequence": 99, "complete": true, "openEvents": { "E007": { "occurrenceId": "r15:E007:1" } } },
-      "receivedAt": "2026-09-12T17:05:00.000Z",
-      "expect": { "decision": "accepted", "openCreates": [], "closeCreates": [], "absenceCandidateCleared": true, "onlineKeys": ["E007"] }
+      "input": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "boardSequence": 99, "producedUptimeMs": 3600000, "openEvents": { "E007": { "occurrenceId": "r15:E007:1" } } },
+      "serverReceivedAt": "2026-09-12T17:05:00.000Z",
+      "expect": { "decision": "accepted", "openCreates": [], "closeCreates": [], "onlineKeys": ["E007"], "stalenessClearedByFreshReport": true }
     },
     {
-      "name": "one absence then reappearance before delay",
-      "arrivals": [
-        { "boardSequence": 100, "receivedAt": "2026-09-12T17:05:30.000Z", "openEventKeys": [] },
-        { "boardSequence": 101, "receivedAt": "2026-09-12T17:05:59.000Z", "openEventKeys": ["E007"] }
-      ],
-      "expect": { "closeCreates": [], "absenceCandidateCleared": true, "onlineKeys": ["E007"] }
+      "name": "newer complete omission closes immediately",
+      "startingProjection": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "lastBoardSequence": 99, "lastBoardProducedUptimeMs": 3600000, "openEvents": { "E007": "r15:E007:1" } },
+      "input": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "boardSequence": 100, "producedUptimeMs": 3601000, "openEvents": {} },
+      "serverReceivedAt": "2026-09-12T17:05:01.200Z",
+      "expect": {
+        "decision": "accepted",
+        "openCreates": [],
+        "closeCreates": ["E007/r15:E007:1"],
+        "closeReason": "inferred-board-disappearance",
+        "closeTimeStatus": "unknown",
+        "detectedAt": "2026-09-12T17:05:01.200Z",
+        "serverReceiptBoundsActualClose": false,
+        "onlineKeys": []
+      }
     },
     {
-      "name": "absence confirmed by later fresh complete reports",
-      "arrivals": [
-        { "boardSequence": 102, "receivedAt": "2026-09-12T17:06:30.000Z", "openEventKeys": [] },
-        { "boardSequence": 103, "receivedAt": "2026-09-12T17:07:00.000Z", "openEventKeys": [] },
-        { "boardSequence": 104, "receivedAt": "2026-09-12T17:07:30.000Z", "openEventKeys": [] }
-      ],
-      "expect": { "closeCreates": ["E007/r15:E007:1"], "closeReason": "inferred-board-absence", "closeTimeStatus": "bounded", "firstAbsentReceivedAt": "2026-09-12T17:06:30.000Z", "confirmedAbsentAt": "2026-09-12T17:07:30.000Z", "onlineKeys": [] }
-    },
-    {
-      "name": "no communication longer than confirmation delay",
-      "startingProjection": { "openEvents": { "E002": "r15:E002:1" }, "lastReportAt": "2026-09-12T18:00:00.000Z" },
+      "name": "no communication leaves event open but stale",
+      "startingProjection": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "openEvents": { "E002": "r15:E002:1" }, "lastReportAt": "2026-09-12T18:00:00.000Z" },
       "now": "2026-09-12T20:00:00.000Z",
       "input": null,
-      "expect": { "decision": "no-request-no-op", "closeCreates": [], "onlineKeys": ["E002"] }
+      "expect": { "decision": "no-request-no-op", "closeCreates": [], "onlineKeys": ["E002"], "displayStale": true }
     },
     {
       "name": "new session ends unmatched prior occurrences by restart",
       "startingProjection": { "sessionId": "boot_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "openEvents": { "E002": "r15:E002:1" } },
-      "input": { "sessionId": "boot_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "boardSequence": 1, "complete": true, "openEvents": {} },
-      "receivedAt": "2026-09-12T20:01:00.000Z",
+      "input": { "sessionId": "boot_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "boardSequence": 1, "openEvents": {} },
+      "serverReceivedAt": "2026-09-12T20:01:00.000Z",
       "expect": { "decision": "accepted-new-session", "closeCreates": ["E002/r15:E002:1"], "closeReason": "ended-by-restart", "closeTimeStatus": "unknown", "onlineKeys": [] }
     },
     {
-      "name": "same key reopens with new occurrence",
+      "name": "same key replacement closes old and opens new",
       "startingProjection": { "sessionId": "boot_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "lastBoardSequence": 7, "openEvents": { "E007": "r15:E007:1" } },
-      "arrivals": [
-        { "boardSequence": 8, "receivedAt": "2026-09-12T20:02:00.000Z", "openEvents": { "E007": { "occurrenceId": "r15:E007:2" } } },
-        { "boardSequence": 9, "receivedAt": "2026-09-12T20:03:00.000Z", "openEvents": { "E007": { "occurrenceId": "r15:E007:2" } } }
-      ],
-      "expect": { "openCreates": ["E007/r15:E007:2"], "closeCreates": ["E007/r15:E007:1"], "closeReason": "inferred-board-absence", "closeTimeStatus": "bounded", "onlineOccurrence": "r15:E007:2", "oldOccurrencePendingUntilSecondArrival": true }
+      "input": { "sessionId": "boot_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "boardSequence": 8, "openEvents": { "E007": { "occurrenceId": "r15:E007:2" } } },
+      "serverReceivedAt": "2026-09-12T20:02:00.000Z",
+      "expect": {
+        "decision": "accepted",
+        "openCreates": ["E007/r15:E007:2"],
+        "closeCreates": ["E007/r15:E007:1"],
+        "closeReason": "inferred-board-disappearance",
+        "closeTimeStatus": "unknown",
+        "serverReceiptBoundsActualClose": false,
+        "onlineOccurrence": "r15:E007:2"
+      }
     },
     {
-      "name": "stale and out-of-order delivery",
+      "name": "stale and out-of-order omission cannot close",
       "startingProjection": { "sessionId": "boot_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "lastBoardSequence": 20, "openEvents": { "E007": "r15:E007:2" } },
-      "input": { "sessionId": "boot_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "boardSequence": 19, "complete": true, "openEvents": {} },
+      "input": { "sessionId": "boot_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "boardSequence": 19, "openEvents": {} },
       "expect": { "decision": "stale-ignored", "openCreates": [], "closeCreates": [], "onlineOccurrence": "r15:E007:2" }
     },
     {
-      "name": "incomplete and malformed boards",
+      "name": "incomplete and malformed omissions cannot close",
+      "startingProjection": { "sessionId": "boot_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "lastBoardSequence": 20, "openEvents": { "E007": "r15:E007:2" } },
       "inputs": [
         { "boardSequence": 21, "complete": false, "openEvents": {} },
         { "boardSequence": 22, "complete": true, "openEvents": { "E007": { "occurrenceId": null } } }
       ],
-      "expect": { "decisions": ["rejected-incomplete", "rejected-malformed"], "projectionUnchanged": true, "closeCreates": [] }
+      "expect": { "decisions": ["rejected-incomplete", "rejected-malformed"], "projectionUnchanged": true, "closeCreates": [], "onlineOccurrence": "r15:E007:2" }
     },
     {
       "name": "short event entirely during outage is accepted loss",
       "deviceReality": ["E009 opens", "E009 closes"],
-      "deliveredBoards": [
-        { "boardSequence": 30, "openEventKeys": [] },
-        { "boardSequence": 40, "openEventKeys": [] }
-      ],
+      "deliveredBoards": [{ "boardSequence": 30, "openEventKeys": [] }, { "boardSequence": 40, "openEventKeys": [] }],
       "expect": { "openCreates": [], "closeCreates": [], "documentedAcceptedLoss": true }
     }
   ]

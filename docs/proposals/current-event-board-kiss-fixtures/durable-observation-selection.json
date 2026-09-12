@@ -1,0 +1,182 @@
+{
+  "fixture": "Rules-driven durable observation selection and independent delivery",
+  "loggingPolicies": {
+    "PumpEnable": { "fieldKind": "Device", "type": "boolean", "mode": "change" },
+    "SupplyVoltage": { "fieldKind": "Device", "type": "number", "mode": "delta", "threshold": 1.0 },
+    "FlowGpm": { "fieldKind": "Calculated", "type": "number", "mode": "always", "editorLabel": "Include" },
+    "OperatingMode": { "fieldKind": "System", "type": "enum", "mode": "change" },
+    "IsLocked": { "fieldKind": "Device", "type": "integer", "mode": "always", "editorLabel": "Include" },
+    "PressureRaw": { "fieldKind": "Device", "type": "number", "mode": "none" }
+  },
+  "selectedFieldNamesForEveryRecord": [
+    "PumpEnable",
+    "SupplyVoltage",
+    "FlowGpm",
+    "OperatingMode",
+    "IsLocked"
+  ],
+  "illustrativeHeader": {
+    "schemaVersion": 2,
+    "recordType": "observation",
+    "recordId": "obs_boot_AAAAAAAAAAAA_0000000044",
+    "siteId": "well-main",
+    "deviceId": "tab5-well-main",
+    "sessionId": "boot_AAAAAAAAAAAA",
+    "cycleSequence": 44,
+    "time": { "uptimeMs": 44000, "observedAt": "2026-09-12T20:00:44.000Z" },
+    "source": "tab5",
+    "rulesRelease": { "releaseId": "20260912001035-event-v3-v15", "packageVersion": 15, "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+    "snapshotPhase": "observed-pre-dispatch",
+    "triggerReasons": []
+  },
+  "cases": [
+    {
+      "name": "None excludes and Include does not independently trigger",
+      "lastAdmittedAvailable": {
+        "PumpEnable": false,
+        "SupplyVoltage": 250.0,
+        "FlowGpm": 5.2,
+        "OperatingMode": "Normal",
+        "IsLocked": 0
+      },
+      "current": {
+        "PumpEnable": { "state": "available", "value": false },
+        "SupplyVoltage": { "state": "available", "value": 250.4 },
+        "FlowGpm": { "state": "available", "value": 5.7 },
+        "OperatingMode": { "state": "available", "value": "Normal" },
+        "IsLocked": { "state": "available", "value": 8 },
+        "PressureRaw": { "state": "available", "value": 19142 }
+      },
+      "expect": {
+        "durableObservationCount": 0,
+        "independentTriggerReasons": [],
+        "PressureRawIncluded": false,
+        "FlowGpmWouldBeIncludedIfAnotherReasonSelected": true,
+        "IsLockedWouldBeIncludedIfAnotherReasonSelected": true
+      }
+    },
+    {
+      "name": "Change triggers and every selected field is included",
+      "lastAdmittedAvailable": {
+        "PumpEnable": false,
+        "SupplyVoltage": 250.0,
+        "FlowGpm": 5.2,
+        "OperatingMode": "Normal",
+        "IsLocked": 0
+      },
+      "current": {
+        "PumpEnable": { "state": "available", "value": true },
+        "SupplyVoltage": { "state": "available", "value": 250.4 },
+        "FlowGpm": { "state": "available", "value": 5.7 },
+        "OperatingMode": { "state": "available", "value": "Normal" },
+        "IsLocked": { "state": "available", "value": 8 }
+      },
+      "expect": {
+        "durableObservationCount": 1,
+        "triggerReasons": [
+          { "kind": "change", "field": "PumpEnable", "from": false, "to": true }
+        ],
+        "fieldNames": [
+          "PumpEnable",
+          "SupplyVoltage",
+          "FlowGpm",
+          "OperatingMode",
+          "IsLocked"
+        ]
+      }
+    },
+    {
+      "name": "Delta accumulates from last successfully admitted available value",
+      "startingBaseline": { "SupplyVoltage": 250.0 },
+      "samples": [
+        { "value": 250.4, "differenceFromBaseline": 0.4, "selected": false, "baselineAfter": 250.0 },
+        { "value": 250.9, "differenceFromBaseline": 0.9, "selected": false, "baselineAfter": 250.0 },
+        { "value": 251.1, "differenceFromBaseline": 1.1, "selected": true, "fifoAdmission": "accepted", "baselineAfter": 251.1 }
+      ],
+      "expect": {
+        "durableObservationCount": 1,
+        "triggerReason": { "kind": "delta", "field": "SupplyVoltage", "threshold": 1.0 },
+        "smallChangesAccumulate": true,
+        "baselineAdvancesAt": "successful-ram-fifo-admission"
+      }
+    },
+    {
+      "name": "Unavailable gap is explicit and preserves available baseline",
+      "startingBaseline": { "SupplyVoltage": 251.1 },
+      "unavailableCycle": {
+        "current": {
+          "SupplyVoltage": { "state": "unavailable", "reason": "source-unavailable" }
+        },
+        "eventBoundaries": [
+          { "transition": "close", "eventKey": "S020", "occurrenceId": "r15:S020:1" }
+        ]
+      },
+      "recoveryCycle": {
+        "current": {
+          "SupplyVoltage": { "state": "available", "value": 251.4 }
+        }
+      },
+      "expect": {
+        "unavailableCycleDurableObservationCount": 1,
+        "unavailableFieldStoredAs": { "state": "unavailable", "reason": "source-unavailable" },
+        "missingOrRecoveryTriggerCreated": false,
+        "baselineAfterUnavailableAdmission": 251.1,
+        "recoveryDifferenceFromBaseline": 0.3,
+        "recoveryCycleDurableObservationCount": 0,
+        "baselineAfterRecoveryWithoutAdmission": 251.1
+      }
+    },
+    {
+      "name": "Multiple field event and periodic reasons coalesce into one observation",
+      "current": {
+        "PumpEnable": { "state": "available", "value": true },
+        "SupplyVoltage": { "state": "available", "value": 266.2 },
+        "FlowGpm": { "state": "available", "value": 5.8 },
+        "OperatingMode": { "state": "available", "value": "Monitor" },
+        "IsLocked": { "state": "available", "value": 0 }
+      },
+      "triggerReasons": [
+        { "kind": "change", "field": "PumpEnable" },
+        { "kind": "delta", "field": "SupplyVoltage", "threshold": 1.0 },
+        { "kind": "change", "field": "OperatingMode" },
+        { "kind": "event-boundary", "transition": "open", "eventKey": "E007", "occurrenceId": "r15:E007:1" },
+        { "kind": "event-boundary", "transition": "close", "eventKey": "S010", "occurrenceId": "r15:S010:1" },
+        { "kind": "maximum-interval", "intervalMs": 600000 }
+      ],
+      "expect": {
+        "durableObservationCount": 1,
+        "allReasonsRetained": true,
+        "fieldNames": [
+          "PumpEnable",
+          "SupplyVoltage",
+          "FlowGpm",
+          "OperatingMode",
+          "IsLocked"
+        ],
+        "snapshotPhase": "observed-pre-dispatch",
+        "requestedActionsReportedAsObserved": false,
+        "physicalEffectsReportedWithoutLaterObservation": false
+      }
+    },
+    {
+      "name": "Event board succeeds when event-selected observation is later lost",
+      "sameCycle": {
+        "eventBoundary": { "transition": "open", "eventKey": "E007", "occurrenceId": "r15:E007:1" },
+        "boardSequence": 44,
+        "observationRecordId": "obs-session-a-0000000044"
+      },
+      "independentTransportOutcomes": {
+        "board": "accepted-by-pilot",
+        "observation": "admitted-then-evicted-before-upload"
+      },
+      "expect": {
+        "onlineOpenEventCreated": true,
+        "durableObservationStored": false,
+        "mandatoryLink": false,
+        "boardRolledBack": false,
+        "eventObservationAtomicity": false,
+        "historyLossAccepted": true
+      }
+    }
+  ]
+}

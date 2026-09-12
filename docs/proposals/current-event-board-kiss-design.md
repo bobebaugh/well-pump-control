@@ -6,9 +6,9 @@
 
 CPU A remains the only event authority. After each event-board change, and about every 30 seconds while running, it hands CPU B one complete sparse snapshot of the active V3 events. The handoff is a single replaceable latest-value slot. CPU B posts the newest snapshot to a small authenticated Pilot endpoint; it does not interpret the events.
 
-Pilot compares each accepted complete board with its online projection. It writes a deterministic open record when it first sees an occurrence. It closes a missing occurrence only after later complete, fresh boards from the same session have continued to omit it for at least 60 seconds. No request means no reconciliation, so silence can never close an event. A newly accepted device session ends unmatched occurrences from the prior session as `ended-by-restart`, with unknown actual end time.
+Pilot compares each accepted complete board with its online projection. It writes a deterministic open record when it first sees an occurrence. A valid, strictly newer, complete same-session board closes any projected occurrence it omits during that request. There is no confirmation timer because CPU A produces the board after event processing and this design has no separate close-delivery path to wait for. No request means no reconciliation, so silence can never close an event. A newly accepted device session ends unmatched occurrences from the prior session as `ended-by-restart`, with unknown actual end time.
 
-Durable observations use a separate FIFO of individual encoded records, bounded by approximately 100 entries and 384 KiB. When full, it discards the oldest records to retain the most recent useful history. The board neither enters nor waits behind this FIFO. There are no event batches, event transition queue, replay protocol, event ACK ledger, persistent outbox, or flash writes.
+Durable observations remain Rules Engine-driven records with a small system header followed by the active package's logging-enabled Device, Calculated, and System fields. Field policies and event/periodic boundaries select at most one coalesced observation per cycle. That record uses a separate FIFO of individual encoded records, bounded by approximately 100 entries and 384 KiB. When full, the FIFO discards the oldest records to retain the most recent useful history. The board neither enters nor waits behind this FIFO. There are no event batches, event transition queue, replay protocol, event ACK ledger, persistent outbox, atomic event/observation pairing, or flash writes.
 
 This application is layered above a conventional well installation: the mechanical pressure switch, contactor, and hardwired controls continue to pump water without Tab5 or Pilot. Cloud synchronization is therefore a supervisory visibility function and must never enter the local protection path. The target is approximately 95–98% useful history, not forensic reconstruction. It deliberately accepts loss of an event that opens and closes entirely while Pilot is unreachable. Important locking and latching events normally remain on CPU A's board until user action or restart, so a later heartbeat should rediscover them after communications recover.
 
@@ -45,14 +45,14 @@ The design is grounded in these current source facts:
 | 2 | Complete envelope identity/sequence/release plus sparse keyed active slots containing occurrence, display, class/severity, and opening evidence only. |
 | 3 | CPU A replaces the handoff after first evaluated board, any board change, and a roughly 30-second monotonic heartbeat. |
 | 4 | CPU B sends the newest pending board when networking/scheduling permits; transient retry is supersedable and permanent invalid input is dropped. |
-| 5 | First fresh absence stores server receipt evidence; one later strictly newer complete same-session request can close after elapsed time is at least 60 seconds. No request means no action. |
+| 5 | A valid, strictly newer, complete same-session board immediately reconciles opens and omissions during request processing. No request means no action. |
 | 6 | Deterministic open/close document IDs use device, session, and occurrence identity. |
 | 7 | A different valid non-retired session ends unmatched prior occurrences as restart-ended with unknown actual end time. |
-| 8 | Invalid/incomplete/oversize/conflicting boards change nothing; duplicates and stale boards are successful no-ops and do not count as fresh evidence. |
+| 8 | Invalid/incomplete/oversize/conflicting boards change nothing; duplicates and stale boards are successful no-ops and cannot open or close occurrences. |
 | 9 | Only bounded queue/board depth, byte, age, high-water, failure, supersede/eviction, and last-success diagnostics. |
 | 10 | Explicitly no exact history, inferred close precision, outage retention, cross-store atomicity, or cloud control guarantee. |
 | 11 | Delete/omit batches, transition/tombstone queues, pairing, persistent outbox, epochs/tokens, replay/ACK, and complex reconstruction. |
-| 12 | Two compact JSON fixture tables plus pure reducer/FIFO host tests; only a few focused integration checks later. |
+| 12 | Three compact JSON fixture tables plus pure reducer/selection/FIFO host tests; only a few focused integration checks later. |
 
 ## 1. Authority and data separation
 
@@ -63,6 +63,8 @@ There are three distinct objects:
 3. **Pilot projection/history:** Pilot's best online copy plus durable open and inferred-close records. It is observational. It cannot alter CPU A state, operating mode, relay requests, owners, qualification, or latches.
 
 The ordinary durable-observation FIFO is a fourth, independent transport object. Observation congestion cannot delay or consume capacity from the current-event-board report.
+
+Operating-mode integration and script-health monitoring remain separate work. This proposal does not alter their event definitions, inputs, ownership, or device behavior.
 
 ## 2. Board identity and schema
 
@@ -145,7 +147,7 @@ Use the small dedicated scratch path:
 
 CPU B should not PUT this path directly. A direct RTDB write cannot run request-driven Pilot reconciliation. Instead the authenticated `event-board` endpoint validates and reconciles the request, then mirrors the last accepted complete envelope to that RTDB path with a server-owned `receivedAtMs`. This is one latest-value record, not history.
 
-The authoritative online projection/reconciliation state should be one Firestore document per device, for example `sites/{siteId}/eventBoardState/{deviceId}`. Its `openOccurrences` map is keyed by composite occurrence identity, with each entry carrying its event key and any absence-candidate evidence. That permits a newly reported occurrence and its displaced, not-yet-confirmed predecessor to coexist briefly without pretending the predecessor has already closed. The future Open Events UI can read this projection or a simple view derived from it; it must not treat raw RTDB presence as durable truth.
+The authoritative online projection/reconciliation state should be one Firestore document per device, for example `sites/{siteId}/eventBoardState/{deviceId}`. Its `openEvents` map uses the same stable event keys as the device board and stores the current occurrence identity plus last accepted board evidence. One complete board is therefore enough to replace this projection without absence candidates or pending predecessor occurrences. The future Open Events UI can read this projection or a simple view derived from it; it must not treat raw RTDB presence as durable truth.
 
 Use one Firestore transaction per accepted board to read and replace this projection and create any deterministic open/close documents. This transaction protects only Pilot's own projection from duplicate/concurrent requests. It does **not** pair an event with an observation, provide device delivery acknowledgement, or make RAM history durable.
 
@@ -166,25 +168,20 @@ For the current session:
 - equal sequence with different content is an identity conflict: return 409 and make no writes.
 - greater sequence is fresh and may reconcile.
 
-Only a strictly greater sequence is fresh evidence. A duplicate does not refresh `lastPresentReceivedAt`, start or advance an absence interval, satisfy the “later report” requirement, or postpone a close.
+Only a strictly greater sequence is fresh evidence. A duplicate does not refresh the projection or open or close an occurrence.
 
 ### Same-session board
 
-For each reported occurrence:
+Reconcile the complete board in one request:
 
-- If its composite identity is unknown, create its deterministic open record and put it in the online projection. This also handles a missed opening transmission: the open is labeled `reported-open`, and local opening evidence from the slot is preserved.
-- If it is already current, refresh `lastPresentBoardSequence` and `lastPresentReceivedAt` and clear any absence candidate.
-- If the same event key now contains a new occurrence ID, create the new open and make it the current occurrence for that key. Treat the displaced occurrence as absent starting with this board; do not grant it a special immediate-close path. Keep it as a pending open occurrence until the normal confirmation rule below is satisfied.
+- A reported event key absent from the projection creates its deterministic open record and becomes current. This also handles a missed opening transmission: the open is labeled `reported-open`, and local opening evidence from the slot is preserved.
+- The same event key with the same occurrence ID remains open and refreshes its last accepted board evidence without creating another open record.
+- The same event key with a different occurrence ID creates an inferred close for the displaced occurrence and an open for the replacement in the same reconciliation.
+- A projected event key omitted from the new complete board creates an inferred close and is removed from the online open projection immediately during request processing.
 
-For each projected occurrence omitted from this complete board:
+The inferred close uses `closeReason: inferred-board-disappearance`, `closeTimeStatus: unknown`, the closing board's sequence, and a server-owned `detectedAt`. `detectedAt` is when Pilot processed the report, not when CPU A closed the event. Preserve available device evidence from the last board where the occurrence was present and the first board where it was absent—monotonic production uptime and optional synchronized device timestamps—but never substitute server receipt times for device times or describe receipt times alone as bounds on the actual close.
 
-- On first absence, store `firstAbsentBoardSequence` and `firstAbsentReceivedAt`. Keep it online during confirmation.
-- On a later fresh complete same-session board that still omits it, close only when server receipt time is at least 60 seconds after `firstAbsentReceivedAt`. The later board must have a strictly greater sequence; a duplicate cannot confirm absence.
-- If it reappears first, clear the absence candidate and leave it open.
-
-The inferred close record uses `closeReason: inferred-board-absence`, `closeTimeStatus: bounded`, `lastPresentReceivedAt`, `firstAbsentReceivedAt`, and `confirmedAbsentAt`. None is presented as the actual close time. The user-facing display may say “ended sometime after last seen; absence confirmed at …”.
-
-There is no timer. The first absent request starts the interval, and a later heartbeat request performs the check. With a nominal 30-second heartbeat, normal confirmation occurs about 60–90 seconds after the first observed absence. If requests stop for an hour, no close occurs during that hour. A later fresh board can confirm the stored absence after communications recover; the close happens while processing that report, never merely because an hour elapsed.
+There is no absence candidate, delay, confirmation counter, or timer. If reports stop, Pilot changes nothing and the displayed board becomes stale. When communication resumes, the first valid strictly newer complete board reconciles its contents immediately.
 
 ### New session
 
@@ -216,7 +213,7 @@ An open record distinguishes:
 
 Even in the first case, “exact” describes CPU A's recorded opening boundary, not network receipt or physical relay action.
 
-A close record distinguishes `inferred-board-absence` and `ended-by-restart`; both retain honest uncertainty fields. Reopening the same key with a new occurrence uses the ordinary `inferred-board-absence` close after confirmation, not a third close mechanism. The board protocol does not claim exact local close transition history.
+A close record distinguishes `inferred-board-disappearance` and `ended-by-restart`; both retain honest uncertainty fields. Reopening the same key with a new occurrence closes the displaced occurrence as `inferred-board-disappearance` during that same reconciliation. The board protocol does not claim an exact local close time, transition reason, or physical consequence from board absence.
 
 ## 7. Malformed, incomplete, oversize, stale, and reordered boards
 
@@ -232,11 +229,57 @@ A close record distinguishes `inferred-board-absence` and `ended-by-restart`; bo
 | Known retired session | Clear as stale success | Ignore; cannot supersede current |
 | Release changes without restart | Drop after permanent protocol rejection | 409/400; no change |
 
-An invalid or missing board is never treated as an empty board. Silence and error responses never start or advance absence confirmation.
+An invalid or missing board is never treated as an empty board. Silence and error responses never close an occurrence; they only make Pilot's displayed information older.
 
 ## 8. Ordinary durable-observation FIFO
 
-This work changes transport bounds, not observation meaning. Existing `durable-observation-v1` records may continue unchanged until a separately approved record-content revision. Event open/close records are created by Pilot from boards and never occupy this FIFO. The currently uncalled rule-adoption/rejection builder is not activated or redesigned here; it must not be used to justify protected classes or a second queue in this work.
+### Current code cross-check, not design authority
+
+This section was cross-checked against `interfaces/runtime-package-v3.schema.json` and the logging-policy, field-resolution, V3-cycle, durable-selection, and durable-record functions in `tab5/pilot.py` on `tab5-working` at `56f089d53b9d48adb06477005de2506bbf74abf0`. That code is implementation evidence, not the source of the intended behavior below.
+
+The current runtime-package schema already puts a `logging` policy on Device fields, Calculated outputs, and System fields, and accepts `none`, `always`, `change`, and thresholded `delta`. The current `runtime_logging_policies()` collector, however, reads Device and Calculated policies only; it omits System fields. Current V3 change detection supplements older fixed material-change selection, while `build_durable_observation()` still copies the complete legacy observation and accepts only the legacy `material-change` and `maximum-interval` reason names. Event records returned by the V3 cycle are logged but do not themselves select a durable observation. These are incomplete implementation facts, not intended exclusions or deferrals.
+
+The intended clean-sheet behavior is therefore the complete rules-driven selection and projection specified next: all three field categories participate, `none` controls exclusion, every other policy controls inclusion, event boundaries participate in selection, and all same-cycle reasons coalesce. Implementing that behavior will require a later active durable-record/interface unit; this documentation correction makes no runtime or schema change.
+
+### Rules-driven observation content
+
+The active Rules Engine package determines one fixed field set for every durable observation produced during that running package. Each record has:
+
+1. a small system-generated header: schema/record identity, site/device/session, cycle sequence, device observation time evidence, source, running rules-release identity, trigger reasons, and snapshot phase; then
+2. every logging-enabled Device, Calculated, and System field, keyed by its stable system name.
+
+Every durable observation for that package contains the same selected field names regardless of why the record was selected. A selected field that is unavailable remains present as an explicitly tagged unavailable value and reason. It never carries a retained reading, zero, false, or another invented substitute.
+
+The runtime logging modes retain their existing JSON meanings:
+
+| Mode | Editor label | Included in every durable observation? | Independently selects a record? |
+| --- | --- | --- | --- |
+| `none` | None | No | No |
+| `always` | Include | Yes | No |
+| `change` | Change | Yes | Yes, when an available discrete value changes from its comparison baseline |
+| `delta` | Delta | Yes | Yes, when the absolute numeric difference from its comparison baseline reaches the configured threshold |
+
+Each `change` or `delta` field compares with that field's last available value in a durable observation successfully admitted to the RAM FIFO. Unavailable samples neither trigger on missing/recovery alone nor replace the last available baseline. For `delta`, sub-threshold changes therefore accumulate against the retained admitted baseline. Admission of any observation for another reason updates the baseline for every selected field that is available in that admitted record; unavailable selected fields preserve their earlier available baseline.
+
+### Selection and per-cycle coalescing
+
+A cycle selects a durable observation when one or more of these reasons applies:
+
+- a logging-enabled `change` field changes;
+- a logging-enabled `delta` field reaches its threshold;
+- a V3 event opens or closes during evaluation of that cycle's frozen snapshot;
+- the ten-minute maximum interval expires; or
+- the existing session-start selection applies.
+
+Collect every reason arising from the same evaluation cycle into one `triggerReasons` array and build at most **one** durable observation. An event boundary is a normal selection reason; it does not create a protected queue class, require a matching event-history document, or guarantee delivery.
+
+The durable observation uses the agreed per-cycle frozen evidence: acquisition and calculations finish, the snapshot is frozen, and V3 evaluates that snapshot. Opening/closing reasons may describe the event-evaluation result, but the field values remain the observed pre-dispatch state. A requested action, RPC acknowledgement, or later confirmed physical result must not be presented as though it were already observed in that snapshot.
+
+After CPU B successfully admits the complete encoded observation to the RAM FIFO, CPU A advances the available-field comparison baselines and maximum-interval baseline. It does not wait for cloud acknowledgement. Failed admission advances neither. CPU A retains no producer-side retry record.
+
+This restores Rules Engine control over durable content and frequency without restoring delivery guarantees. Existing `durable-observation-v1` records may continue unchanged until a separately approved record-content revision. Event open/close records are created by Pilot from boards and never occupy this FIFO. The currently uncalled rule-adoption/rejection builder is not activated or redesigned here; it must not be used to justify protected classes or a second queue in this work.
+
+### FIFO admission and loss
 
 CPU A hands CPU B one complete individual durable observation at a time. CPU B compact-encodes it once before admission. The FIFO is bounded simultaneously by:
 
@@ -290,12 +333,13 @@ The design does not guarantee:
 - retention of ordinary observations beyond the bounded RAM FIFO;
 - preservation of any queue, board pending state, counter, or local event state across restart/power loss;
 - atomic pairing, ordering, or arrival of observations with event history;
+- delivery of an event-selected observation merely because the event board arrived;
 - reconstruction of every transition or exact cross-session chronology;
 - prevention of the rare never-before-seen delayed old-session request race;
 - cloud availability, immediate cloud protection, or any cloud influence over local control;
 - durable proof that a relay consequence physically occurred.
 
-It does guarantee within the implemented protocol that a valid persistent open event is rediscovered on a later accepted complete board, duplicate/current-session stale boards do not duplicate history, same-session silence does not close an event, and Pilot never writes back into CPU A authority.
+The proposed protocol does ensure that a valid persistent open event is rediscovered on a later accepted complete board, a strictly newer complete omission reconciles immediately, duplicate/current-session stale boards do not change history, same-session silence does not close an event, and Pilot never writes back into CPU A authority.
 
 ## 11. Mechanisms removed from future work
 
@@ -308,31 +352,33 @@ Relative to `docs/proposals/durable-observation-v3-event-record-design.md` at `7
 | Device-generated immutable event-open/event-close transition FIFO | Pilot derives best-effort history from complete boards |
 | Event-priority eviction and protected batch classes | One oldest-first observation eviction rule |
 | Transactional event↔observation pairing and link repair | No required relationship |
-| Event tombstones or transition queues | Absence across later complete boards |
+| Event tombstones or transition queues | Direct comparison with each strictly newer complete board |
 | Session-start durable records, server-issued session epochs/tokens, registration fences | Device-generated session ID, board sequence, retired-session fence, explicit rare-race limit |
 | Replay and ACK machinery intended to preserve event history | Periodic full-board heartbeat and deterministic Pilot IDs |
 | Complex close-before-open and out-of-order transition reconstruction | Latest complete state reconciliation |
 | Four batch / 260-record multi-limit planning | About 100 individual records plus 384 KiB |
-| Requirement that every event boundary force and link an observation | No forced coupling |
+| Atomic or mandatory event↔observation linkage | Event boundaries still select one coalesced observation, but neither record waits for or guarantees the other |
 | Persistent device outbox or routine internal-flash writes | RAM only |
 
 The prior proposal and fixtures should remain untouched for comparison, but none of these mechanisms should be copied into the new implementation plan.
 
 ## 12. Minimal host-test fixtures
 
-Use only the two JSON scenario files beside this proposal and a short README:
+Use only the three JSON scenario files beside this proposal and a short README:
 
-- `current-event-board-kiss-fixtures/board-reconciliation.json` is one ordered table of board arrivals and expected projection/history changes. It covers initial empty state, appearance, duplicate, rediscovery, outage persistence, absence cancellation, confirmed absence, silence, restart, reopening, stale delivery, malformed/incomplete input, and accepted loss.
+- `current-event-board-kiss-fixtures/board-reconciliation.json` is one table of board arrivals and expected projection/history changes. It covers initial empty state, appearance, duplicate, rediscovery, outage persistence, immediate complete-board disappearance, silence/staleness, restart, same-key replacement, stale delivery, malformed/incomplete input, and accepted loss.
+- `current-event-board-kiss-fixtures/durable-observation-selection.json` covers the fixed logging-enabled field set, Include/Change/Delta behavior, unavailable gaps, accumulated delta, event/field/periodic reason coalescing, opening and closing boundaries, and independent board success when the associated observation is lost.
 - `current-event-board-kiss-fixtures/observation-fifo.json` covers count overflow, byte overflow/oversize rejection, stable FIFO-head retry, and board independence while the FIFO is saturated.
 
-A small pure host reducer should accept `(storedProjection, request, serverReceivedAt)` and return `(decision, newProjection, recordCreates)`. A small FIFO model should accept encoded lengths and success/failure results. Tests compare those outputs with the fixture expectations. Do not boot a browser, emulator, Netlify server, or Firebase for these semantic unit cases.
+A small pure host reducer should accept `(storedProjection, request, serverReceivedAt)` and return `(decision, newProjection, recordCreates)`. A pure selection model should accept logging policies, field states, per-field admitted baselines, event boundaries, and interval state and return zero or one candidate observation plus updated baselines only after simulated FIFO admission. A small FIFO model should accept encoded lengths and success/failure results. Tests compare those outputs with the fixture expectations. Do not boot a browser, emulator, Netlify server, or Firebase for these semantic unit cases.
 
 Later implementation needs a few focused integration tests beyond the fixtures:
 
 1. the endpoint transaction is idempotent under concurrent duplicate requests;
 2. accepted state is mirrored to the dedicated RTDB path under the new rules/configuration;
 3. M6.34's CPU A control/event tests remain unchanged when all cloud calls fail;
-4. measured full-device heap retains comfortable headroom with a 384 KiB encoded FIFO and a maximum board.
+4. event opening/closing, field triggers, and the maximum interval still coalesce to one observation per cycle without coupling board delivery;
+5. measured full-device heap retains comfortable headroom with a 384 KiB encoded FIFO and a maximum board.
 
 ## Explicit remaining uncertainties
 
