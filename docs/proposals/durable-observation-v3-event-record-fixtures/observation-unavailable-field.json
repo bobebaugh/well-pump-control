@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 2,
+  "recordType": "observation",
+  "recordId": "obs_s_8f1c2d3e4a5b69788796a5b4c3d2e1f0_0000001300",
+  "siteId": "well-main",
+  "deviceId": "tab5-well-main",
+  "sessionId": "s_8f1c2d3e4a5b69788796a5b4c3d2e1f0",
+  "cycleSequence": 1300,
+  "time": {
+    "utcStatus": "synchronized",
+    "observedAt": "2026-09-12T16:43:46.125Z",
+    "uptimeMs": 514215
+  },
+  "source": "tab5",
+  "rulesRelease": {
+    "releaseId": "20260912001035-event-v3-v15",
+    "version": 15,
+    "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "observationPhase": "pre-dispatch",
+  "triggerReasons": [
+    {
+      "kind": "event-boundary",
+      "transition": "open",
+      "occurrenceId": "occ_s_8f1c2d3e4a5b69788796a5b4c3d2e1f0_H001_0000001300_01",
+      "eventRecordId": "evt_s_8f1c2d3e4a5b69788796a5b4c3d2e1f0_0000001300_01"
+    }
+  ],
+  "relatedEventRecordIds": [
+    "evt_s_8f1c2d3e4a5b69788796a5b4c3d2e1f0_0000001300_01"
+  ],
+  "fields": {
+    "PumpEnable": { "state": "available", "value": false },
+    "ContactorFlag": { "state": "available", "value": false },
+    "IsLocked": { "state": "available", "value": 19 },
+    "Shelly1Available": { "state": "available", "value": true },
+    "SupplyVoltage": { "state": "unavailable", "reason": "source-unavailable" },
+    "ShellyEMAvailable": { "state": "available", "value": false },
+    "PressurePSI": { "state": "available", "value": 51.9 },
+    "WiFiConnected": { "state": "available", "value": true },
+    "OperatingMode": { "state": "available", "value": "Normal" }
+  }
+}

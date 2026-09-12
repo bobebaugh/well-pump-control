@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 2,
+  "recordType": "observation",
+  "recordId": "obs_s_8f1c2d3e4a5b69788796a5b4c3d2e1f0_0000001204",
+  "siteId": "well-main",
+  "deviceId": "tab5-well-main",
+  "sessionId": "s_8f1c2d3e4a5b69788796a5b4c3d2e1f0",
+  "cycleSequence": 1204,
+  "time": {
+    "utcStatus": "synchronized",
+    "observedAt": "2026-09-12T16:42:10.125Z",
+    "uptimeMs": 418215
+  },
+  "source": "tab5",
+  "rulesRelease": {
+    "releaseId": "20260912001035-event-v3-v15",
+    "version": 15,
+    "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "observationPhase": "pre-dispatch",
+  "triggerReasons": [
+    {
+      "kind": "change",
+      "field": "PumpEnable",
+      "baseline": false,
+      "observed": true
+    },
+    {
+      "kind": "delta",
+      "field": "SupplyVoltage",
+      "baseline": 263.4,
+      "observed": 266.1,
+      "threshold": 2.0,
+      "difference": 2.7
+    },
+    {
+      "kind": "event-boundary",
+      "transition": "open",
+      "occurrenceId": "occ_s_8f1c2d3e4a5b69788796a5b4c3d2e1f0_E007_0000001204_01",
+      "eventRecordId": "evt_s_8f1c2d3e4a5b69788796a5b4c3d2e1f0_0000001204_01"
+    },
+    {
+      "kind": "event-boundary",
+      "transition": "close",
+      "occurrenceId": "occ_s_8f1c2d3e4a5b69788796a5b4c3d2e1f0_S010_0000001100_01",
+      "eventRecordId": "evt_s_8f1c2d3e4a5b69788796a5b4c3d2e1f0_0000001204_02"
+    }
+  ],
+  "relatedEventRecordIds": [
+    "evt_s_8f1c2d3e4a5b69788796a5b4c3d2e1f0_0000001204_01",
+    "evt_s_8f1c2d3e4a5b69788796a5b4c3d2e1f0_0000001204_02"
+  ],
+  "fields": {
+    "PumpEnable": { "state": "available", "value": true },
+    "ContactorFlag": { "state": "available", "value": true },
+    "IsLocked": { "state": "available", "value": 0 },
+    "Shelly1Available": { "state": "available", "value": true },
+    "SupplyVoltage": { "state": "available", "value": 266.1 },
+    "ShellyEMAvailable": { "state": "available", "value": true },
+    "PressurePSI": { "state": "available", "value": 52.8 },
+    "WiFiConnected": { "state": "available", "value": true },
+    "OperatingMode": { "state": "available", "value": "Normal" }
+  }
+}
