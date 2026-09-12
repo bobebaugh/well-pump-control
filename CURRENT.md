@@ -58,9 +58,14 @@ do not discard it to align branches. The next unit brief is NEXT-UNIT.md.
 - M6.35 has 134 ordinary host tests passing, including strict v2 observation
   ingestion, board reconciliation, deterministic callback retry, mirror revision
   ordering, and executable schema examples. The corrected current-event-board
-  rules have not completed the Java 21 RTDB emulator gate in this environment;
-  empty/nonempty-board and unauthorized-write coverage remains an owner check
-  before rules publication.
+  rules passed the local Java 21 RTDB emulator gate on 2026-09-12 at
+  `f97f909a137f9faf2c369614178f72d5a75f7869`: Java 21.0.12.1, Node 22.22.2,
+  and npm 10.9.7; `npm ci` then `npm run test:rtdb-rules` started the
+  `demo-well-pump-control` database emulator, loaded `firebase/rtdb.rules.json`,
+  and completed 10 tests passed, 0 failed before clean shutdown. Firebase CLI
+  configuration was isolated in an empty local XDG config directory because the
+  shared user config was unreadable; no login, live Firebase access, or remaining
+  emulator-gate blocker exists.
 
 - Pilot 2f02f158: 112 host tests passed. The owner-provided Windows Codex report
   confirms RTDB emulator acceptance using demo-well-pump-control on localhost,
