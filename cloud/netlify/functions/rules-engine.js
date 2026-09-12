@@ -68,9 +68,16 @@ function createHandler(dependencies = {}) {
       const sections = v3 ? V3_SECTIONS : SECTIONS;
       if (event.httpMethod === "GET") {
         if(v3 && event.queryStringParameters?.deviceStatus === "1") {
-          try { return response(200,{status:"ok",deviceStatus:await (dependencies.readDeviceStatus || require('../lib/rules-engine-v3-device-status').readDeviceStatus)()}); }
-          catch { return response(200,{status:"unavailable",deviceStatus:null}); }
+          try {
+            const deviceStatus = await (dependencies.readDeviceStatus || require('../lib/rules-engine-v3-device-status').readDeviceStatus)();
+            return response(200,{status:deviceStatus ? "ok" : "missing",deviceStatus});
+          } catch (error) {
+            const code = require('../lib/rules-engine-v3-device-status').statusErrorCode(error);
+            console.error("Tab5 status read failed", {code});
+            return response(503,{status:"unavailable",code,deviceStatus:null});
+          }
         }
+        if (v3 && event.queryStringParameters?.seedTemplate === "1") return response(200, {status:"ok", draft:v3Defaults()});
         if (event.queryStringParameters?.releaseId) {
           const releaseId = requestedReleaseId(event);
           if (!releaseId) return response(400, { status: "error", code: "invalid_release_id" });
@@ -112,7 +119,7 @@ function createHandler(dependencies = {}) {
         const result = validateAndCompileV3(checked.draft);
         if(request.action === "previewImport") {
           const loaded = await store.readDraft();
-          return response(200, {status:"preview", baseRevisions:loaded.draft.revisions,
+          return response(200, {status:"preview", draft:checked.draft, baseRevisions:loaded.draft.revisions,
             counts:Object.fromEntries(sections.map(s=>[s,{before:loaded.draft[s].length,after:checked.draft[s].length}])),
             valid:result.valid, errors:result.errors, warnings:result.warnings});
         }
@@ -182,9 +189,14 @@ function createHandler(dependencies = {}) {
       // V3 closes its authoring root shape.  `revisions` is store metadata,
       // not an editable definition and must never enter the compiler or an
       // immutable V3 authoring release.
-      const authoringDraft = v3
+      let authoringDraft = v3
         ? { schemaVersion: 3, ...Object.fromEntries(V3_SECTIONS.map(section => [section, loaded.draft[section]])) }
         : loaded.draft;
+      if (v3 && request.action === "validate" && request.backup !== undefined) {
+        const checked = readBackup(request.backup);
+        if (checked.errors.length) return response(400,{status:"invalid",errors:checked.errors,warnings:[]});
+        authoringDraft = checked.draft;
+      }
       const result = v3 ? validateAndCompileV3(authoringDraft) : validateAndCompile(loaded.draft);
       if (!result.valid) return response(400, { status: "invalid", errors: result.errors, warnings: result.warnings });
       const previewBody = `${JSON.stringify(result.runtimePackage, null, 2)}\n`;

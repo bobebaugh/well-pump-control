@@ -8,36 +8,34 @@ uses schema 4 with executionEnabled true, device state uses schema 2 with runnin
 desired and staged identities. Legacy publication state requires republishing;
 delivery does not rewrite immutable releases. Tab5 adopts only on restart.
 
-The configuration unit implements complete authoring backup export/replacement
-import, with no additive import. A read of the V3 draft no longer seeds missing
-documents; import can initialize an empty V3 authoring store atomically. Existing
-seeding and historical restoration remain optional. Publish and Deliver validates
-online and reuses a matching current release; failed delivery retries that release.
-Device status is a separate read of the existing rulesV3State record, with report
-time and explicit unavailable identities. No Firebase rules change is included.
+The accepted configuration unit is deployed on pilot at 30bdcc2. Owner reported
+all requested tests OK on 2026-09-12, including backup replacement/publication and
+historical restoration. The supplied backup uses E007 >265 V / <=265 V. Its apparent
+import failure was a confusing preview/confirmation step; Replace draft restored
+265 and publication created V15. Owner logs confirm V15 staging
+(20260912001035-event-v3-v15, hash prefix f69005f96623). Owner later reported all
+tests OK; a separate V15 startup log was not supplied here.
 
-Online checks now cover known M6.33 support gaps, including summaries, expression
-programs, Boyle parameters/quality enum, ADC prerequisites, mode assignments and
-required relay/lock names. Authoring backup preserves unfinished definitions;
-publication rejects unsupported configurations. The guide is web/rules-engine-guide.html.
+The approved closeout replaces separate load/import/history/restore controls with
+one Load popup: Seed, Last saved, Published (10 most recent), Backup JSON. All load
+into the editor without persistence. Validate is read-only; Save Draft atomically
+replaces all sections; every deliberate Publish creates a new version. Retry delivery
+retains that version. Guide: web/rules-engine-guide.html.
 
-## Verified handoff bases — 2026-09-11
+## Verified source bases — 2026-09-12
 
-These are the advertised tips before this documentation-only handoff, not claims
-that documentation commit hashes equal their own parents. Re-read live refs.
+Re-read live refs; these are the tips before the closeout commit, not its own SHA.
 
-| Branch | Verified tip before handoff |
+| Branch | Verified base |
 | --- | --- |
-| pilot | 2f02f158bd5c73ff946f208ab7d1549d6d44c6fc |
-| pilot-working | 2f02f158bd5c73ff946f208ab7d1549d6d44c6fc |
+| pilot | 30bdcc2e7c92c0539d9d2de037cc5539a6881ed6 |
+| pilot-working | 30bdcc2e7c92c0539d9d2de037cc5539a6881ed6 |
 | Tab5 | 688f491cf9b24b328cd95383cc5c190a544d9745 (M6.32) |
-| tab5-working | 9d297ae4897a0a911e52a6d8b9881c2fa1ee93ff (M6.33) |
+| tab5-working | 6d4b54cc9806e34b01343caf69f1df86e540d486 (M6.33) |
 
-This handoff adds documentation commits only to the two working branches. No
-operating promotion or deployment is included. M6.33 is bench-accepted but has
-not been promoted to Tab5. Before the next coding unit, obtain owner approval
-for needed operating alignment; never reset working branches to discard accepted
-work. Read-only design review can proceed from the working branches now.
+Pilot working/operating matched and were clean at closeout start. Tab5 remains
+unchanged. Its accepted M6.33 still needs owner-approved operating promotion;
+do not discard it to align branches. The next unit brief is NEXT-UNIT.md.
 
 ## Evidence and limits
 
@@ -72,31 +70,33 @@ work. Read-only design review can proceed from the working branches now.
 - Bench evidence is not proof of production protection. The relay was described
   by the owner as unloaded; the final Shelly protection script is not implemented.
 
-## Configuration unit verification and closeout
+## Closeout verification and remaining check
 
-- Owner authorized work from pilot-working 8d659d6dca5210828b8b0806b2439d1e644d468c,
-  preserving its documentation handoff. Tab5 reference is unchanged M6.33 at
-  6d4b54cc9806e34b01343caf69f1df86e540d486.
-- 120 host tests passed; JavaScript syntax and whitespace checks passed.
-  Host tests cover empty-store import, atomic rejection/conflict, full authoring
-  round-trip, compatibility against an exact dependency slice of the real Tab5
-  resolver, and actual browser-script orchestration with an in-memory backend.
-- Visual/browser acceptance is not established: local Chromium was absent and its
-  download timed out; the connected browser rejected the local fixture URL. The
-  isolated Playwright check remains available as tests/editor-browser.check.cjs.
-- No live Firebase access, package publication/delivery, hardware operation,
-  operating promotion, or deployment occurred in this unit.
-- Closeout: review source/test evidence, run the browser check where Chromium is
-  available, then obtain owner direction for operating promotion/deployment and
-  any actual package delivery/restart check.
-- Owner requested branch synchronization when the unit is finished. Preserve
-  accepted M6.33 and documentation; synchronize the corresponding working and
-  operating branches only with explicit promotion approval. This is not approval
-  to deploy or install Tab5 automatically.
+- 124 host tests pass, including actual browser-script orchestration against the
+  in-memory backend. Coverage includes the 266 saved / 265 backup reproduction,
+  all load sources and validation without saving, explicit atomic save, conflicts,
+  malformed loads, deliberate identical publication, delivery retry, interrupted
+  publication response recovery, and categorized device-status errors/timeouts.
+- The original online compatibility tests remain, including the exact M6.33 resolver
+  dependency slice. No changes to Tab5 support policy are included.
+- Updated tests/editor-browser.check.cjs for the new dialog. Real-browser execution
+  of this closeout remains unverified: Chromium is absent in this environment.
+  Prior deployed editor acceptance does not imply acceptance of this new dialog.
+- Tab5 status previously swallowed every read failure and invalid report into null.
+  It now reports a completion time and distinct error categories, with an 8-second
+  server read timeout. Live root cause remains unverified: no Firebase reads or
+  configuration/permission changes were made. After promotion, refresh once and
+  use the displayed category to resolve the actual failure if it persists.
+- No live package publication/delivery or hardware operations occurred in closeout.
+  Source promotion is a separate owner decision. Pilot remains on the accepted
+  preceding build until that decision; this closeout is on pilot-working.
+- Owner asked to synchronize branches at completion. Pilot promotion should be a
+  fast-forward after review; Tab5 promotion of accepted M6.33 is separate and must
+  preserve its work. Do not install Tab5 automatically.
 
 ## Later / unresolved
 
-- Confirm the configuration workflow in the deployed browser after owner-approved promotion.
+- Confirm the new Load dialog and classified status result after owner-approved promotion; do not repeat the already accepted original import tests.
 - Normal/Monitor kernel exists; web operator requests, required-source occurrence
   generation and Clear Events integration remain incomplete. S020 availability
   correction does not wire automatic Monitor behavior. Separate design/work unit.

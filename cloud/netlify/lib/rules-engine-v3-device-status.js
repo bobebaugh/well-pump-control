@@ -6,11 +6,33 @@ function normalizeDeviceStatus(value) {
   if(value.rejected!=null && (typeof value.rejected!=='object' || typeof value.rejected.reason!=='string')) return null;
   return {...value,running:value.running??null,desired:value.desired??null,staged:value.staged??null,rejected:value.rejected??null};
 }
-async function readDeviceStatus() {
-  const {getDatabase} = require('firebase-admin/database');
-  const {auth} = require('./firebase').getPilotAuth();
-  const url = require('./rules-store')._approvedRtdbUrl(process.env.FIREBASE_RTDB_URL);
-  const snapshot = await getDatabase(auth.app,url).ref('v1/sites/well-main/devices/tab5-well-main/rulesV3State').get();
-  return normalizeDeviceStatus(snapshot.val());
+class DeviceStatusError extends Error {
+  constructor(code) { super(code); this.code = code; }
 }
-module.exports={normalizeDeviceStatus,readDeviceStatus};
+async function readDeviceStatus(dependencies = {}) {
+  const read = dependencies.read || (async () => {
+    const {getDatabase} = require('firebase-admin/database');
+    const {auth} = require('./firebase').getPilotAuth();
+    const url = require('./rules-store')._approvedRtdbUrl(process.env.FIREBASE_RTDB_URL);
+    const snapshot = await getDatabase(auth.app,url).ref('v1/sites/well-main/devices/tab5-well-main/rulesV3State').get();
+    return snapshot.val();
+  });
+  let timer;
+  try {
+    const value = await Promise.race([
+      read(),
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(new DeviceStatusError('tab5_status_timeout')),dependencies.timeoutMs ?? 8000);})
+    ]);
+    if (value == null) return null;
+    const normalized = normalizeDeviceStatus(value);
+    if (!normalized) throw new DeviceStatusError('tab5_status_invalid');
+    return normalized;
+  } finally { clearTimeout(timer); }
+}
+function statusErrorCode(error) {
+  if (['tab5_status_timeout','tab5_status_invalid'].includes(error?.code)) return error.code;
+  if (error?.name === 'ConfigurationError') return 'tab5_status_configuration';
+  if (/permission|denied|unauthorized/i.test(String(error?.code || ''))) return 'tab5_status_denied';
+  return 'tab5_status_read_failed';
+}
+module.exports={normalizeDeviceStatus,readDeviceStatus,statusErrorCode};

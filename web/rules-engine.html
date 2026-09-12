@@ -29,7 +29,7 @@
 
     <section class="panel engine-toolbar">
       <div>
-        <p class="kicker">PUBLISHED PARAMETER PACKAGE</p>
+        <p class="kicker">LAST PUBLISHED PACKAGE</p>
         <h2 id="engine-release">Not loaded</h2>
         <small id="engine-hash">Load the Firestore draft to begin.</small>
       </div>
@@ -39,9 +39,8 @@
         <small id="runtime-size">No runtime package generated.</small>
       </div>
       <div class="toolbar-actions">
-        <button class="secondary-button" id="engine-load" type="button">Load draft</button>
+        <button class="secondary-button" id="engine-load" type="button">Load…</button>
         <button class="secondary-button" id="engine-backup" type="button" disabled>Export rules backup</button>
-        <button class="secondary-button" id="engine-import" type="button">Import rules backup</button>
         <input id="backup-file" type="file" accept=".json,application/json" hidden>
         <button class="secondary-button" id="engine-save" type="button" disabled>Save draft</button>
         <button class="secondary-button" id="engine-validate" type="button" disabled>Validate package</button>
@@ -53,23 +52,20 @@
 
     <section id="engine-status" class="editor-status" aria-live="polite">No draft loaded.</section>
 
-    <section class="panel release-details"><strong>Tab5 — last reported package identities</strong><div id="device-package-state">Not checked. Delivery success does not confirm staging.</div><button id="refresh-device-state" class="secondary-button" type="button">Refresh Tab5 status</button></section>
-    <section id="import-preview" class="panel release-details" hidden><h2>Replace configuration draft</h2><div id="import-details"></div><button id="apply-import" class="primary-button" type="button">Replace draft</button><button id="cancel-import" class="secondary-button" type="button">Cancel</button></section>
-    <details class="panel"><summary>Backup help and initial setup</summary><p>Export rules backup preserves the complete editable configuration, including unsaved edits. Runtime JSON is not a restore file. Import replaces the draft and never publishes or delivers automatically.</p><p>For AI-assisted changes, provide a backup and request a revised complete backup. Partial imports are not supported.</p><button id="seed-defaults" class="secondary-button" type="button">Seed missing V3 sections</button><p>Seeding is optional. A backup can initialize an empty V3 store directly.</p><a href="/rules-engine-guide.html">Configuration guide</a></details>
-    <section id="release-history" class="panel release-history" hidden>
-      <div>
-        <p class="kicker">PUBLISHED PACKAGE HISTORY</p>
-        <h2>Immutable releases</h2>
-        <small>Select any published version. Restoring copies it into the draft; changed configurations publish as a new version; unchanged configurations reuse the current release.</small>
-      </div>
-      <label class="release-selector">Published version<select id="release-select"></select></label>
-      <div class="release-actions">
-        <button class="secondary-button" id="release-view" type="button">View</button>
-        <button class="secondary-button" id="release-download" type="button" disabled>Download runtime</button>
-        <button class="secondary-button" id="release-restore" type="button" disabled>Restore to draft</button>
-      </div>
-      <div id="release-details" class="release-details">No published package selected.</div>
-    </section>
+    <section class="panel release-details"><strong>Tab5 — last reported package identities</strong><div id="device-package-state" aria-live="polite">Not checked. Delivery success does not confirm staging.</div><button id="refresh-device-state" class="secondary-button" type="button">Refresh Tab5 status</button></section>
+    <p id="working-source" aria-live="polite">No working rules loaded.</p>
+    <dialog id="load-dialog" class="load-dialog" aria-labelledby="load-title">
+      <h2 id="load-title">Load working rules</h2>
+      <p id="load-error" role="alert"></p>
+      <p>Loads into the editor only. Save Draft to keep the rules, or Publish and Deliver to send them.</p>
+      <button id="load-seed" class="secondary-button" type="button">1. Seed</button>
+      <button id="load-saved" class="secondary-button" type="button">2. Last saved</button>
+      <label>3. Published — 10 most recent<select id="release-select"></select></label>
+      <button id="load-published" class="secondary-button" type="button">Load selected version</button>
+      <button id="load-backup" class="secondary-button" type="button">4. Load Backup JSON</button>
+      <button id="load-cancel" class="secondary-button" type="button">Cancel</button>
+    </dialog>
+    <details class="panel"><summary>Backup help</summary><p>Export rules backup includes unsaved editor changes. Load → Backup JSON loads a complete editable backup without saving. Runtime JSON is not a backup.</p><p>For AI-assisted changes, provide a backup and request a revised complete backup. Partial imports are not supported.</p><a href="/rules-engine-guide.html">Configuration guide</a></details>
 
     <nav id="engine-tabs" class="engine-tiles" aria-label="Rules Engine sections" hidden>
       <button class="engine-tile active" type="button" data-section="devices">

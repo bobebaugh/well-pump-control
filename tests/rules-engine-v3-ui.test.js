@@ -12,8 +12,8 @@ const source = fs.readFileSync(path.join(root, "web", "rules-engine.js"), "utf8"
 
 test("Rules Engine browser is explicitly routed to the isolated V3 endpoint", () => {
   assert.match(source, /rules-engine\$\{query\}\$\{separator\}version=3/);
-  assert.match(source, /authoring\?\.schemaVersion === 3/);
-  assert.match(source, /action: "restore"/);
+  assert.match(source, /authoringPackage:draft/);
+  assert.match(html, /id="load-dialog"/);
   assert.match(source, /action:[ ]*['"]publish['"]/);
   assert.match(html, /Event V3 runtime delivery — restart-only adoption/);
 });

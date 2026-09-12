@@ -116,16 +116,22 @@ Do not infer repeated closing-condition evaluation from a delayed relay write.
 
 ## Configuration backup and publication workflow
 
-A versioned complete authoring backup is the long-term recovery source. It can
-replace all four draft sections in an empty V3 authoring store without seeding.
-Import validates structure before one revision-checked transaction; unfinished or
-unsupported authoring remains editable but cannot publish. Runtime JSON is not an
-authoring backup. AI-assisted additions use a revised complete backup; additive
-merge/import is out of scope.
+A versioned complete authoring backup is the long-term recovery source. One Load
+popup offers Seed, Last saved, the 10 most recent published versions, and Backup
+JSON. All sources replace browser working rules only. Load → Last saved discards
+unsaved work; Save Draft atomically replaces all four saved sections with revision
+checks regardless of the load source. Loading/Validate never save. Saving a backup
+can initialize an empty V3 authoring store without seeding. Structural invalidity
+blocks load/save; complete unfinished authoring remains editable but cannot publish.
+AI additions use a revised complete backup, not additive merge. Runtime JSON is
+not an authoring backup. Showing 10 versions does not introduce retention/deletion.
 
-Online validation targets the existing Tab5 supported subset before publication
-and delivery. Existing Tab5 integrity/support checks remain. A matching current
-authoring release can be reused; delivery retry does not mint a new version.
-Publication, delivery request and Tab5's last reported desired/staged/running
-identities remain distinct. No new exchanged schema or mode-input integration is
-introduced by this workflow.
+Publish and Deliver validates working rules, asks about warnings, saves, and
+creates a new immutable version on every deliberate publication, even if unchanged.
+Retry delivery reuses the current version. Interrupted publication attempts are
+reconciled by readback, never blindly retried. Online validation targets M6.33;
+existing Tab5 integrity/support checks remain. Publication, delivery request and
+last-reported desired/staged/running remain distinct; restart activates a package.
+Status reads distinguish missing, invalid, timeout, configuration, denied and other
+read failures without fabricating identities. No exchanged schema, mode input,
+Firebase rules or installed Tab5 change is introduced by this workflow.

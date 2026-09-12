@@ -402,3 +402,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(67,168,255,.
 .configuration-guide { padding:24px; max-width:1000px; line-height:1.65; }
 .configuration-guide h2 { margin-top:24px; }
 .configuration-guide pre { overflow:auto; }
+
+/* Native dialog stays hidden until opened; author display rules must not expose hidden panels. */
+[hidden] { display: none !important; }
+.load-dialog { max-width: min(36rem, 90vw); background: #102032; color: #e7f0fa; border: 1px solid #426079; border-radius: 12px; padding: 1.5rem; }
+.load-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+.load-dialog > button, .load-dialog > label { display: block; width: 100%; margin-top: .8rem; }
+.load-dialog select { width: 100%; margin-top: .4rem; }

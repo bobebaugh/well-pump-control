@@ -7,9 +7,9 @@ const sectionLabels = {
   events: ["EVENTS", "Event definitions"]
 };
 const state = {
-  formDirty: false, busy: false, importCandidate: null, draft: null, revisions: {}, current: null, capabilities: null,
+  formDirty: false, busy: false, draft: null, revisions: {}, current: null, capabilities: null,
   section: "devices", selected: { devices: 0, calculatedFields: 0, systemFields: 0, events: 0 },
-  dirty: new Set(), runtimePackage: null, releases: [], selectedRelease: null
+  dirty: new Set(), runtimePackage: null, releases: []
 };
 
 const editor = document.querySelector("#engine-editor");
@@ -102,70 +102,64 @@ function releaseDate(value) {
   return Number.isFinite(value) ? new Date(value).toLocaleString() : "Date unavailable";
 }
 function renderReleaseHistory() {
-  const panel = document.querySelector("#release-history");
-  const select = document.querySelector("#release-select");
-  panel.hidden = false;
-  if (!state.releases.length) {
-    select.innerHTML = "<option value=''>No published packages</option>";
-    select.disabled = true;
-    document.querySelector("#release-view").disabled = true;
-    document.querySelector("#release-details").textContent = "Publishing the validated draft will create version 1.";
-    return;
+  const select = document.querySelector('#release-select');
+  const releases = state.releases.slice(0,10);
+  select.innerHTML = releases.length ? releases.map(r=>`<option value="${escapeHtml(r.releaseId)}">Version ${r.packageVersion} · ${escapeHtml(releaseDate(r.publishedAtMs))}</option>`).join('') : '<option value="">No published versions</option>';
+  select.disabled = !releases.length;
+  document.querySelector('#load-published').disabled = !releases.length;
+}
+async function openLoad() {
+  document.querySelector('#load-error').textContent='';
+  const loaded = await api('GET');
+  state.releases = loaded.releases || [];
+  renderReleaseHistory();
+  document.querySelector('#load-dialog').showModal();
+}
+function acceptWorkingRules(draft, source, saved = false) {
+  state.draft = clone(draft);
+  state.draft.revisions = clone(state.revisions);
+  state.dirty = new Set(saved ? [] : Object.keys(sectionLabels));
+  state.formDirty = false; state.runtimePackage = null;
+  state.selected = {devices:0,calculatedFields:0,systemFields:0,events:0};
+  document.querySelector('#engine-tabs').hidden = false;
+  document.querySelector('#engine-workspace').hidden = false;
+  document.querySelector('#validation-panel').hidden = true;
+  document.querySelector('#validation-state').textContent = 'Not checked';
+  document.querySelector('#runtime-size').textContent = 'No runtime package generated.';
+  document.querySelector('#working-source').textContent = source;
+  document.querySelector('#load-dialog').close();
+  updateCounts(); renderEditor(); syncButtons();
+  setStatus(`${source} loaded into the editor.${saved ? '' : ' Not saved. Save Draft to keep it, or Load → Last saved to discard it.'}`, 'ok');
+}
+async function loadWorking(source, file) {
+  if (state.dirty.size && !window.confirm('Discard unsaved editor changes?')) return;
+  // Retain the revision baseline of an existing editing session, so loading a
+  // file cannot silently authorize overwriting another session's newer save.
+  const loaded = await api('GET');
+  if (!state.draft || source === 'saved') state.revisions = loaded.draft.revisions;
+  state.current = loaded.current; state.capabilities = loaded.capabilities;
+  state.releases = loaded.releases || [];
+  let draft, label;
+  if (source === 'saved') {draft = loaded.draft; label = 'Last saved draft';}
+  else if (source === 'seed') {draft = (await api('GET',undefined,'?seedTemplate=1')).draft; label = 'Seed';}
+  else if (source === 'published') {
+    const id = document.querySelector('#release-select').value;
+    if (!id) return;
+    const {release} = await api('GET',undefined,`?releaseId=${encodeURIComponent(id)}`);
+    draft = release.authoringPackage; label = `Published version ${release.packageVersion}`;
+  } else {
+    if (!file) return;
+    if (file.size > 500000) throw new Error('Backup exceeds the 500,000 byte limit.');
+    const result = await api('POST',{action:'previewImport',backup:JSON.parse(await file.text())});
+    draft = result.draft; label = `Backup ${file.name}`;
   }
-  select.disabled = false;
-  document.querySelector("#release-view").disabled = false;
-  select.innerHTML = state.releases.map(release => `<option value="${escapeHtml(release.releaseId)}">Version ${escapeHtml(release.packageVersion)} · ${escapeHtml(releaseDate(release.publishedAtMs))}${release.releaseId === state.current?.releaseId ? " · CURRENT" : ""}</option>`).join("");
-  state.selectedRelease = null;
-  document.querySelector("#release-download").disabled = true;
-  document.querySelector("#release-restore").disabled = true;
-  document.querySelector("#release-details").textContent = `${state.releases.length} immutable published package${state.releases.length === 1 ? "" : "s"} available.`;
-}
-
-async function viewRelease() {
-  const releaseId = document.querySelector("#release-select").value;
-  if (!releaseId) return;
-  setStatus(`Loading ${releaseId}…`);
-  try {
-    const result = await api("GET", undefined, `?releaseId=${encodeURIComponent(releaseId)}`);
-    const release = result.release;
-    state.selectedRelease = release;
-    const authoring = release.authoringPackage;
-    const compatible = authoring?.schemaVersion === 3;
-    const counts = authoring ? `${authoring.devices?.length || 0} devices · ${authoring.calculatedFields?.length || 0} calculated fields · ${authoring.systemFields?.length || 0} system fields · ${authoring.events?.length || 0} events` : "Authoring package unavailable";
-    document.querySelector("#release-details").innerHTML = `<strong>Version ${escapeHtml(release.packageVersion)}${release.releaseId === state.current?.releaseId ? " · CURRENT" : ""}</strong><span>${escapeHtml(releaseDate(release.publishedAtMs))} · schema ${escapeHtml(release.schemaVersion ?? "unknown")} · ${escapeHtml(counts)}</span><code>SHA-256 ${escapeHtml(release.contentHash || "unavailable")}</code><em>${compatible ? "Compatible with the current editor" : "View/download only — migration required before restore"}</em>`;
-    document.querySelector("#release-download").disabled = !release.runtimePackage;
-    document.querySelector("#release-restore").disabled = !compatible;
-    setStatus(`Loaded immutable package version ${release.packageVersion}.`, "ok");
-  } catch (error) { setStatus(`Could not load release: ${error.body?.code || error.message}`, "error"); }
-}
-
-function downloadSelectedRelease() {
-  const release = state.selectedRelease;
-  if (!release?.runtimePackage) return;
-  const blob = new Blob([`${JSON.stringify(release.runtimePackage, null, 2)}\n`], { type: "application/json" });
-  const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `${release.releaseId}.json`; link.click(); URL.revokeObjectURL(link.href);
-}
-
-async function restoreSelectedRelease() {
-  const release = state.selectedRelease;
-  if (!release) return;
-  const confirmation = window.prompt(`Restore version ${release.packageVersion} into the current draft? Unsaved and saved draft work will be replaced. Published packages and the current pointer are unchanged. Type RESTORE to continue.`);
-  if (confirmation !== "RESTORE") return;
-  setStatus(`Restoring version ${release.packageVersion} into all draft sections…`);
-  try {
-    const result = await api("POST", { action: "restore", releaseId: release.releaseId, baseRevisions: state.revisions });
-    state.draft = result.draft; state.revisions = result.draft.revisions; state.dirty.clear(); state.formDirty = false; state.runtimePackage = null;
-    state.selected = { devices: 0, calculatedFields: 0, systemFields: 0, events: 0 };
-    document.querySelector("#engine-save").disabled = true;
-    document.querySelector("#engine-validate").disabled = false;
-    document.querySelector("#engine-download").disabled = true;
-    document.querySelector("#engine-publish").disabled = false;
-    document.querySelector("#validation-state").textContent = "Not checked";
-    document.querySelector("#validation-state").className = "warning-text";
-    document.querySelector("#runtime-size").textContent = `Restored from version ${release.packageVersion}; validation required before publishing.`;
-    updateCounts(); renderEditor();
-    setStatus(`Version ${release.packageVersion} was restored to the draft. The published pointer remains version ${state.current?.packageVersion || "none"}. Validate before publishing a new version.`, "ok");
-  } catch (error) { setStatus(`Restore failed: ${error.body?.code || error.message}`, "error"); }
+  if (source === 'seed' || source === 'published') {
+    // Check editable structure without requiring unfinished rules to compile.
+    await api('POST',{action:'previewImport',backup:{kind:'well-pump-rules-authoring-backup',backupVersion:1,authoringPackage:draft}});
+  }
+  acceptWorkingRules(draft,label,source === 'saved');
+  if (state.current) showPublished(state.current);
+  else {document.querySelector('#engine-release').textContent='No published package';document.querySelector('#engine-hash').textContent='';}
 }
 
 function captureDevice() {
@@ -363,42 +357,20 @@ function renderList() {
   const items = state.draft[state.section]; const selected = state.selected[state.section];
   list.innerHTML = items.map((item, index) => `<button type="button" class="engine-list-item${index === selected ? " selected" : ""}" data-select="${index}"><strong>${escapeHtml(itemLabel(item))}</strong><small>${escapeHtml(item.systemName || item.driver || item.functionId || item.id)}</small>${item.enabled === false ? "<i>OFF</i>" : ""}</button>`).join("");
 }
-async function loadDraft(seed = false) {
-  if (state.dirty.size && !window.confirm("Discard unsaved edits and reload? Export a backup first to keep them.")) return;
-  setStatus("Loading the Rules Engine draft…");
-  try {
-    const result = await api("GET", undefined, seed === true ? "?seed=1" : "");
-    state.draft = result.draft; state.revisions = result.draft.revisions; state.current = result.current; state.capabilities = result.capabilities; state.releases = result.releases || []; state.dirty.clear(); state.formDirty = false; state.runtimePackage = null;
-    document.querySelector("#engine-release").textContent = result.current ? `${result.current.releaseId} · version ${result.current.packageVersion}` : "No published parameter package";
-    document.querySelector("#engine-hash").textContent = deliveryText(result.current);
-    document.querySelector("#engine-tabs").hidden = false; document.querySelector("#engine-workspace").hidden = false;
-    document.querySelector("#engine-save").disabled = true;
-    document.querySelector("#engine-validate").disabled = false;
-    document.querySelector("#engine-publish").disabled = false;
-    deliverButton.disabled = !state.current;
-    document.querySelector("#engine-backup").disabled = false;
-    document.querySelector("#engine-download").disabled = true;
-    document.querySelector("#validation-state").textContent = "Not checked";
-    updateCounts(); renderEditor(); renderReleaseHistory(); setStatus("V3 draft loaded. A current immutable package can be staged for adoption on the next Tab5 restart.", "ok");
-  } catch (error) { if (error.message !== "cancelled") setStatus(`Could not load Rules Engine: ${error.body?.code || error.message}`, "error"); }
-}
-
+async function loadDraft() { return loadWorking('saved'); }
 async function saveAll() {
   captureCurrent();
-  const sections = state.dirty.size ? [...state.dirty] : [state.section];
-  const saved = [];
-  for (const section of sections) {
-    try {
-      const result = await api("PUT", { section, baseRevision: state.revisions[section], items: state.draft[section] });
-      state.revisions[section] = result.revision; state.dirty.delete(section); saved.push(section);
-    } catch(error) {
-      error.saveFailure = true;
-      error.message = `Could not save ${section}. ${saved.length ? `Already saved: ${saved.join(', ')}. ` : ''}Remaining edits are still in this browser; export a backup before reloading. ${error.body?.code || error.message}`;
-      throw error;
-    }
-  }
-  document.querySelector("#engine-save").disabled = true;
-  return sections;
+  if (!state.dirty.size) return [];
+  const result = await api('POST',{action:'import',backup:workingBackup(),baseRevisions:state.revisions});
+  state.revisions = result.draft.revisions;
+  state.draft.revisions = clone(state.revisions);
+  state.dirty.clear();
+  document.querySelector('#engine-save').disabled = true;
+  document.querySelector('#working-source').textContent = 'Saved draft';
+  return Object.keys(sectionLabels);
+}
+function workingBackup() {
+  return {kind:'well-pump-rules-authoring-backup',backupVersion:1,authoringPackage:authoringDraft()};
 }
 
 function showFindings(result, navigable = true) {
@@ -425,9 +397,9 @@ function reportError(error, operation) {
   else setStatus(`${operation} failed: ${error.body?.message || error.body?.code || error.message}. Your browser edits are retained.`, 'error');
 }
 async function validatePackage() {
-  setStatus("Saving the draft and validating all relationships…");
+  setStatus("Validating the working rules without saving…");
   try {
-    await saveAll(); const result = await api("POST", { action: "validate" });
+    captureCurrent(); const result = await api("POST", { action: "validate", backup: workingBackup() });
     state.runtimePackage = result.runtimePackage;
     document.querySelector("#validation-state").textContent = "Passed"; document.querySelector("#validation-state").className = "ok-text";
     document.querySelector("#runtime-size").textContent = `${result.runtimeBytes.toLocaleString()} byte V3 runtime package · checked for Tab5 compatibility`;
@@ -459,26 +431,20 @@ async function publishPackage() {
   if(!window.confirm('Save, validate, publish and request delivery? Tab5 adopts only on restart.')) return;
   let publishing = false, baseVersion;
   try {
-    setStatus('Saving and checking Tab5 compatibility…');
-    await saveAll();
-    const validation = await api('POST',{action:'validate'});
+    setStatus('Checking Tab5 compatibility…');
+    captureCurrent();
+    const validation = await api('POST',{action:'validate',backup:workingBackup()});
     showFindings(validation); state.runtimePackage = validation.runtimePackage;
     if(validation.warnings?.length && !window.confirm('Validation has warnings shown below. Continue with publication and delivery?')) return;
-    // Reconcile against the server so reload/retry cannot unnecessarily mint a version.
+    await saveAll();
+    // Each deliberate publication creates a version; delivery retries do not.
     const loaded = await api('GET');
     if(canonicalJson(loaded.draft.revisions)!==canonicalJson(state.revisions)) throw new Error('Draft changed in another session. Export your edits before reloading.');
     state.current = loaded.current;
-    let reuse = false;
-    if(state.current) {
-      const existing = await api('GET',undefined,`?releaseId=${encodeURIComponent(state.current.releaseId)}`);
-      reuse = state.current.schemaVersion===4 && canonicalJson(existing.release.authoringPackage)===canonicalJson(authoringDraft());
-    }
-    if(!reuse) {
-      baseVersion = state.current?.packageVersion || 0; publishing = true;
-      const result = await api('POST',{action:'publish',basePackageVersion:baseVersion,baseRevisions:state.revisions});
-      publishing = false; showPublished(result.current,result);
-      state.releases = [{...result.current,schemaVersion:3},...state.releases]; renderReleaseHistory();
-    } else showPublished(state.current);
+    baseVersion = state.current?.packageVersion || 0; publishing = true;
+    const result = await api('POST',{action:'publish',basePackageVersion:baseVersion,baseRevisions:state.revisions});
+    publishing = false; showPublished(result.current,result);
+    state.releases = [{...result.current,schemaVersion:3},...state.releases];
     await deliverPackage(false);
   } catch(error) {
     if(publishing) {
@@ -492,7 +458,7 @@ async function publishPackage() {
           }
         }
       } catch (_) { /* Show uncertain outcome; never create a second version here. */ }
-      setStatus('Publication outcome could not be confirmed. Reload before retrying; the next attempt checks for an existing matching release.', 'error');
+      setStatus('Publication outcome could not be confirmed. Load → Last saved and inspect the latest published version before deciding whether to publish again.', 'error');
     } else reportError(error,'Publish and Deliver');
   }
 }
@@ -674,6 +640,7 @@ function addItem() {
 
 
 function syncButtons() {
+  document.querySelector('#engine-validate').disabled = !state.draft;
   document.querySelector('#engine-publish').disabled = !state.draft;
   document.querySelector('#engine-backup').disabled = !state.draft;
   document.querySelector('#engine-save').disabled = !state.dirty.size;
@@ -683,9 +650,9 @@ function syncButtons() {
 async function runBusy(operation) {
   if(state.busy) return;
   state.busy = true;
-  const main = document.querySelector('main'); main.inert = true;
-  try { await operation(); } catch(error) {reportError(error,'Operation');}
-  finally {main.inert = false; state.busy = false; syncButtons();}
+  const main = document.querySelector('main'), dialog = document.querySelector('#load-dialog'); main.inert = true; dialog.inert = true;
+  try { await operation(); } catch(error) {reportError(error,'Operation');if(document.querySelector('#load-dialog').open) document.querySelector('#load-error').textContent=statusBox.textContent;}
+  finally {main.inert = false; dialog.inert = false; state.busy = false; syncButtons();}
 }
 function downloadBackup() {
   captureCurrent();
@@ -693,31 +660,25 @@ function downloadBackup() {
   const link = document.createElement('a'); link.href=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)+'\n'],{type:'application/json'}));
   link.download=`well-pump-rules-backup-${new Date().toISOString().replace(/[:.]/g,'-')}.json`; link.click(); URL.revokeObjectURL(link.href);
 }
-async function previewImport(file) {
-  state.importCandidate = null; document.querySelector("#import-preview").hidden = true;
-  if(!file) return;
-  if(file.size>500000) throw new Error('Backup exceeds the 500,000 byte import limit.');
-  const backup = JSON.parse(await file.text());
-  const result = await api('POST',{action:'previewImport',backup});
-  state.importCandidate = {backup,baseRevisions:result.baseRevisions};
-  document.querySelector('#import-details').textContent = Object.entries(result.counts).map(([k,v])=>`${sectionLabels[k][1]}: ${v.before} → ${v.after}`).join(' · ') + (result.valid ? '. Ready for online validation after import.' : '. This draft has publication blockers; importing preserves it for editing.') + ' All saved and unsaved draft definitions will be replaced. Published and running packages are unchanged.';
-  document.querySelector('#import-preview').hidden=false;
-  showFindings(result,false);
-}
-async function applyImport() {
-  if(!state.importCandidate || !window.confirm('Replace the entire draft with this backup? Export your current work first if you need to keep it.')) return;
-  const result = await api('POST',{action:'import',...state.importCandidate});
-  state.dirty.clear(); state.importCandidate=null; document.querySelector('#import-preview').hidden=true;
-  await loadDraft(); showFindings(result); setStatus('Configuration restored to the draft. Validate or Publish and Deliver when ready.','ok');
-}
 async function refreshDeviceStatus() {
   const box=document.querySelector('#device-package-state');
+  box.textContent='Checking the last Tab5 report…';
+  const checked = () => `Checked ${new Date().toLocaleTimeString()}. `;
   try {
     const result=await api('GET',undefined,'?deviceStatus=1'); const d=result.deviceStatus;
-    if(!d) {box.textContent='Tab5 report unavailable. Staged and running identities are unknown.';return;}
+    if(!d) {box.textContent=checked()+'No Tab5 report exists at the expected database path. Staged and running identities are unknown.';return;}
     const ref=x=>x ? `v${x.packageVersion} · ${x.releaseId} · SHA ${x.contentHash.slice(0,12)}` : 'Unavailable';
-    box.textContent=`Last reported ${new Date(d.reportedAtMs).toLocaleString()} (not a live connection check). Running: ${ref(d.running)}. Desired: ${ref(d.desired)}. Staged for restart: ${ref(d.staged)}.${d.rejected ? ` Rejected: ${d.rejected.reason}.` : ''}`;
-  } catch(_) {box.textContent='Could not read Tab5 report. Staged and running identities are unknown.';}
+    box.textContent=checked()+`Last reported ${new Date(d.reportedAtMs).toLocaleString()} (not a live connection check). Running: ${ref(d.running)}. Desired: ${ref(d.desired)}. Staged for restart: ${ref(d.staged)}.${d.rejected ? ` Rejected: ${d.rejected.reason}.` : ''}`;
+  } catch(error) {
+    const messages = {
+      tab5_status_timeout:'The database read timed out.',
+      tab5_status_invalid:'A report exists but does not match the expected Tab5 report format.',
+      tab5_status_configuration:'The server is missing valid database configuration.',
+      tab5_status_denied:'The database denied the server permission to read the report.',
+      tab5_status_read_failed:'The server could not read the database report.'
+    };
+    box.textContent=checked()+(messages[error.body?.code] || 'The status request failed.')+' Staged and running identities are unknown.';
+  }
 }
 function navigateFinding(path) {
   const match=/^(devices|calculatedFields|systemFields|events)\[(\d+)\](.*)$/.exec(path);
@@ -761,28 +722,21 @@ editor.addEventListener('click',e=>{
 });
 document.querySelector('#validation-findings').addEventListener('click',e=>{const b=e.target.closest('[data-finding-path]');if(b) navigateFinding(b.dataset.findingPath);});
 document.querySelector('#engine-backup').addEventListener('click',downloadBackup);
-document.querySelector('#engine-import').addEventListener('click',()=>document.querySelector('#backup-file').click());
-document.querySelector('#backup-file').addEventListener('change',e=>{const file=e.target.files[0];e.target.value='';runBusy(()=>previewImport(file));});
-document.querySelector('#apply-import').addEventListener('click',()=>runBusy(applyImport));
-document.querySelector('#cancel-import').addEventListener('click',()=>{state.importCandidate=null;document.querySelector('#import-preview').hidden=true;});
+document.querySelector('#backup-file').addEventListener('change',e=>{const file=e.target.files[0];e.target.value='';if(file) runBusy(()=>loadWorking('backup',file));});
+document.querySelector('#load-backup').addEventListener('click',()=>document.querySelector('#backup-file').click());
+document.querySelector('#load-saved').addEventListener('click',()=>runBusy(()=>loadWorking('saved')));
+document.querySelector('#load-seed').addEventListener('click',()=>runBusy(()=>loadWorking('seed')));
+document.querySelector('#load-published').addEventListener('click',()=>runBusy(()=>loadWorking('published')));
+document.querySelector('#load-cancel').addEventListener('click',()=>document.querySelector('#load-dialog').close());
 document.querySelector('#refresh-device-state').addEventListener('click',()=>runBusy(refreshDeviceStatus));
-document.querySelector('#seed-defaults').addEventListener('click',()=>runBusy(()=>{if(window.confirm('Seed missing V3 sections? Use backup import instead for recovery.')) return loadDraft(true);}));
 window.addEventListener('beforeunload',e=>{if(state.dirty.size){e.preventDefault();e.returnValue='';}});
-document.querySelector("#engine-load").addEventListener("click", () => runBusy(loadDraft));
+document.querySelector("#engine-load").addEventListener("click", () => runBusy(openLoad));
 document.querySelector("#engine-save").addEventListener("click", () => runBusy(async () => { try { const sections = await saveAll(); setStatus(`Saved ${sections.join(", ")} draft section(s).`, "ok"); } catch (error) { reportError(error,"Save"); } }));
 document.querySelector("#engine-validate").addEventListener("click", () => runBusy(validatePackage));
 document.querySelector("#engine-publish").addEventListener("click", () => runBusy(publishPackage));
 document.querySelector("#engine-deliver").addEventListener("click", () => runBusy(deliverPackage));
 document.querySelector("#engine-download").addEventListener("click", downloadRuntime);
-document.querySelector("#release-view").addEventListener("click", viewRelease);
-document.querySelector("#release-download").addEventListener("click", downloadSelectedRelease);
-document.querySelector("#release-restore").addEventListener("click", () => runBusy(restoreSelectedRelease));
-document.querySelector("#release-select").addEventListener("change", () => {
-  state.selectedRelease = null;
-  document.querySelector("#release-download").disabled = true;
-  document.querySelector("#release-restore").disabled = true;
-  document.querySelector("#release-details").textContent = "Select View to inspect this immutable package.";
-});
+
 document.querySelector("#add-item").addEventListener("click", addItem);
 document.querySelector("#engine-tabs").addEventListener("click", event => {
   const button = event.target.closest("[data-section]"); if (!button || button.dataset.section === state.section) return;
