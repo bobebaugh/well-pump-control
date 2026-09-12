@@ -14,5 +14,8 @@ Initial automated coverage will include:
 - M6 rules-package schema, ordered workbook completeness, SHA-256 pointer
   matching, last-known-good atomic-adoption behavior, and CPU B opaque
   rules-release transport.
+- M6.34 explicit charging-request initialization, failed-setter retry and
+  75/80 hysteresis; battery failure/staleness display; signed current; wrap-safe
+  loop/acquisition timing; and bounded MicroPython heap minimum tracking.
 
 Physical pump observation, Tab5 display behavior, and network-loss recovery remain field acceptance tests.

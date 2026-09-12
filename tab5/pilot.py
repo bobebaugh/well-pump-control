@@ -1,4 +1,4 @@
-# Release: 2026-09-11 M6.33 — acquisition availability and configured lock logging.
+# Release: 2026-09-12 M6.34 — bounded battery, loop, and heap diagnostics.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -15,6 +15,7 @@
 
 import M5
 import __main__
+import gc
 import os
 import time
 import uhashlib
@@ -43,7 +44,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.33'
+SOFTWARE_RELEASE = 'M6.34'
 
 # CPU A validates and adopts the v2 runtime package. CPU B carries only the
 # RTDB pointer and exact downloaded bytes; it never interprets package meaning.
@@ -143,8 +144,12 @@ PI4IOE1_EXT_5V_ENABLE_BIT = 0x04
 #   - M5.begin() already brings up and calibrates the onboard INA226 at 0x41
 #     (shunt_res=0.005 ohm, max_expected_current=2.0A) - re-doing that here would only
 #     regress the resolution, so this pilot doesn't touch the INA226 directly at all.
-#   - getBatteryVoltage() -> mV, getBatteryCurrent() -> mA, getBatteryLevel() -> 0-100%,
-#     isCharging() -> bool, all backed by that same INA226.
+#   - getBatteryVoltage() -> mV, getBatteryCurrent() -> mA, and getBatteryLevel() ->
+#     0-100% are backed by that INA226. M5Unified master 8530f537 documents current
+#     as positive for charge and negative for discharge; its Tab5 path explicitly
+#     reverses the hardware shunt sign to provide that API convention. isCharging()
+#     separately reports the Tab5 IO-expander CHG_STAT input. The HMI retains the
+#     signed current and does not infer direction from it.
 #   - setBatteryCharge(bool) drives E2.P7 on the PI4IOE5V6408 0x44 expander (charge
 #     enable, confirmed active-high) through the same path M5Stack's own firmware uses -
 #     no reason to poke that register ourselves either.
@@ -160,7 +165,8 @@ PI4IOE1_EXT_5V_ENABLE_BIT = 0x04
 # "is the charger allowed to push current in", never "is anything pulling current out".
 BATTERY_LOW_PCT = 75     # charging turns back on at or below this level
 BATTERY_HIGH_PCT = 80    # charging turns off at or above this level
-BATTERY_POLL_PERIOD_MS = 60000
+BATTERY_DIAGNOSTIC_PERIOD_MS = 1000
+BATTERY_POLICY_PERIOD_MS = 60000
 
 WHITE = 0xFFFFFF
 CYAN = 0x9EB4D8
@@ -395,9 +401,13 @@ def read_battery():
         current_a = M5.Power.getBatteryCurrent() / 1000.0
         level_pct = M5.Power.getBatteryLevel()
         charging = M5.Power.isCharging()
+        if (not _is_number(voltage_v) or voltage_v <= 0 or
+                not _is_number(current_a) or
+                not _is_number(level_pct) or not 0 <= level_pct <= 100 or
+                not isinstance(charging, bool)):
+            raise ValueError('invalid UIFlow battery result')
         return voltage_v, current_a, level_pct, charging
-    except Exception as e:
-        log('M5.Power battery read failed: {}'.format(e))
+    except Exception:
         return None, None, None, None
 
 
@@ -408,6 +418,49 @@ def set_charge_enable(enable):
     except Exception as e:
         log('M5.Power.setBatteryCharge failed: {}'.format(e))
         return False
+
+
+def battery_charge_policy(level_pct, requested_state, retry_target=None):
+    """Return (requested state, retry target, attempted target).
+
+    requested_state is only the last request whose UIFlow setter returned normally;
+    it is not charger readback. A failed call makes that state unknown and retains a
+    bounded scalar retry target for the next 60-second policy evaluation.
+    """
+    if _is_number(level_pct) and level_pct <= BATTERY_LOW_PCT:
+        target = True
+    elif _is_number(level_pct) and level_pct >= BATTERY_HIGH_PCT:
+        target = False
+    elif retry_target is not None:
+        target = retry_target
+    elif requested_state is not None:
+        return requested_state, None, None
+    else:
+        # Startup in the hysteresis band (or without a usable reading) explicitly
+        # requests charging instead of assuming the charger's prior state.
+        target = True
+    if requested_state is target and retry_target is None:
+        return requested_state, None, None
+    if set_charge_enable(target):
+        return target, None, target
+    return None, target, target
+
+
+def heap_diagnostics(memory_module, minimum_free=None):
+    """Return MicroPython-heap counters and a bounded minimum-free scalar."""
+    try:
+        free_bytes = memory_module.mem_free()
+        allocated_bytes = memory_module.mem_alloc()
+    except Exception:
+        return None, None, minimum_free
+    if minimum_free is None or free_bytes < minimum_free:
+        minimum_free = free_bytes
+    return free_bytes, allocated_bytes, minimum_free
+
+
+def elapsed_ticks_ms(start_ticks_ms, end_ticks_ms):
+    """Return a nonnegative elapsed interval using wrap-safe MicroPython ticks."""
+    return max(0, time.ticks_diff(end_ticks_ms, start_ticks_ms))
 
 
 # --- CPU B communications status: CPU A observes but never changes Wi-Fi ---
@@ -3370,6 +3423,9 @@ def build_system_hmi_model(observation, adopted_reference, rules_package,
     status = status if isinstance(status, dict) else {}
     if not _is_number(current_ticks_ms):
         current_ticks_ms = observation.get('observedTicksMs')
+    battery_available = status.get('battery_available') is True
+    battery_age_ms = source_age_ms(
+        status, 'battery_sample_ticks_ms', 'battery_age_ms', current_ticks_ms)
     adopted_hash = (adopted_reference.get('contentHash')
                     if isinstance(adopted_reference, dict) else None)
     published_hash = (published_reference.get('contentHash')
@@ -3397,9 +3453,34 @@ def build_system_hmi_model(observation, adopted_reference, rules_package,
                 else 'UNAVAILABLE'),
         'pressure': ('COMMISSIONED' if PRESSURE_SENSOR_COMMISSIONED
                      else 'NOT COMMISSIONED'),
+        'battery_voltage': (values.get('battery_voltage')
+                            if battery_available and
+                            _is_number(values.get('battery_voltage')) else None),
+        'battery_current': (values.get('battery_current')
+                            if battery_available and
+                            _is_number(values.get('battery_current')) else None),
         'battery_percent': (values.get('battery_percent')
-                            if _is_number(values.get('battery_percent')) else None),
-        'battery_charging': values.get('battery_charging') is True,
+                            if battery_available and
+                            _is_number(values.get('battery_percent')) else None),
+        'battery_charging': (values.get('battery_charging')
+                             if battery_available and
+                             isinstance(values.get('battery_charging'), bool)
+                             else None),
+        'battery_request': (values.get('battery_charge_enabled')
+                            if isinstance(values.get('battery_charge_enabled'), bool)
+                            else None),
+        'battery_available': battery_available,
+        'battery_age_ms': battery_age_ms,
+        'battery_read_status': ('OK' if battery_available else 'READ FAILED'),
+        'cycle_work_ms': status.get('cycle_work_ms'),
+        'cycle_interval_ms': status.get('cycle_interval_ms'),
+        'adc_acquisition_ms': status.get('adc_acquisition_ms'),
+        'shelly_em_acquisition_ms': status.get('shelly_em_acquisition_ms'),
+        'shelly1_acquisition_ms': status.get('shelly1_acquisition_ms'),
+        'v3_processing_ms': status.get('v3_processing_ms'),
+        'heap_free_bytes': status.get('heap_free_bytes'),
+        'heap_allocated_bytes': status.get('heap_allocated_bytes'),
+        'heap_min_free_bytes': status.get('heap_min_free_bytes'),
         'adopted_version': (adopted_reference.get('version')
                             if isinstance(adopted_reference, dict) else None),
         'adopted_hash_prefix': (adopted_hash[:12]
@@ -3576,55 +3657,95 @@ def render_now(model):
 
 
 def render_system(model):
-    draw_label('RUNTIME', 45, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
-    _draw_field('COLLECTION: {}'.format(model['collection']), 45, 128, 570, 36,
-                M5.Lcd.FONTS.Montserrat24, GREEN, 'system.collection')
-    _draw_field('RULE ENGINE: {}'.format(model['rule_engine']), 45, 173, 570, 36,
-                M5.Lcd.FONTS.Montserrat24, YELLOW, 'system.rule_engine')
-    _draw_field('SYSTEM OVERRIDE: {}'.format(model['system_override']),
-                45, 218, 570, 36, M5.Lcd.FONTS.Montserrat24, YELLOW,
-                'system.override')
+    def ms(value):
+        return '{}ms'.format(value) if isinstance(value, int) else '--'
 
-    draw_label('DEVICES', 665, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
-    device_text = 'WIFI {}  NET {}\nEM {}  S1 {}\nADC {}  PSI {}'.format(
-        model['wifi'], model['network'], model['shelly_em'], model['shelly1'],
-        model['adc'], model['pressure'])
-    device_lines = device_text.split('\n')
-    for index, line in enumerate(device_lines):
-        _draw_field(line, 665, 128 + (index * 45), 570, 36,
-                    M5.Lcd.FONTS.Montserrat24,
-                    cache_key='system.device{}'.format(index))
-    _draw_field(model['cloud_detail'], 665, 263, 570, 36,
-                M5.Lcd.FONTS.Montserrat24,
+    draw_label('RUNTIME / DEVICES', 45, 88, M5.Lcd.FONTS.Montserrat18, CYAN)
+    _draw_field('{}  |  COLLECTION {}'.format(
+        model['rule_engine'], model['collection']), 45, 118, 570, 30,
+        M5.Lcd.FONTS.Montserrat18, YELLOW, 'system.runtime')
+    _draw_field('WIFI {} NET {}  EM {}  S1 {}'.format(
+        model['wifi'], model['network'], model['shelly_em'], model['shelly1']),
+        45, 153, 570, 30, M5.Lcd.FONTS.Montserrat18,
+        cache_key='system.devices1')
+    _draw_field('ADC {}  PSI {}'.format(model['adc'], model['pressure']),
+                45, 188, 570, 30, M5.Lcd.FONTS.Montserrat18,
+                cache_key='system.devices2')
+    _draw_field(model['cloud_detail'], 45, 223, 570, 30,
+                M5.Lcd.FONTS.Montserrat18,
                 _indicator_color(model['cloud_state']), 'system.cloud')
 
-    draw_label('RULES PACKAGE', 45, 315, M5.Lcd.FONTS.Montserrat18, CYAN)
+    draw_label('RULES PACKAGE', 45, 270, M5.Lcd.FONTS.Montserrat18, CYAN)
     adopted = 'RUNNING v{} {}'.format(
         model['adopted_version'] if model['adopted_version'] is not None else '?',
         model['adopted_hash_prefix'] or 'UNKNOWN')
     published = 'PUBLISHED v{} {}'.format(
         model['published_version'] if model['published_version'] is not None else '?',
         model['published_hash_prefix'] or 'UNKNOWN')
-    _draw_field(adopted, 45, 348, 570, 36, M5.Lcd.FONTS.Montserrat24,
+    _draw_field(adopted, 45, 300, 570, 30, M5.Lcd.FONTS.Montserrat18,
                 cache_key='system.adopted')
-    _draw_field(published, 665, 348, 570, 36, M5.Lcd.FONTS.Montserrat24,
+    _draw_field(published, 45, 335, 570, 30, M5.Lcd.FONTS.Montserrat18,
                 cache_key='system.published')
     rules_color = GREEN if model['rules_status'] == 'ACTIVE' else YELLOW
-    _draw_field('STATUS: {}  |  ENABLED: {}'.format(
+    _draw_field('STATUS {}  |  ENABLED {}'.format(
         model['rules_status'], model['enabled_rules']),
-        45, 400, 1190, 40, M5.Lcd.FONTS.Montserrat24, rules_color,
+        45, 370, 570, 30, M5.Lcd.FONTS.Montserrat18, rules_color,
         'system.rules_status')
 
-    draw_label('TAB5', 45, 475, M5.Lcd.FONTS.Montserrat18, CYAN)
-    battery = ('BATTERY {}% {}'.format(
-        int(model['battery_percent']),
-        'CHARGING' if model['battery_charging'] else 'NOT CHARGING')
-        if model['battery_percent'] is not None else 'BATTERY UNAVAILABLE')
-    _draw_field('{}  |  RELEASE {}'.format(battery, model['release']),
-                45, 508, 1190, 42, M5.Lcd.FONTS.Montserrat24,
-                cache_key='system.tab5')
-    _draw_field('PARAMETERS AND HISTORY ARE MANAGED ON THE WEB APP',
-                45, 575, 1190, 35, M5.Lcd.FONTS.Montserrat18, CYAN,
+    draw_label('BATTERY (UIFLOW)', 665, 88, M5.Lcd.FONTS.Montserrat18, CYAN)
+    if model['battery_available']:
+        battery_measurement = '{:.3f} V   {:+.3f} A'.format(
+            model['battery_voltage'], model['battery_current'])
+        charge_status = ('CHARGING' if model['battery_charging'] is True
+                         else 'NOT CHARGING')
+        battery_state = 'EST {}%  |  {}'.format(
+            int(model['battery_percent']), charge_status)
+        battery_read = 'READ OK  AGE {}'.format(
+            compact_age_text(model['battery_age_ms']))
+    else:
+        battery_measurement = 'VOLTAGE --   CURRENT --'
+        battery_state = 'EST --%  |  CHARGE STATUS UNKNOWN'
+        last_good = compact_age_text(model['battery_age_ms'])
+        battery_read = 'READ FAILED  |  LAST GOOD {}'.format(last_good)
+    request_text = ('ENABLED' if model['battery_request'] is True else
+                    'DISABLED' if model['battery_request'] is False else 'UNKNOWN')
+    _draw_field(battery_measurement, 665, 118, 570, 30,
+                M5.Lcd.FONTS.Montserrat18, cache_key='system.battery1')
+    _draw_field(battery_state, 665, 153, 570, 30,
+                M5.Lcd.FONTS.Montserrat18, cache_key='system.battery2')
+    _draw_field('SOFTWARE REQUEST {}'.format(request_text), 665, 188, 570, 30,
+                M5.Lcd.FONTS.Montserrat18, cache_key='system.battery3')
+    _draw_field(battery_read, 665, 223, 570, 30,
+                M5.Lcd.FONTS.Montserrat18,
+                WHITE if model['battery_available'] else YELLOW,
+                'system.battery4')
+
+    draw_label('LOOP TIMING', 665, 270, M5.Lcd.FONTS.Montserrat18, CYAN)
+    _draw_field('WORK LAST {}  INTERVAL {}'.format(
+        ms(model['cycle_work_ms']), ms(model['cycle_interval_ms'])),
+        665, 300, 570, 30, M5.Lcd.FONTS.Montserrat18,
+        cache_key='system.timing1')
+    _draw_field('ADC {}  EM {}  S1 {}'.format(
+        ms(model['adc_acquisition_ms']), ms(model['shelly_em_acquisition_ms']),
+        ms(model['shelly1_acquisition_ms'])),
+        665, 335, 570, 30, M5.Lcd.FONTS.Montserrat18,
+        cache_key='system.timing2')
+    _draw_field('V3 CALC/EVENT {}'.format(ms(model['v3_processing_ms'])),
+                665, 370, 570, 30, M5.Lcd.FONTS.Montserrat18,
+                cache_key='system.timing3')
+
+    draw_label('MICROPYTHON HEAP', 45, 430, M5.Lcd.FONTS.Montserrat18, CYAN)
+    _draw_field('FREE {} B  MIN {} B  ALLOC {} B'.format(
+        model['heap_free_bytes'] if isinstance(model['heap_free_bytes'], int) else '--',
+        model['heap_min_free_bytes'] if isinstance(model['heap_min_free_bytes'], int) else '--',
+        model['heap_allocated_bytes'] if isinstance(model['heap_allocated_bytes'], int) else '--'),
+        45, 460, 1190, 30, M5.Lcd.FONTS.Montserrat18,
+        cache_key='system.heap')
+    _draw_field('WORK EXCLUDES SCHEDULED WAIT  |  RELEASE {}'.format(model['release']),
+                45, 510, 1190, 30, M5.Lcd.FONTS.Montserrat18, CYAN,
+                'system.release')
+    _draw_field('HEAP COUNTERS EXCLUDE NATIVE/DEVICE MEMORY',
+                45, 555, 1190, 30, M5.Lcd.FONTS.Montserrat18, CYAN,
                 'system.footer')
 
 
@@ -4364,7 +4485,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.33: acquisition availability and configured lock logging; V3 authority')
+log('CPU A release M6.34: bounded battery, loop, and heap diagnostics; V3 authority')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.
@@ -4400,11 +4521,24 @@ cloud.set_rules_v3_state(rules_v3_state_report(
     rules_v3_running_reference, rules_v3_desired_reference,
     rules_v3_staged_reference, rules_v3_rejected))
 
-# Assume charging is permitted until the first battery poll below says otherwise -
-# M5.Power has no getter for the enable pin itself (only isCharging(), which reflects
-# active current flow, not permission), so this is a starting guess that self-corrects
-# within BATTERY_POLL_PERIOD_MS regardless of which way it's wrong.
-charge_enable = True
+# main.py completed M5.begin() before importing this worker. Read through the supported
+# UIFlow interface, then explicitly establish a software charging request. isCharging()
+# reports charger status, not CHG_EN readback; charge_enable remains unknown unless the
+# setter returns normally.
+battery_v, battery_a, battery_level, battery_charging = read_battery()
+battery_valid = battery_v is not None
+battery_sample_ms = time.ticks_ms() if battery_valid else None
+battery_last_read_ok = battery_valid
+if not battery_valid:
+    log('battery-monitor YELLOW: initial M5.Power read unavailable')
+charge_enable, charge_retry_target, startup_charge_target = battery_charge_policy(
+    battery_level, None)
+last_battery_policy_ms = time.ticks_ms()
+if startup_charge_target is not None:
+    log('battery policy startup: requested charging {} ({})'.format(
+        'ON' if startup_charge_target else 'OFF',
+        'accepted' if charge_enable is startup_charge_target else
+        'failed; state unknown'))
 
 last_valid_sample = None
 last_valid_sample_ms = None
@@ -4416,12 +4550,7 @@ shelly1_failure_count = 0
 hmi_page = HMI_PAGE_NOW
 navigation_pressed = False
 last_observation = None
-battery_v = None
-battery_a = None
-battery_level = None
-battery_charging = None
-battery_valid = False
-last_battery_poll_ms = -BATTERY_POLL_PERIOD_MS
+last_battery_diagnostic_ms = time.ticks_ms()
 observation_sequence = 0
 device_session_id = cloud.device_session_id()
 event_history = new_event_history()
@@ -4431,6 +4560,9 @@ last_durable_observation = None
 last_durable_observation_ms = None
 next_rules_v3_request_ms = 0
 published_rules_reference = None
+last_cycle_start_ms = None
+last_cycle_work_ms = None
+heap_min_free_bytes = None
 
 log('Operational HMI initialized; V3 runs only when a valid startup package exists')
 render_hmi(hmi_page, {}, active_rules_reference, active_rules,
@@ -4438,6 +4570,10 @@ render_hmi(hmi_page, {}, active_rules_reference, active_rules,
 
 while True:
     now = time.ticks_ms()
+    cycle_started_ms = now
+    cycle_interval_ms = (None if last_cycle_start_ms is None else
+                         elapsed_ticks_ms(last_cycle_start_ms, now))
+    last_cycle_start_ms = now
     observation_sequence += 1
     # M5.update() drives M5.Touch and is REQUIRED for it to report anything.
     # It reinitializes the ESP-IDF I2C peripheral, which used to invalidate the
@@ -4510,43 +4646,54 @@ while True:
     # The five fresh 15-SPS conversions occupy a material portion of every
     # cycle. Service touch inside their DRDY waits instead of limiting touch
     # detection to whatever sleep time happens to remain afterward.
+    adc_started_ms = time.ticks_ms()
     ads_raw_count = read_ads1110_filtered_raw_count(service_navigation)
     ads_uv = (None if ads_raw_count is None
               else int(ads_raw_count * ADC_UV_PER_COUNT))
     adc_completed_ms = time.ticks_ms()
+    adc_acquisition_ms = elapsed_ticks_ms(adc_started_ms, adc_completed_ms)
     if ads_uv is not None:
         last_valid_adc_ms = adc_completed_ms
 
-    if time.ticks_diff(now, last_battery_poll_ms) >= BATTERY_POLL_PERIOD_MS:
-        last_battery_poll_ms = now
+    if (time.ticks_diff(now, last_battery_diagnostic_ms) >=
+            BATTERY_DIAGNOSTIC_PERIOD_MS):
+        last_battery_diagnostic_ms = now
         v, a, level, charging = read_battery()
         battery_valid = v is not None
         if battery_valid:
             battery_v, battery_a = v, a
             battery_level, battery_charging = level, charging
-            log('battery: {:.3f} V, {:.3f} A, {}%, {}, charge_enable={}'.format(
-                v, a, level, 'charging' if charging else 'not charging', charge_enable))
-            if level <= BATTERY_LOW_PCT and not charge_enable:
-                if set_charge_enable(True):
-                    charge_enable = True
-                    log('battery policy: {}% <= {}% -> charging ON'.format(level, BATTERY_LOW_PCT))
-            elif level >= BATTERY_HIGH_PCT and charge_enable:
-                if set_charge_enable(False):
-                    charge_enable = False
-                    log('battery policy: {}% >= {}% -> charging OFF'.format(level, BATTERY_HIGH_PCT))
-        else:
-            log('battery-monitor YELLOW: M5.Power read unavailable; charge_enable left as-is ({})'.format(
-                charge_enable))
+            battery_sample_ms = time.ticks_ms()
+            if battery_last_read_ok is False:
+                log('battery monitor recovered: M5.Power readings available')
+        elif battery_last_read_ok is not False:
+            log('battery-monitor YELLOW: M5.Power read unavailable; prior measurements stale')
+        battery_last_read_ok = battery_valid
+    if time.ticks_diff(now, last_battery_policy_ms) >= BATTERY_POLICY_PERIOD_MS:
+        last_battery_policy_ms = now
+        charge_enable, charge_retry_target, attempted_target = battery_charge_policy(
+            battery_level if battery_valid else None,
+            charge_enable, charge_retry_target)
+        if attempted_target is not None:
+            log('battery policy: {}% estimate -> charging request {} ({})'.format(
+                battery_level if battery_valid else 'unavailable',
+                'ON' if attempted_target else 'OFF',
+                'accepted' if charge_enable is attempted_target else 'failed; state unknown'))
     service_navigation()
 
     sample = None
     shelly1_sample = None
     shelly_poll_attempted = False
     shelly1_poll_attempted = False
+    shelly_em_acquisition_ms = None
+    shelly1_acquisition_ms = None
     if wifi_connected and network_traffic_allowed:
         shelly_poll_attempted = True
         service_navigation()
+        shelly_em_started_ms = time.ticks_ms()
         sample = read_shelly()
+        shelly_em_acquisition_ms = elapsed_ticks_ms(
+            shelly_em_started_ms, time.ticks_ms())
         service_navigation()
         if sample is None:
             sample_failure_count += 1
@@ -4559,7 +4706,10 @@ while True:
                     wifi_driver_status, wifi_ip))
                 shelly_resume_confirmation_pending = False
         shelly1_poll_attempted = True
+        shelly1_started_ms = time.ticks_ms()
         shelly1_sample = read_shelly1()
+        shelly1_acquisition_ms = elapsed_ticks_ms(
+            shelly1_started_ms, time.ticks_ms())
         service_navigation()
         if shelly1_sample is None:
             shelly1_failure_count += 1
@@ -4579,7 +4729,7 @@ while True:
         shelly_poll_attempted, last_valid_sample_ms, ads_uv,
         last_valid_adc_ms,
         battery_v, battery_a, battery_level, battery_charging,
-        battery_valid, charge_enable, last_battery_poll_ms,
+        battery_valid, charge_enable, battery_sample_ms,
         wifi_connected, network_traffic_allowed, wifi_driver_status,
         wifi_ip, wifi_disconnect_events, sample_failure_count,
         shelly1_sample, shelly1_sample is not None,
@@ -4590,9 +4740,11 @@ while True:
     observation['status']['rules_runtime_state'] = rules_runtime_state
     observation['status']['rules_runtime_reason'] = rules_runtime_reason
     runtime_logging_changes = []
+    v3_processing_ms = None
     if rules_v3_runtime is not None:
         v3_actions = []
         v3_records = []
+        v3_started_ms = time.ticks_ms()
         try:
             v3_cycle = run_rules_v3_cycle(
                 rules_v3_runtime, observation, observation_ticks_ms)
@@ -4624,6 +4776,7 @@ while True:
             log('V3 RELAY EVIDENCE: sequence={} release_pending={} available={} observed_on={} lock={} selected={}'.format(
                 observation_sequence, *relay_diagnostic))
             rules_v3_last_relay_diagnostic = relay_diagnostic
+        v3_processing_ms = elapsed_ticks_ms(v3_started_ms, time.ticks_ms())
         if v3_actions:
             dispatch_started = time.ticks_ms()
             dispatched, dropped = dispatch_rules_v3_actions(
@@ -4640,7 +4793,6 @@ while True:
                 log('V3 ACTION DISPATCH: {}={} -> {} sequence={} elapsed_ms={}'.format(
                     signature[0], signature[1], dispatch['outcome'], observation_sequence,
                     time.ticks_diff(time.ticks_ms(), dispatch_started)))
-
     last_observation = observation
     append_event_history(event_history, observation)
     shelly_availability_pending = shelly_availability_change_pending(
@@ -4691,11 +4843,30 @@ while True:
                 log('Durable observation selected: sequence={}, reason={}'.format(
                     observation_sequence, durable_reason))
 
-    render_hmi(hmi_page, observation, active_rules_reference, active_rules,
+    heap_free_bytes, heap_allocated_bytes, heap_min_free_bytes = heap_diagnostics(
+        gc, heap_min_free_bytes)
+    # Local diagnostics are kept out of the operational/current and durable record
+    # interfaces. A bounded shallow display copy prevents cross-thread mutation after
+    # submit_observation transfers ownership of the operational object to CPU B.
+    hmi_observation = dict(observation)
+    hmi_observation['status'] = dict(observation['status'])
+    hmi_observation['status'].update({
+        'cycle_interval_ms': cycle_interval_ms,
+        'cycle_work_ms': last_cycle_work_ms,
+        'adc_acquisition_ms': adc_acquisition_ms,
+        'shelly_em_acquisition_ms': shelly_em_acquisition_ms,
+        'shelly1_acquisition_ms': shelly1_acquisition_ms,
+        'v3_processing_ms': v3_processing_ms,
+        'heap_free_bytes': heap_free_bytes,
+        'heap_allocated_bytes': heap_allocated_bytes,
+        'heap_min_free_bytes': heap_min_free_bytes,
+    })
+    render_hmi(hmi_page, hmi_observation, active_rules_reference, active_rules,
                published_rules_reference)
 
     # Sleep out the rest of the sample period, but poll touch every 50 ms so
     # taps are not missed. Sensor cadence stays at SAMPLE_PERIOD_MS.
+    last_cycle_work_ms = elapsed_ticks_ms(cycle_started_ms, time.ticks_ms())
     sleep_until = time.ticks_add(now, SAMPLE_PERIOD_MS)
     while time.ticks_diff(sleep_until, time.ticks_ms()) > 0:
         # M5.Touch only refreshes when M5.update() runs. Pumping it once per
@@ -4703,6 +4874,6 @@ while True:
         # stale snapshot, which is what made taps feel unresponsive. Safe to
         # call at this rate now: no machine.I2C handle exists for it to break.
         if service_navigation():
-            render_hmi(hmi_page, observation, active_rules_reference,
+            render_hmi(hmi_page, hmi_observation, active_rules_reference,
                        active_rules, published_rules_reference)
         time.sleep_ms(50)

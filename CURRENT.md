@@ -16,23 +16,32 @@ so named package policies govern those fields. Diagnostic prints are independent
 of durable selection. Delta compares with the previous selected durable record.
 No compiler or shared schema change was needed for these two fixes.
 
-## Verified handoff bases — 2026-09-11
+M6.34 explicitly establishes the UIFlow software charging request after M5
+initialization instead of assuming charging is enabled. A failed setter leaves the
+request unknown and is retried only at the separate 60-second policy cadence; the
+75/80 percent hysteresis remains unchanged. Battery reads now run at about 1 Hz and
+the SYSTEM page distinguishes signed current, estimated percentage, UIFlow charging
+status, software request state, age and read failure. It also shows wrap-safe prior-
+cycle work and actual interval, ADC, Shelly and V3 calculation/event timing plus
+bounded MicroPython heap counters.
+These diagnostics remain local to the HMI and do not alter current or durable record
+interfaces.
 
-These are the advertised tips before this documentation-only handoff, not claims
-that documentation commit hashes equal their own parents. Re-read live refs.
+## Verified starting bases — 2026-09-12
+
+These were the advertised remote tips before the bounded M6.34 work. Re-read live
+refs before any later work or promotion.
 
 | Branch | Verified tip before handoff |
 | --- | --- |
-| pilot | 2f02f158bd5c73ff946f208ab7d1549d6d44c6fc |
-| pilot-working | 2f02f158bd5c73ff946f208ab7d1549d6d44c6fc |
+| pilot | 07a91c2260440bb05bdff41fa26cee4bab67460f |
+| pilot-working | 07a91c2260440bb05bdff41fa26cee4bab67460f |
 | Tab5 | 688f491cf9b24b328cd95383cc5c190a544d9745 (M6.32) |
-| tab5-working | 9d297ae4897a0a911e52a6d8b9881c2fa1ee93ff (M6.33) |
+| tab5-working | 6d4b54cc9806e34b01343caf69f1df86e540d486 (accepted, unpromoted M6.33) |
 
-This handoff adds documentation commits only to the two working branches. No
-operating promotion or deployment is included. M6.33 is bench-accepted but has
-not been promoted to Tab5. Before the next coding unit, obtain owner approval
-for needed operating alignment; never reset working branches to discard accepted
-work. Read-only design review can proceed from the working branches now.
+M6.34 preserves the accepted, unpromoted M6.33 work. No operating promotion,
+installation, rules-package delivery, Firebase change or hardware operation is
+included.
 
 ## Evidence and limits
 
@@ -45,6 +54,12 @@ work. Read-only design review can proceed from the working branches now.
   unit. These are session-reported deployment facts, not a fresh cloud audit.
 - Tab5 M6.33: 149 host tests passed, syntax and whitespace checks passed. The
   GitHub tree was verified identical to the tested local tree before ref update.
+- Tab5 M6.34: 160 host tests passed; `pilot.py`, `main.py` and `cloud.py` compile
+  under the host syntax check, and whitespace checks passed. The M5Unified source
+  convention is positive battery current for charge and negative for discharge;
+  M6.34 retains the signed number and uses `isCharging()` separately. Hardware
+  read cadence, setter behavior, screen fit and heap values remain owner bench
+  checks; no device result is claimed by host fixtures.
 - Owner bench logs show E007 opening/inhibiting, reasserting OFF after owner ON
   operations, qualifying closure and acknowledged/observed ON recovery; positive
   and sticky lock handling; package download/staging without live replacement,
@@ -69,11 +84,10 @@ work. Read-only design review can proceed from the working branches now.
 
 ## Next
 
-Read EDITOR-REVIEW.md and conduct a read-only complete editor/workflow review with
-the owner. Present current behavior, gaps, proposed screens/workflows, design
-questions and small implementation units. Stop for discussion before coding.
-The upcoming coding agent must receive a bounded accepted unit, exact source
-bases, acceptance criteria and exclusions, not the entire roadmap as authorization.
+After the reviewed M6.34 commit is available, the owner may install it on Tab5 and
+bench-check the startup charging request, 75/80 transitions, battery failure/age
+display, approximately 1 Hz read updates, SYSTEM layout/touch behavior and timing/
+heap plausibility. Promotion to Tab5 remains a separate owner decision.
 
 ## Later / unresolved
 

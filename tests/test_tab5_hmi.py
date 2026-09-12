@@ -92,8 +92,11 @@ def observation(power=2920.0, shelly_available=True, shelly_age_ms=250,
             "power": power,
             "voltage": 241.2,
             "adc_microvolts": 3073125,
+            "battery_voltage": 7.58,
+            "battery_current": 0.218,
             "battery_percent": 78,
             "battery_charging": False,
+            "battery_charge_enabled": True,
             "shelly1_sw0": True,
             "shelly1_rly0": False,
         },
@@ -105,6 +108,9 @@ def observation(power=2920.0, shelly_available=True, shelly_age_ms=250,
             "shelly1_last_valid_ticks_ms": 9800,
             "adc_available": adc_available,
             "adc_last_valid_ticks_ms": 9900,
+            "battery_available": True,
+            "battery_sample_ticks_ms": 9950,
+            "battery_age_ms": 50,
             "wifi_connected": True,
             "network_traffic_allowed": True,
         },
@@ -257,8 +263,8 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertNotIn("submit", events_source.lower())
         self.assertNotIn("cloud.", events_source)
 
-    def test_release_is_m633(self):
-        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.33")
+    def test_release_is_m634(self):
+        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.34")
 
     def test_touch_service_is_not_limited_to_remaining_cycle_sleep(self):
         source = PILOT_PATH.read_text(encoding="utf-8")
