@@ -1,5 +1,21 @@
 # Current status — Pilot line
 
+## Now — M6.35 working-branch implementation
+
+The coordinated rules-driven durable-observation and current-event-board unit is
+implemented on `pilot-working` and `tab5-working`, pending owner sync/review. It is
+not promoted or deployed. Pilot now accepts durable observation schema v2 while
+retaining schema-v1 ingestion, reconciles authenticated complete boards in one
+Firestore transaction, creates deterministic event-record-v2 history, and mirrors
+only revision-current accepted boards to the dedicated RTDB path. Same-session
+newer omissions close immediately; silence does nothing; restart closes prior
+session occurrences with unknown end time.
+
+The checked-in RTDB rules add the fixed Netlify event-board writer and must be
+published separately after source promotion. No Firebase, Netlify, package, or
+hardware change was made by this unit. The owner checklist is
+`docs/m635-owner-install-test.md`.
+
 ## Now — Pilot implementation
 
 Pilot owns browser authoring/HMI, compiler, immutable publication, delivery and
@@ -38,6 +54,12 @@ unchanged. Its accepted M6.33 still needs owner-approved operating promotion;
 do not discard it to align branches. The next unit brief is NEXT-UNIT.md.
 
 ## Evidence and limits
+
+- M6.35 has 134 ordinary host tests passing, including strict v2 observation
+  ingestion, board reconciliation, deterministic callback retry, mirror revision
+  ordering, and executable schema examples. The RTDB emulator gate could not run
+  in this environment because Firebase Tools requires Java 21 and only Java 17 is
+  installed; it remains an owner/environment check before rules publication.
 
 - Pilot 2f02f158: 112 host tests passed. The owner-provided Windows Codex report
   confirms RTDB emulator acceptance using demo-well-pump-control on localhost,
@@ -100,8 +122,8 @@ do not discard it to align branches. The next unit brief is NEXT-UNIT.md.
 - Normal/Monitor kernel exists; web operator requests, required-source occurrence
   generation and Clear Events integration remain incomplete. S020 availability
   correction does not wire automatic Monitor behavior. Separate design/work unit.
-- Retained V3 event records/browser and summaries remain incomplete. Desired
-  standard close-record duration is a proposal, not implemented. Online checks target the current Tab5 supported subset; future runtime changes
+- V3 event browsing and summaries remain incomplete. Board-derived inferred and
+  restart closes intentionally have unknown close time. Online checks target the current Tab5 supported subset; future runtime changes
   require updating compatibility fixtures and checks.
 - Issue #5: https://github.com/bobebaugh/well-pump-control/issues/5 . Monitor the
   script named AntiFastCycle (currently script:2, copied test code) when online

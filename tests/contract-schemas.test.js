@@ -5,11 +5,15 @@ const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const { readFileSync, readdirSync } = require("node:fs");
 const path = require("node:path");
+const { reduceEventBoard } = require("../cloud/netlify/lib/event-board-reducer");
 
 const root = path.resolve(__dirname, "..");
 const readJson = relative => JSON.parse(readFileSync(path.join(root, relative), "utf8"));
 
 const schemas = [
+  "interfaces/current-event-board-v1.schema.json",
+  "interfaces/durable-observation-v2.schema.json",
+  "interfaces/event-record-v2.schema.json",
   "contracts/current-observation-v1.schema.json",
   "contracts/durable-observation-v1.schema.json",
   "contracts/event-record-v1.schema.json",
@@ -141,6 +145,47 @@ test("all M2 examples validate against their versioned schemas", () => {
     const example = readJson(examplePath);
     assert.deepEqual(validate(schema, example), [], examplePath);
   }
+});
+
+test("M6.35 producer boards, observations, and derived history satisfy their schemas", () => {
+  const release = {
+    releaseId: "20260912001035-event-v3-v15", packageVersion: 15,
+    contentHash: "a".repeat(64)
+  };
+  const slot = {
+    occurrenceId: "r15:E007:1", displayName: "Utility voltage high",
+    severity: "Red", eventClass: "transient",
+    opening: { kind: "condition-qualified", cycleSequence: 1, uptimeMs: 1000 }
+  };
+  const board = (sequence, openEvents, sessionId = "boot_AAAAAAAAAAAA") => ({
+    schemaVersion: 1, kind: "current-event-board", siteId: "well-main",
+    deviceId: "tab5-well-main", sessionId, boardSequence: sequence,
+    complete: true, producedUptimeMs: sequence * 1000, rulesRelease: release,
+    openEvents
+  });
+  const observation = {
+    schemaVersion: 2, recordType: "observation",
+    recordId: "obs_boot_AAAAAAAAAAAA_0000000001",
+    siteId: "well-main", deviceId: "tab5-well-main",
+    sessionId: "boot_AAAAAAAAAAAA", cycleSequence: 1,
+    time: { uptimeMs: 1000 }, source: "tab5", rulesRelease: release,
+    snapshotPhase: "observed-pre-dispatch",
+    triggerReasons: [{ kind: "event-open", eventDefinitionId: "E007" }],
+    fields: { SupplyVoltage: { state: "available", value: 250.1 } }
+  };
+  assert.deepEqual(validate(readJson("interfaces/current-event-board-v1.schema.json"), board(1, { E007: slot })), []);
+  assert.deepEqual(validate(readJson("interfaces/durable-observation-v2.schema.json"), observation), []);
+  const opened = reduceEventBoard(null, board(1, { E007: slot }), "2026-09-12T16:00:01Z");
+  const closed = reduceEventBoard(opened.projection, board(2, {}), "2026-09-12T16:00:02Z");
+  const reopened = reduceEventBoard(closed.projection, board(3, { E007: { ...slot, occurrenceId: "r15:E007:2" } }), "2026-09-12T16:00:03Z");
+  const restarted = reduceEventBoard(reopened.projection, board(1, {}, "boot_BBBBBBBBBBBB"), "2026-09-12T17:00:00Z");
+  const schema = readJson("interfaces/event-record-v2.schema.json");
+  for (const record of [opened.records[0], closed.records[0], restarted.records[0]]) {
+    assert.deepEqual(validate(schema, record), [], record.recordId);
+  }
+  const missingCloseEvidence = { ...closed.records[0] };
+  delete missingCloseEvidence.detectedAt;
+  assert.notDeepEqual(validate(schema, missingCloseEvidence), []);
 });
 
 test("observation contracts preserve unknown future fields", () => {

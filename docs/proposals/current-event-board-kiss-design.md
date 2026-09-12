@@ -1,6 +1,6 @@
 # Clean-sheet KISS design: current-event synchronization and bounded observation delivery
 
-> **Status: proposal only; not implemented.** This document defines a deliberately lossy supervisory history path. It changes no application code, interface, Firebase rule, deployed service, rules package, or installed Tab5 file.
+> **Status: implemented on `pilot-working` and `tab5-working` by the M6.35 coordinated source unit; not promoted, deployed, configured in Firebase, packaged, or installed.** The executable contracts and tests now supersede the proposal where exact implementation field names are required. The deliberately lossy supervisory guarantees and exclusions below remain authoritative.
 
 ## Decision in one page
 
@@ -277,7 +277,7 @@ The durable observation uses the agreed per-cycle frozen evidence: acquisition a
 
 After CPU B successfully admits the complete encoded observation to the RAM FIFO, CPU A advances the available-field comparison baselines and maximum-interval baseline. It does not wait for cloud acknowledgement. Failed admission advances neither. CPU A retains no producer-side retry record.
 
-This restores Rules Engine control over durable content and frequency without restoring delivery guarantees. Existing `durable-observation-v1` records may continue unchanged until a separately approved record-content revision. Event open/close records are created by Pilot from boards and never occupy this FIFO. The currently uncalled rule-adoption/rejection builder is not activated or redesigned here; it must not be used to justify protected classes or a second queue in this work.
+This restores Rules Engine control over durable content and frequency without restoring delivery guarantees. M6.35 implements this content as `durable-observation-v2`; Pilot retains schema-v1 ingestion only for rollout compatibility and does not reinterpret stored v1 records. Event open/close records are created by Pilot from boards and never occupy this FIFO. The currently uncalled rule-adoption/rejection builder is not activated or redesigned here; it must not be used to justify protected classes or a second queue in this work.
 
 ### FIFO admission and loss
 

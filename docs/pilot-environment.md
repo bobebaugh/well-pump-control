@@ -25,7 +25,14 @@ This file records non-secret deployment identifiers only.
 - Client security rules: deny all
 - Pilot access path: authenticated Netlify server function using IAM; no browser-direct Firestore access
 - Netlify service account role: `roles/datastore.user` (Cloud Datastore User)
-- Netlify environment variable names: `FIREBASE_PROJECT_ID`, `FIRESTORE_DATABASE_ID`, and `FIREBASE_SERVICE_ACCOUNT_JSON`
+- Netlify environment variable names: `FIREBASE_PROJECT_ID`, `FIRESTORE_DATABASE_ID`,
+  `FIREBASE_SERVICE_ACCOUNT_JSON`, `FIREBASE_WEB_API_KEY`, `FIREBASE_RTDB_URL`,
+  and `PILOT_INGEST_TOKEN`
 - Firebase variables configured in the Netlify `pilot` branch-deploy context: 2026-08-14 (values not recorded here)
 
 Do not add service-account JSON, private keys, bearer tokens, Wi-Fi credentials, or Netlify environment values to this file.
+
+M6.35 adds the server-authenticated `event-board` function. After an accepted
+Firestore reconciliation it signs the fixed `netlify-event-board-writer` identity
+and conditionally mirrors the latest accepted board to RTDB. Publishing the checked-
+in RTDB rules is a separate owner operation; no Firestore rules change is required.

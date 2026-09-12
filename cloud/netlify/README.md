@@ -16,3 +16,10 @@ The `pilot` branch is the Netlify branch-deploy source. Secrets belong in Netlif
 M4 adds `ingest-record` on a nondeploying feature branch. It appends authenticated,
 versioned durable observations and event transitions idempotently while the legacy
 pilot functions and current record remain in service.
+
+M6.35 extends `ingest-record` with durable observation schema v2 while retaining
+schema v1. The authenticated `event-board` endpoint validates complete sparse
+boards, transactionally replaces `eventBoardState/tab5-well-main`, creates
+deterministic event-record-v2 history, and conditionally mirrors only the newest
+accepted revision to RTDB. It does not interpret relay consequences or influence
+Tab5 lifecycle/control state.

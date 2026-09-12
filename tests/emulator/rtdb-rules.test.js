@@ -17,6 +17,7 @@ let deviceDatabase;
 let anonymousDatabase;
 let publisherDatabase;
 let v3PublisherDatabase;
+let eventBoardWriterDatabase;
 
 function emulatorAddress() {
   const value = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
@@ -67,6 +68,17 @@ function syncState(changes = {}) {
   };
 }
 
+function currentEventBoard(changes = {}) {
+  return {
+    schemaVersion: 1, kind: "current-event-board", siteId: "well-main",
+    deviceId: "tab5-well-main", sessionId: "boot_12345678",
+    boardSequence: 1, complete: true, producedUptimeMs: 1000,
+    rulesRelease: { releaseId: "20260830123456-event-v3-v1", packageVersion: 1, contentHash: "a".repeat(64) },
+    openEvents: {}, openEventCount: 0, receivedAtMs: serverTimestamp(),
+    acceptedBoardRevision: 1, ...changes
+  };
+}
+
 before(async () => {
   const database = {
     ...emulatorAddress(),
@@ -80,6 +92,9 @@ before(async () => {
   }).database();
   v3PublisherDatabase = environment.authenticatedContext("netlify-rules-publisher", {
     siteId: "well-main", purpose: "rules-v3-publication"
+  }).database();
+  eventBoardWriterDatabase = environment.authenticatedContext("netlify-event-board-writer", {
+    siteId: "well-main", deviceId: "tab5-well-main", purpose: "event-board-mirror"
   }).database();
   await environment.withSecurityRulesDisabled(async context => {
     const admin = context.database();
@@ -197,6 +212,23 @@ test("only the fixed device can report closed V3 running and restart-staging sta
     { ...state, extra: true },
     { ...state, rejected: { reason: "bad", releaseId: null, packageVersion: null, contentHash: null, extra: true } }
   ]) await assertFails(set(ref(deviceDatabase, statePath), invalid));
+});
+
+test("only the fixed Pilot writer can mirror complete ordered event boards", async () => {
+  const path = `${DEVICE}/currentEventBoard`;
+  await assertSucceeds(set(ref(eventBoardWriterDatabase, path), currentEventBoard()));
+  await assertSucceeds(get(ref(eventBoardWriterDatabase, path)));
+  await assertFails(set(ref(deviceDatabase, path), currentEventBoard()));
+  await assertFails(get(ref(deviceDatabase, path)));
+  for (const invalid of [
+    currentEventBoard({ complete: false }),
+    currentEventBoard({ deviceId: "other-device" }),
+    currentEventBoard({ openEventCount: -1 }),
+    currentEventBoard({ openEventCount: 1, openEvents: {} }),
+    currentEventBoard({ openEventCount: 2, openEvents: { E007: { occurrenceId: "one" } } }),
+    currentEventBoard({ acceptedBoardRevision: 0 }),
+    currentEventBoard({ extra: true })
+  ]) await assertFails(set(ref(eventBoardWriterDatabase, path), invalid));
 });
 
 test("malformed and misaddressed current observations are denied", async () => {

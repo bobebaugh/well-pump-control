@@ -89,6 +89,14 @@ function validateRulesReference(value, field) {
   requireCondition(typeof value.contentHash === "string" && HASH_PATTERN.test(value.contentHash), `${field}.contentHash`);
 }
 
+function validateRulesReferenceV2(value, field) {
+  requireCondition(isPlainObject(value), field);
+  requireCondition(Object.keys(value).every(key => ["releaseId", "packageVersion", "contentHash"].includes(key)), field);
+  requireCondition(typeof value.releaseId === "string" && /^[0-9]{14}-event-v3-v[1-9][0-9]*$/.test(value.releaseId), `${field}.releaseId`);
+  requireCondition(Number.isInteger(value.packageVersion) && value.packageVersion >= 1, `${field}.packageVersion`);
+  requireCondition(typeof value.contentHash === "string" && HASH_PATTERN.test(value.contentHash), `${field}.contentHash`);
+}
+
 function utcPrefix(value) {
   const date = new Date(value);
   return date.toISOString().slice(0, 19).replace(/[-T:]/g, "");
@@ -122,6 +130,50 @@ function validateObservation(value) {
   requireCondition(isPlainObject(value.status), "status");
   const expected = `${utcPrefix(value.observedAt)}-observation-${value.sessionId}-${sequenceText(value.sequence)}`;
   requireCondition(value.recordId === expected, "recordId");
+}
+
+function validateObservationV2(value) {
+  requireCondition(isPlainObject(value), "body");
+  validateSafeTree(value);
+  requireCondition(Object.keys(value).every(key => [
+    "schemaVersion", "recordType", "recordId", "siteId", "deviceId",
+    "sessionId", "cycleSequence", "time", "receivedAt", "source",
+    "rulesRelease", "snapshotPhase", "triggerReasons", "fields"
+  ].includes(key)), "body");
+  ["recordType", "recordId", "siteId", "deviceId", "sessionId", "cycleSequence", "time", "source", "rulesRelease", "snapshotPhase", "triggerReasons", "fields"].forEach(
+    field => requireCondition(Object.hasOwn(value, field), field));
+  requireCondition(value.schemaVersion === 2, "schemaVersion", "unsupported_schema_version");
+  requireCondition(value.recordType === "observation", "recordType");
+  requireCondition(typeof value.siteId === "string" && ID_PATTERN.test(value.siteId), "siteId");
+  requireCondition(typeof value.deviceId === "string" && ID_PATTERN.test(value.deviceId), "deviceId");
+  requireCondition(typeof value.sessionId === "string" && SESSION_PATTERN.test(value.sessionId), "sessionId");
+  requireCondition(Number.isInteger(value.cycleSequence) && value.cycleSequence >= 0 && value.cycleSequence <= 9999999999, "cycleSequence");
+  requireCondition(value.recordId === `obs_${value.sessionId}_${sequenceText(value.cycleSequence)}`, "recordId");
+  requireCondition(value.source === "tab5", "source");
+  requireCondition(value.snapshotPhase === "observed-pre-dispatch", "snapshotPhase");
+  requireCondition(isPlainObject(value.time), "time");
+  requireCondition(Object.keys(value.time).every(key => ["uptimeMs", "observedAt"].includes(key)), "time");
+  requireCondition(Number.isInteger(value.time.uptimeMs) && value.time.uptimeMs >= 0, "time.uptimeMs");
+  if (value.time.observedAt !== undefined) validateDateTime(value.time.observedAt, "time.observedAt");
+  if (value.receivedAt !== undefined) validateDateTime(value.receivedAt, "receivedAt");
+  validateRulesReferenceV2(value.rulesRelease, "rulesRelease");
+  requireCondition(Array.isArray(value.triggerReasons) && value.triggerReasons.length >= 1, "triggerReasons");
+  value.triggerReasons.forEach((reason, index) => requireCondition(isPlainObject(reason) && typeof reason.kind === "string", `triggerReasons[${index}]`));
+  requireCondition(isPlainObject(value.fields), "fields");
+  for (const [name, field] of Object.entries(value.fields)) {
+    requireCondition(/^[A-Za-z][A-Za-z0-9_]{1,63}$/.test(name), `fields.${name}`);
+    requireCondition(isPlainObject(field), `fields.${name}`);
+    requireCondition(["available", "unavailable"].includes(field.state), `fields.${name}.state`);
+    if (field.state === "available") {
+      requireCondition(Object.hasOwn(field, "value") &&
+        (["string", "boolean"].includes(typeof field.value) ||
+         (typeof field.value === "number" && Number.isFinite(field.value))), `fields.${name}.value`);
+      requireCondition(Object.keys(field).every(key => key === "state" || key === "value"), `fields.${name}`);
+    } else {
+      requireCondition(typeof field.reason === "string" && field.reason.length >= 1 && field.reason.length <= 128, `fields.${name}.reason`);
+      requireCondition(Object.keys(field).every(key => key === "state" || key === "reason"), `fields.${name}`);
+    }
+  }
 }
 
 function validateActor(value) {
@@ -178,6 +230,10 @@ function validateRuleAudit(value) {
 }
 
 function validateIngestRecord(value) {
+  if (isPlainObject(value) && value.schemaVersion === 2) {
+    validateObservationV2(value);
+    return value;
+  }
   validateCommon(value);
   if (value.recordType === "observation") validateObservation(value);
   else if (value.recordType === "event-open" || value.recordType === "event-close") validateEvent(value);
@@ -188,7 +244,11 @@ function validateIngestRecord(value) {
 function canonicalRecord(value) {
   const copy = JSON.parse(JSON.stringify(value));
   delete copy.receivedAt;
-  copy.observedAt = new Date(copy.observedAt).toISOString();
+  if (copy.schemaVersion === 2) {
+    if (copy.time.observedAt !== undefined) copy.time.observedAt = new Date(copy.time.observedAt).toISOString();
+  } else {
+    copy.observedAt = new Date(copy.observedAt).toISOString();
+  }
   return copy;
 }
 

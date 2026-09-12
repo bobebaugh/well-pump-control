@@ -32,6 +32,16 @@ const ruleAdoption = {
   },
   actor: { type: "device", id: "tab5-well-main" }
 };
+const observationV2 = {
+  schemaVersion: 2, recordType: "observation",
+  recordId: "obs_boot_A7f93k2Q_0000000042",
+  siteId: "well-main", deviceId: "tab5-well-main", sessionId: "boot_A7f93k2Q",
+  cycleSequence: 42, time: { uptimeMs: 42000 }, source: "tab5",
+  rulesRelease: { releaseId: "20260912001035-event-v3-v15", packageVersion: 15, contentHash: "a".repeat(64) },
+  snapshotPhase: "observed-pre-dispatch",
+  triggerReasons: [{ kind: "session-start" }],
+  fields: { PumpEnable: { state: "available", value: false }, SupplyVoltage: { state: "unavailable", reason: "source-unavailable" } }
+};
 
 class FakeTimestamp {
   constructor(date) { this.date = date; }
@@ -91,6 +101,28 @@ test("stores a complete durable observation at its contract path", async () => {
   assert.deepEqual(stored.futureEnvelopeField, ["preserved"]);
   assert.equal(stored.observedAt.toDate().toISOString(), observation.observedAt);
   assert.equal(stored.receivedAt.toDate().toISOString(), "2026-08-24T18:00:00.000Z");
+});
+
+test("stores v2 rules-driven observations without wall time while retaining v1 support", async () => {
+  const { handler, records } = makeHandler();
+  const first = await handler(request(observationV2));
+  assert.equal(first.statusCode, 201);
+  assert.equal(records.get(`sites/well-main/observations/${observationV2.recordId}`).time.uptimeMs, 42000);
+  assert.equal((await handler(request(observationV2))).statusCode, 200);
+  assert.equal((await handler(request(observation))).statusCode, 201);
+  assert.equal(records.size, 2);
+  assert.throws(() => validateIngestRecord({ ...observationV2, fields: { SupplyVoltage: { state: "available", value: null } } }), IngestRecordError);
+  assert.throws(() => validateIngestRecord({ ...observationV2, extra: "not-contracted" }), IngestRecordError);
+  assert.throws(() => validateIngestRecord({
+    ...observationV2, fields: { SupplyVoltage: { state: "available", value: { garbage: true } } }
+  }), IngestRecordError);
+  assert.doesNotThrow(() => validateIngestRecord({
+    ...observationV2,
+    triggerReasons: Array.from({ length: 161 }, (_, index) => ({ kind: "field-change", index }))
+  }));
+  assert.throws(() => validateIngestRecord({
+    ...observationV2, receivedAt: "2026-02-30T00:00:00Z"
+  }), IngestRecordError);
 });
 
 test("accepts Netlify base64-encoded request bodies", async () => {
@@ -188,7 +220,7 @@ test("rejects unauthorized, malformed, and unsupported records", async () => {
   assert.equal((await handler(request({ ...observation, values: null }))).statusCode, 400);
   assert.equal((await handler({ httpMethod: "GET", headers: {}, body: "" })).statusCode, 405);
   assert.equal((await handler({ httpMethod: "POST", headers: { "X-Pilot-Key": "test-ingest-token" }, body: "{" })).statusCode, 400);
-  const oversized = { httpMethod: "POST", headers: { "X-Pilot-Key": "test-ingest-token" }, body: JSON.stringify({ padding: "x".repeat(65536) }) };
+  const oversized = { httpMethod: "POST", headers: { "X-Pilot-Key": "test-ingest-token" }, body: JSON.stringify({ padding: "x".repeat(393216) }) };
   assert.equal(JSON.parse((await handler(oversized)).body).code, "payload_too_large");
 });
 

@@ -12,7 +12,7 @@ const {
 
 const SITE_ID = "well-main";
 const DEVICE_ID = "tab5-well-main";
-const MAX_BODY_BYTES = 65536;
+const MAX_BODY_BYTES = 393216;
 const jsonHeaders = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store"
@@ -54,6 +54,9 @@ function storedCanonical(data) {
   delete value.receivedAt;
   if (value.observedAt && typeof value.observedAt.toDate === "function") {
     value.observedAt = value.observedAt.toDate().toISOString();
+  }
+  if (value.time?.observedAt && typeof value.time.observedAt.toDate === "function") {
+    value.time = { ...value.time, observedAt: value.time.observedAt.toDate().toISOString() };
   }
   return value;
 }
@@ -97,11 +100,14 @@ function createHandler(dependencies = {}) {
           }
           return { duplicate: true };
         }
-        transaction.create(document, {
-          ...canonical,
-          observedAt: toTimestamp(new Date(record.observedAt)),
-          receivedAt: serverTimestamp()
-        });
+        const stored = { ...canonical, receivedAt: serverTimestamp() };
+        if (record.schemaVersion === 2) {
+          stored.time = { ...canonical.time };
+          if (record.time.observedAt !== undefined) stored.time.observedAt = toTimestamp(new Date(record.time.observedAt));
+        } else {
+          stored.observedAt = toTimestamp(new Date(record.observedAt));
+        }
+        transaction.create(document, stored);
         return { duplicate: false };
       });
 

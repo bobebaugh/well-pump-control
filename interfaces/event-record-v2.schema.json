@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/event-record-v2.schema.json",
+  "title": "Pilot-derived V3 event history record v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "recordType", "recordId", "siteId", "deviceId", "sessionId", "eventDefinitionId", "occurrenceId", "displayName", "severity", "eventClass", "rulesRelease"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "recordType": { "enum": ["event-open", "event-close"] },
+    "recordId": { "type": "string", "pattern": "^event-(open|close)--[a-z0-9-]+--[A-Za-z0-9_-]+--[A-Za-z0-9_.:-]+$" },
+    "siteId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "deviceId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "sessionId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "eventDefinitionId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$" },
+    "occurrenceId": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,192}$" },
+    "displayName": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "severity": { "enum": ["Info", "Yellow", "Red"] },
+    "eventClass": { "enum": ["transient", "latched", "monitor"] },
+    "rulesRelease": { "$ref": "#/$defs/rulesRelease" },
+    "openingEvidenceStatus": { "enum": ["exact-device", "reported-open"] },
+    "opening": { "$ref": "#/$defs/opening" },
+    "firstReportedBoard": { "$ref": "#/$defs/boardEvidence" },
+    "firstReportedAt": { "type": "string", "format": "date-time" },
+    "closeReason": { "enum": ["inferred-board-disappearance", "ended-by-restart"] },
+    "closeTimeStatus": { "const": "unknown" },
+    "lastPresentBoard": { "$ref": "#/$defs/boardEvidence" },
+    "detectedAt": { "type": "string", "format": "date-time" },
+    "firstAbsentBoard": { "$ref": "#/$defs/boardEvidence" },
+    "restartDetectedAt": { "type": "string", "format": "date-time" },
+    "restartBoard": { "$ref": "#/$defs/boardEvidence" }
+  },
+  "allOf": [
+    { "if": { "properties": { "recordType": { "const": "event-open" } } }, "then": { "required": ["openingEvidenceStatus", "opening", "firstReportedBoard", "firstReportedAt"] } },
+    { "if": { "properties": { "recordType": { "const": "event-close" } } }, "then": { "required": ["closeReason", "closeTimeStatus", "lastPresentBoard"] } },
+    { "if": { "properties": { "closeReason": { "const": "inferred-board-disappearance" } }, "required": ["closeReason"] }, "then": { "required": ["detectedAt", "firstAbsentBoard"] } },
+    { "if": { "properties": { "closeReason": { "const": "ended-by-restart" } }, "required": ["closeReason"] }, "then": { "required": ["restartDetectedAt", "restartBoard"] } }
+  ],
+  "$defs": {
+    "rulesRelease": { "type": "object", "additionalProperties": false, "required": ["releaseId", "packageVersion", "contentHash"], "properties": { "releaseId": { "type": "string", "pattern": "^[0-9]{14}-event-v3-v[1-9][0-9]*$" }, "packageVersion": { "type": "integer", "minimum": 1 }, "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" } } },
+    "opening": { "type": "object", "additionalProperties": false, "required": ["kind", "cycleSequence", "uptimeMs"], "properties": { "kind": { "enum": ["condition-qualified", "occurrence-qualified", "unknown"] }, "cycleSequence": { "type": "integer", "minimum": 0 }, "uptimeMs": { "type": "integer", "minimum": 0 }, "observedAt": { "type": "string", "format": "date-time" } } },
+    "boardEvidence": { "type": "object", "additionalProperties": false, "required": ["boardSequence", "producedUptimeMs"], "properties": { "boardSequence": { "type": "integer", "minimum": 1 }, "producedUptimeMs": { "type": "integer", "minimum": 0 }, "producedAt": { "type": "string", "format": "date-time" } } }
+  }
+}
