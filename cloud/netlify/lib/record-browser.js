@@ -105,7 +105,9 @@ function decodeCursor(value) {
     if (typeof parsed?.id !== "string" || !parsed.id || parsed.id.length > 256) return null;
     if (typeof parsed?.time === "string") {
       const time = new Date(parsed.time);
-      return Number.isFinite(time.getTime()) ? { time: time.toISOString(), id: parsed.id } : null;
+      // Validate the RFC3339 instant without changing its serialized form. Event
+      // history uses its stored ISO string as an ordered Firestore cursor value.
+      return Number.isFinite(time.getTime()) ? { time: parsed.time, id: parsed.id } : null;
     }
     if (Number.isInteger(parsed?.sequence) && parsed.sequence >= 0 && parsed.sequence <= Number.MAX_SAFE_INTEGER) return { sequence: parsed.sequence, id: parsed.id };
     return null;

@@ -16,8 +16,10 @@ function cursor(query, kind) {
   const raw = query.cursor;
   if (raw === undefined || raw === null || raw === "") return null;
   const parsed = _decodeCursor(raw);
-  if (!parsed || (kind === "time" && !parsed.time) || (kind === "sequence" && !Number.isInteger(parsed.sequence))) throw new BrowserInputError("invalid_cursor");
-  return parsed.time ? { ...parsed, time: new Date(parsed.time) } : parsed;
+  if (!parsed || ((kind === "timestamp" || kind === "string-time") && !parsed.time) || (kind === "sequence" && !Number.isInteger(parsed.sequence))) throw new BrowserInputError("invalid_cursor");
+  // Observation and receipt fields are Firestore Timestamps. Event-board closure
+  // fields are persisted RFC3339 strings and must use a string cursor boundary.
+  return kind === "timestamp" ? { ...parsed, time: new Date(parsed.time) } : parsed;
 }
 function serialise(snapshot) { return { ...snapshot.data(), recordId: snapshot.data().recordId || snapshot.id, receivedAt: iso(snapshot.data().receivedAt), observedAt: iso(snapshot.data().observedAt), firstReportedAt: iso(snapshot.data().firstReportedAt), detectedAt: iso(snapshot.data().detectedAt), restartDetectedAt: iso(snapshot.data().restartDetectedAt), time: { ...snapshot.data().time, observedAt: iso(snapshot.data().time?.observedAt) } }; }
 function draftFromSnapshots(snapshots) { return Object.fromEntries(snapshots.map(snapshot => [snapshot.id, snapshot.exists ? snapshot.data().items : null])); }
@@ -36,7 +38,7 @@ function timeQuery(observations, schemaVersion, field, before, count) {
   return query.limit(count).get();
 }
 async function observationPage(site, query) {
-  const observations = site.collection("observations"); let pageCursor = cursor(query, "time");
+  const observations = site.collection("observations"); let pageCursor = cursor(query, "timestamp");
   if (!pageCursor && query.anchor !== undefined) { const anchor = date(query.anchor); if (!anchor) throw new BrowserInputError("invalid_anchor"); pageCursor = { time: anchor, id: "\uffff" }; }
   const count = limit(query.limit);
   const [one, two] = await Promise.all([timeQuery(observations, 1, "observedAt", pageCursor, count), timeQuery(observations, 2, "time.observedAt", pageCursor, count)]);
@@ -51,7 +53,7 @@ async function observationPage(site, query) {
   return { status: records.length ? "ok" : "empty", catalog: catalogState.catalog, defaultColumns: eventDefaultColumns(catalogState.events, query.event, catalogState.catalog), records: records.map(item => observationView(item, columns)), nextCursor: next ? _encodeCursor({ time: nextTime, id: next.recordId }) : null, previousCursor: pageCursor ? _encodeCursor({ time: pageCursor.time.toISOString(), id: pageCursor.id }) : null };
 }
 async function receiptPage(site, query) {
-  const observations = site.collection("observations"); const pageCursor = cursor(query, "time"); const count = limit(query.limit);
+  const observations = site.collection("observations"); const pageCursor = cursor(query, "timestamp"); const count = limit(query.limit);
   const read = schema => { let request = observations.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", schema).orderBy("receivedAt", "desc").orderBy(idField, "desc"); if (pageCursor) request = request.startAfter(Timestamp.fromDate(pageCursor.time), pageCursor.id); return request.limit(count).get(); };
   const [one, two, catalogState] = await Promise.all([read(1), read(2), savedCatalog(site)]);
   if (!catalogState.catalog) return { status: "configuration", code: "saved_rules_missing", records: [], catalog: [] };
@@ -96,12 +98,12 @@ async function sessionPage(site, query) {
 function closureTime(record) { return iso(record.closeReason === "ended-by-restart" ? record.restartDetectedAt : record.detectedAt); }
 function closureQuery(history, reason, field, pageCursor, count) {
   let request = history.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", 2).where("recordType", "==", "event-close").where("closeReason", "==", reason).orderBy(field, "desc").orderBy(idField, "desc");
-  if (pageCursor) request = request.startAfter(Timestamp.fromDate(pageCursor.time), pageCursor.id);
+  if (pageCursor) request = request.startAfter(pageCursor.time, pageCursor.id);
   return request.limit(count).get();
 }
 async function eventHistory(site, count, query = {}) {
   const history = site.collection("eventRecords");
-  const pageCursor = cursor(query, "time");
+  const pageCursor = cursor(query, "string-time");
   const [inferred, restart] = await Promise.all([
     closureQuery(history, "inferred-board-disappearance", "detectedAt", pageCursor, count),
     closureQuery(history, "ended-by-restart", "restartDetectedAt", pageCursor, count)
@@ -113,7 +115,7 @@ async function eventHistory(site, count, query = {}) {
   const openingSnapshots = openIds.length ? await site.firestore.getAll(...openIds.map(id => history.doc(id))) : [];
   const occurrences = joinOccurrences([...closes, ...openingSnapshots.filter(item => item.exists).map(serialise)]).filter(item => item.close);
   const last = closes.at(-1);
-  return { occurrences, nextCursor: last ? _encodeCursor({ time: closureTime(last), id: last.recordId }) : null, previousCursor: pageCursor ? _encodeCursor({ time: pageCursor.time.toISOString(), id: pageCursor.id }) : null };
+  return { occurrences, nextCursor: last ? _encodeCursor({ time: closureTime(last), id: last.recordId }) : null, previousCursor: pageCursor ? _encodeCursor({ time: pageCursor.time, id: pageCursor.id }) : null };
 }
 async function home(site) {
   const [boardSnapshot, history] = await Promise.all([site.collection("eventBoardState").doc(DEVICE_ID).get(), eventHistory(site, 10)]);

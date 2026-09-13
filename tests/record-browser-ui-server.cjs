@@ -10,9 +10,14 @@ http.createServer((request, response) => {
   if (url.pathname === "/.netlify/functions/record-browser") {
     const receipt = url.searchParams.get("view") === "receipt";
     const session = url.searchParams.get("view") === "session";
-    const continued = Boolean(url.searchParams.get("cursor"));
-    const id = receipt ? (continued ? "receipt-older" : "receipt-row") : session ? (continued ? "session-later" : "session-row") : (continued ? "observation-older" : url.searchParams.has("anchor") ? "observation-anchored" : "observation-row");
-    const body = { status: "ok", source: receipt ? "receipt-time-fallback" : undefined, catalog, defaultColumns: ["PumpWatts", "ClockValid"], records: [record(id)], nextCursor: continued ? null : "mock-next", previousCursor: session && continued ? "mock-before" : null };
+    const cursor = url.searchParams.get("cursor");
+    let body;
+    if (session && cursor === "before-first") body = { status: "empty", catalog, defaultColumns: ["PumpWatts", "ClockValid"], records: [], nextCursor: null, previousCursor: null };
+    else if (session && cursor === "after-last") body = { status: "empty", catalog, defaultColumns: ["PumpWatts", "ClockValid"], records: [], nextCursor: null, previousCursor: null };
+    else if (session && cursor === "after-first") body = { status: "ok", catalog, defaultColumns: ["PumpWatts", "ClockValid"], records: [record("session-last")], nextCursor: "after-last", previousCursor: "back-first" };
+    else if (session && cursor === "back-first") body = { status: "ok", catalog, defaultColumns: ["PumpWatts", "ClockValid"], records: [record("session-first")], nextCursor: "after-first", previousCursor: "before-first" };
+    else if (session) body = { status: "ok", catalog, defaultColumns: ["PumpWatts", "ClockValid"], records: [record("session-first")], nextCursor: "after-first", previousCursor: "before-first" };
+    else body = { status: "ok", source: receipt ? "receipt-time-fallback" : undefined, catalog, defaultColumns: ["PumpWatts", "ClockValid"], records: [record(receipt ? "receipt-row" : url.searchParams.has("anchor") ? "observation-anchored" : "observation-row")], nextCursor: null, previousCursor: null };
     response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify(body)); return;
   }
   const files = { "/records.html": "web/records.html", "/records.js": "web/records.js", "/styles.css": "web/styles.css" };

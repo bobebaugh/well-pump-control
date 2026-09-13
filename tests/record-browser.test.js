@@ -69,7 +69,8 @@ function browserFirestore(seed) {
   const values = new Map(Object.entries(seed));
   const name = field => typeof field === "string" ? field : "__name__";
   const valueAt = (data, field, id) => field === "__name__" ? id : field.split(".").reduce((current, part) => current?.[part], data);
-  const comparable = value => value?.toDate ? value.toDate().toISOString() : value;
+  const firestoreType = value => value?.toDate ? "timestamp" : typeof value;
+  const comparable = value => value?.toDate ? value.toDate().getTime() : value;
   const compare = (left, right) => typeof left === "number" && typeof right === "number" ? left - right : String(left).localeCompare(String(right));
   class Ref { constructor(path) { this.path = path; this.id = path.split("/").at(-1); this.firestore = db; } collection(part) { return new Collection(`${this.path}/${part}`); } async get() { return snap(this.path); } }
   class Query {
@@ -98,7 +99,9 @@ function browserFirestore(seed) {
         const position = row => {
           for (let index = 0; index < this.orders.length; index += 1) {
             const [field, direction] = this.orders[index];
-            const comparison = compare(comparable(valueAt(row.data, field, row.id)), comparable(points[index]));
+            const rowValue = valueAt(row.data, field, row.id); const point = points[index];
+            if (firestoreType(rowValue) !== firestoreType(point)) throw new Error(`cursor_type_mismatch:${field}`);
+            const comparison = compare(comparable(rowValue), comparable(point));
             if (comparison) return direction === "desc" ? -comparison : comparison;
           }
           return 0;
@@ -114,7 +117,7 @@ function browserFirestore(seed) {
   return db;
 }
 
-test("endpoint paginates mixed observations, rejects malformed cursors, and returns recently detected older closures", async () => {
+test("endpoint keeps Timestamp observation cursors and string closure cursors distinct", async () => {
   const root = "sites/well-main";
   const saved = { items: [] };
   const seed = {
@@ -126,14 +129,18 @@ test("endpoint paginates mixed observations, rejects malformed cursors, and retu
     [`${root}/observations/v2-d`]: { schemaVersion: 2, recordId: "v2-d", deviceId: "tab5-well-main", sessionId: "session001", cycleSequence: 7, time: { uptimeMs: 7, observedAt: timestamp("2026-03-08T00:50:00.000Z") }, receivedAt: timestamp("2026-03-08T01:02:30.000Z"), fields: { PumpWatts: { state: "available", value: 7 } } },
     [`${root}/observations/v2-e`]: { schemaVersion: 2, recordId: "v2-e", deviceId: "tab5-well-main", sessionId: "session001", cycleSequence: 11, time: { uptimeMs: 11 }, receivedAt: timestamp("2026-03-08T01:02:45.000Z"), fields: { PumpWatts: { state: "available", value: 11 } } },
     [`${root}/eventRecords/event-open--tab5-well-main--session001--old`]: { schemaVersion: 2, recordType: "event-open", recordId: "event-open--tab5-well-main--session001--old", deviceId: "tab5-well-main", sessionId: "session001", occurrenceId: "old", displayName: "Long run", severity: "Yellow", opening: { cycleSequence: 1 }, firstReportedAt: "2026-01-01T00:00:00.000Z" },
-    [`${root}/eventRecords/event-close--tab5-well-main--session001--old`]: { schemaVersion: 2, recordType: "event-close", recordId: "event-close--tab5-well-main--session001--old", deviceId: "tab5-well-main", sessionId: "session001", occurrenceId: "old", closeReason: "ended-by-restart", restartDetectedAt: "2026-03-08T02:00:00.000Z" }
+    [`${root}/eventRecords/event-close--tab5-well-main--session001--old`]: { schemaVersion: 2, recordType: "event-close", recordId: "event-close--tab5-well-main--session001--old", deviceId: "tab5-well-main", sessionId: "session001", occurrenceId: "old", closeReason: "ended-by-restart", restartDetectedAt: "2026-03-08T02:00:00Z" }
   };
-  for (let index = 0; index < 55; index += 1) {
+  const expectedClosures = ["event-close--tab5-well-main--session001--old"];
+  for (let index = 0; index < 104; index += 1) {
     const occurrenceId = `recent-${index}`;
     const prefix = `${root}/eventRecords/event-`;
-    const detectedAt = timestamp(`2026-03-07T${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}:00.000Z`);
-    seed[`${prefix}open--tab5-well-main--session001--${occurrenceId}`] = { schemaVersion: 2, recordType: "event-open", recordId: `event-open--tab5-well-main--session001--${occurrenceId}`, deviceId: "tab5-well-main", sessionId: "session001", occurrenceId, displayName: "Recent closure", severity: "Blue", opening: { cycleSequence: index }, firstReportedAt: timestamp("2026-03-01T00:00:00.000Z") };
-    seed[`${prefix}close--tab5-well-main--session001--${occurrenceId}`] = { schemaVersion: 2, recordType: "event-close", recordId: `event-close--tab5-well-main--session001--${occurrenceId}`, deviceId: "tab5-well-main", sessionId: "session001", occurrenceId, closeReason: "inferred-board-disappearance", detectedAt };
+    const detectedAt = new Date(Date.UTC(2026, 2, 7, 0, Math.floor(index / 2))).toISOString();
+    const closeReason = index % 2 ? "ended-by-restart" : "inferred-board-disappearance";
+    const closeId = `event-close--tab5-well-main--session001--${occurrenceId}`;
+    expectedClosures.push(closeId);
+    seed[`${prefix}open--tab5-well-main--session001--${occurrenceId}`] = { schemaVersion: 2, recordType: "event-open", recordId: `event-open--tab5-well-main--session001--${occurrenceId}`, deviceId: "tab5-well-main", sessionId: "session001", occurrenceId, displayName: "Recent closure", severity: "Blue", opening: { cycleSequence: index }, firstReportedAt: "2026-03-01T00:00:00.000Z" };
+    seed[`${prefix}close--tab5-well-main--session001--${occurrenceId}`] = { schemaVersion: 2, recordType: "event-close", recordId: closeId, deviceId: "tab5-well-main", sessionId: "session001", occurrenceId, closeReason, ...(closeReason === "ended-by-restart" ? { restartDetectedAt: detectedAt } : { detectedAt }) };
   }
   const handler = _createHandler({ getPilotFirestore: () => ({ db: browserFirestore(seed), projectId: "well-pump-control", databaseId: "(default)" }) });
   const first = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { limit: "1", columns: "PumpWatts" } })).body);
@@ -144,13 +151,30 @@ test("endpoint paginates mixed observations, rejects malformed cursors, and retu
   assert.equal(JSON.parse(malformed.body).code, "invalid_cursor");
   const receipt = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { view: "receipt", limit: "1", columns: "PumpWatts" } })).body);
   assert.equal(receipt.records[0].recordId, "v2-c");
-  const history = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { view: "history" } })).body);
+  const history = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { view: "history", limit: "17" } })).body);
   assert.equal(history.occurrences[0].open.displayName, "Long run");
   assert.equal(history.occurrences[0].close.closeReason, "ended-by-restart");
-  assert.equal(history.occurrences.length, 50);
+  assert.equal(history.occurrences.length, 17);
   assert.ok(history.nextCursor);
-  const olderHistory = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { view: "history", cursor: history.nextCursor } })).body);
-  assert.ok(olderHistory.occurrences.length > 0);
+  const pages = [history.occurrences.map(item => item.close.recordId)]; const cursors = [null]; let nextHistoryCursor = history.nextCursor;
+  while (nextHistoryCursor) {
+    const nextHistory = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { view: "history", limit: "17", cursor: nextHistoryCursor } })).body);
+    if (!nextHistory.occurrences.length) break;
+    cursors.push(nextHistoryCursor); pages.push(nextHistory.occurrences.map(item => item.close.recordId)); nextHistoryCursor = nextHistory.nextCursor;
+  }
+  const actualClosures = pages.flat();
+  const expected = expectedClosures.sort((left, right) => {
+    const record = seed[`${root}/eventRecords/${left}`]; const rightRecord = seed[`${root}/eventRecords/${right}`];
+    const leftTime = record.detectedAt || record.restartDetectedAt;
+    const rightTime = rightRecord.detectedAt || rightRecord.restartDetectedAt;
+    return rightTime.localeCompare(leftTime) || right.localeCompare(left);
+  });
+  assert.deepEqual(actualClosures, expected);
+  assert.equal(new Set(actualClosures).size, actualClosures.length);
+  for (let index = pages.length - 2; index >= 0; index -= 1) {
+    const back = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { view: "history", limit: "17", cursor: cursors[index] || undefined } })).body);
+    assert.deepEqual(back.occurrences.map(item => item.close.recordId), pages[index]);
+  }
   const nearby = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { view: "session", session: "session001", cycle: "9", limit: "1", columns: "PumpWatts" } })).body);
   assert.deepEqual(nearby.records.map(record => record.recordId), ["v1-a", "v2-b", "v2-d", "v2-c"]);
   const following = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { view: "session", session: "session001", cycle: "9", cursor: nearby.nextCursor, direction: "after", limit: "1", columns: "PumpWatts" } })).body);

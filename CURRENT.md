@@ -34,11 +34,20 @@ screenshots represent different occurrences, not a verified matching pair.
   records. A bounded localhost mock was also operated in a real browser: event
   session → Latest/date anchor/receipt fallback, older/newer paging, and column
   changes were exercised. This is mock-backend evidence, not a live Firebase audit.
+- Follow-up browser repair: `node --test tests/record-browser.test.js
+  tests/record-browser-ui.test.js` passes 8/8. Backend fixtures preserve Firestore
+  Timestamp observation fields versus production-shaped string closure fields, and
+  traverse every history page and replay prior pages with no missing or duplicate
+  closure identity. The JavaScript harness and bounded real-browser mock check both
+  retain populated session pages at earlier/later boundaries, preserve columns, and
+  exercise Latest, date anchor and receipt fallback. This remains local mock evidence.
 - Fresh host run: `node --test tests/*.test.js` passed 139/140. The only failure,
   `rules-engine-v3-compatibility` (`null !== 0` while starting its Python resolver),
   was reproduced unchanged at pre-browser parent `167a40ed`; it is pre-existing and
   unrelated to the browser repair. `npm` was not on this host PATH, so the equivalent
   Node test command was used directly.
+- The follow-up full host run passed 141/142; its only failure is the same documented
+  `rules-engine-v3-compatibility` resolver failure.
 - 168 Tab5 and 134 Pilot host tests passed, independently rerun during prior review.
 - Corrected RTDB rules at f97f909a137f9faf2c369614178f72d5a75f7869 passed
   10/10 local demo-project emulator tests. Java 21.0.12.1, Node 22.22.2,
