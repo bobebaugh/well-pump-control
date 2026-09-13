@@ -33,6 +33,11 @@ function parseBody(event) {
   try { return JSON.parse(text); } catch { throw new OperatorControlError("invalid_json", "body"); }
 }
 
+function diagnosticText(value, fallback) {
+  const text = typeof value === "string" && value ? value : fallback;
+  return text.replace(/[\r\n\t]+/g, " ").slice(0, 240);
+}
+
 function createHandler(dependencies = {}) {
   const env = dependencies.env || process.env;
   const store = dependencies.store || createOperatorControlStore(dependencies);
@@ -66,7 +71,12 @@ function createHandler(dependencies = {}) {
         return response(400, { status: "error", code: error.code, field: error.field });
       }
       const configuration = error instanceof ConfigurationError;
-      console.error("Operator control failed", { category: configuration ? "configuration" : "upstream" });
+      console.error("Operator control failed", {
+        category: configuration ? "configuration" : "upstream",
+        stage: diagnosticText(error?.operatorControlStage, "request"),
+        code: diagnosticText(error?.code || error?.name, "unknown"),
+        message: diagnosticText(error?.message, "No error message")
+      });
       return response(503, { status: "error", code: configuration ? "configuration_missing" : "control_unavailable" });
     }
   };

@@ -2,8 +2,10 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { initializeApp, deleteApp } = require("firebase-admin/app");
+const { FieldPath, getFirestore } = require("firebase-admin/firestore");
 const { _decodeCursor, _encodeCursor, catalogFromSavedDraft, eventDefaultColumns, exportRows, fieldState, joinOccurrences, observationView } = require("../cloud/netlify/lib/record-browser");
-const { _createHandler } = require("../cloud/netlify/functions/record-browser");
+const { _createHandler, _initialSessionFollowingQuery } = require("../cloud/netlify/functions/record-browser");
 
 const draft = {
   devices: [{ enabled: true, fields: [{ systemName: "PumpWatts", label: "Pump watts", unit: "W", logging: { mode: "delta" } }, { systemName: "Hidden", logging: { mode: "none" } }] }],
@@ -97,7 +99,7 @@ function browserFirestore(seed) {
       if (this.boundary) {
         const [type, points] = this.boundary;
         const position = row => {
-          for (let index = 0; index < this.orders.length; index += 1) {
+          for (let index = 0; index < points.length; index += 1) {
             const [field, direction] = this.orders[index];
             const rowValue = valueAt(row.data, field, row.id); const point = points[index];
             if (firestoreType(rowValue) !== firestoreType(point)) throw new Error(`cursor_type_mismatch:${field}`);
@@ -116,6 +118,65 @@ function browserFirestore(seed) {
   const db = { collection: part => new Collection(part), getAll: async (...refs) => refs.map(ref => snap(ref.path)) };
   return db;
 }
+
+test("initial session navigation uses an actual Firestore SDK-valid cycle boundary", async () => {
+  const app = initializeApp({ projectId: "well-pump-control" }, `record-browser-${process.pid}`);
+  try {
+    const base = getFirestore(app).collection("sites/well-main/observations")
+      .where("deviceId", "==", "tab5-well-main")
+      .where("schemaVersion", "==", 2)
+      .where("sessionId", "==", "boot_4b08faf436e2");
+    assert.throws(
+      () => base.orderBy("cycleSequence", "asc").orderBy(FieldPath.documentId(), "asc").startAt(600, ""),
+      /Only a direct child can be used as a query boundary/
+    );
+    const repaired = _initialSessionFollowingQuery(base, "cycleSequence", 600, 25);
+    assert.equal(repaired._queryOptions.startAt.values.length, 1);
+  } finally {
+    await deleteApp(app);
+  }
+});
+
+test("event session navigation keeps three prior records, pages both ways, and includes unsynchronized startup", async () => {
+  const root = "sites/well-main";
+  const saved = { items: [] };
+  const session = "boot_4b08faf436e2";
+  const record = (cycle, sessionId = session, observed = true) => ({
+    schemaVersion: 2,
+    recordId: `obs_${sessionId}_${String(cycle).padStart(10, "0")}`,
+    deviceId: "tab5-well-main",
+    sessionId,
+    cycleSequence: cycle,
+    time: { uptimeMs: cycle * 1000, ...(observed ? { observedAt: timestamp(`2026-09-13T00:${String(cycle % 60).padStart(2, "0")}:00.000Z`) } : {}) },
+    receivedAt: timestamp("2026-09-13T01:00:00.000Z"),
+    fields: { PumpWatts: { state: "available", value: cycle } }
+  });
+  const seed = {
+    [`${root}/rulesEngineV3Draft/devices`]: { items: [{ enabled: true, fields: [{ systemName: "PumpWatts", logging: { mode: "change" } }] }] },
+    [`${root}/rulesEngineV3Draft/calculatedFields`]: saved,
+    [`${root}/rulesEngineV3Draft/systemFields`]: saved,
+    [`${root}/rulesEngineV3Draft/events`]: { items: [] }
+  };
+  for (const cycle of [590, 596, 597, 598, 599, 600, 748]) {
+    const item = record(cycle);
+    seed[`${root}/observations/${item.recordId}`] = item;
+  }
+  for (const cycle of [0, 1]) {
+    const item = record(cycle, "boot_UNSYNC000", false);
+    seed[`${root}/observations/${item.recordId}`] = item;
+  }
+  const handler = _createHandler({ getPilotFirestore: () => ({ db: browserFirestore(seed), projectId: "well-pump-control", databaseId: "(default)" }) });
+  const call = async queryStringParameters => JSON.parse((await handler({ httpMethod: "GET", queryStringParameters })).body);
+  const initial = await call({ view: "session", session, cycle: "600", event: "S010", limit: "1", columns: "PumpWatts" });
+  assert.deepEqual(initial.records.map(item => item.cycleSequence), [597, 598, 599, 600]);
+  const earlier = await call({ view: "session", session, cycle: "600", cursor: initial.previousCursor, direction: "before", limit: "2", columns: "PumpWatts" });
+  assert.deepEqual(earlier.records.map(item => item.cycleSequence), [590, 596]);
+  const later = await call({ view: "session", session, cycle: "600", cursor: initial.nextCursor, direction: "after", limit: "1", columns: "PumpWatts" });
+  assert.deepEqual(later.records.map(item => item.cycleSequence), [748]);
+  const startup = await call({ view: "session", session: "boot_UNSYNC000", cycle: "0", limit: "10", columns: "PumpWatts" });
+  assert.deepEqual(startup.records.map(item => item.cycleSequence), [0, 1]);
+  assert.equal(startup.records[0].observationTimeStatus, "unavailable-unsynchronized");
+});
 
 test("endpoint keeps Timestamp observation cursors and string closure cursors distinct", async () => {
   const root = "sites/well-main";

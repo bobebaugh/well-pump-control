@@ -3,7 +3,7 @@
 const { createPrivateKey } = require("node:crypto");
 const { cert, getApps, initializeApp } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
-const { getDatabase } = require("firebase-admin/database");
+const { getDatabaseWithUrl } = require("firebase-admin/database");
 const { getFirestore } = require("firebase-admin/firestore");
 
 class ConfigurationError extends Error {
@@ -98,11 +98,16 @@ function getPilotDatabase() {
       (parsed.pathname !== "/" && parsed.pathname !== "") || parsed.search || parsed.hash) {
     throw new ConfigurationError("FIREBASE_RTDB_URL is not the approved project database host");
   }
-  return { database: getDatabase(app, parsed.origin), projectId };
+  return { database: databaseForUrl(app, parsed.origin), projectId };
+}
+
+function databaseForUrl(app, url) {
+  return getDatabaseWithUrl(url, app);
 }
 
 module.exports = {
   ConfigurationError,
+  _databaseForUrl: databaseForUrl,
   getPilotAuth,
   getPilotDatabase,
   getPilotFirestore

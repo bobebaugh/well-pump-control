@@ -26,3 +26,10 @@ test("browser uses unique one-shot requests and does not retry an ambiguous rest
   assert.match(app, /button\.disabled = value/);
   assert.match(app, /User Monitor ACTIVE until Tab5 restart/);
 });
+
+test("status UI distinguishes rejected authentication, missing configuration, and unavailable status", () => {
+  assert.match(app, /Owner key not accepted; controls remain locked/);
+  assert.match(app, /Control service configuration is unavailable; controls cannot be used/);
+  assert.match(app, /Owner key accepted; current control status is unavailable/);
+  assert.match(app, /Control status unavailable; no command was retried/);
+});

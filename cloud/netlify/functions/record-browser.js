@@ -37,6 +37,9 @@ function timeQuery(observations, schemaVersion, field, before, count) {
   if (before) query = query.startAfter(Timestamp.fromDate(before.time), before.id);
   return query.limit(count).get();
 }
+function initialSessionFollowingQuery(base, field, cycle, count) {
+  return base.orderBy(field, "asc").orderBy(idField, "asc").startAt(cycle).limit(count);
+}
 async function observationPage(site, query) {
   const observations = site.collection("observations"); let pageCursor = cursor(query, "timestamp");
   if (!pageCursor && query.anchor !== undefined) { const anchor = date(query.anchor); if (!anchor) throw new BrowserInputError("invalid_anchor"); pageCursor = { time: anchor, id: "\uffff" }; }
@@ -75,7 +78,7 @@ async function sessionPage(site, query) {
     if (pageCursor) return (await base.orderBy(field, "asc").orderBy(idField, "asc").startAfter(pageCursor.sequence, pageCursor.id).limit(count).get()).docs;
     const [previous, following] = await Promise.all([
       base.orderBy(field, "desc").orderBy(idField, "desc").startAfter(cycle, "0").limit(3).get(),
-      base.orderBy(field, "asc").orderBy(idField, "asc").startAt(cycle, "").limit(count).get()
+      initialSessionFollowingQuery(base, field, cycle, count).get()
     ]);
     return [...previous.docs.reverse(), ...following.docs];
   };
@@ -159,3 +162,4 @@ function createHandler(dependencies = {}) {
 }
 exports.handler = createHandler();
 exports._createHandler = createHandler;
+exports._initialSessionFollowingQuery = initialSessionFollowingQuery;

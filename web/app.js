@@ -132,8 +132,14 @@ async function checkOperatorStatus({ promptForKey = false } = {}) {
       sessionStorage.removeItem("pilotMonitorKey");
       operatorSummary.textContent = "Owner key not accepted; controls remain locked.";
       operatorUnlock.textContent = "Unlock status";
+    } else if (error.body?.code === "configuration_missing") {
+      operatorSummary.textContent = "Control service configuration is unavailable; controls cannot be used.";
+      operatorEvidence.textContent = "No command was issued or retried.";
+      operatorUnlock.textContent = "Retry control status";
     } else {
+      operatorSummary.textContent = "Owner key accepted; current control status is unavailable.";
       operatorEvidence.textContent = "Control status unavailable; no command was retried.";
+      operatorUnlock.textContent = "Retry control status";
       operatorTimer = setTimeout(checkOperatorStatus, 15000);
     }
   }

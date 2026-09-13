@@ -1,6 +1,26 @@
 # Current status — Pilot line
 
-## Now — Pilot side of M6.37 operator-control repair awaiting owner review
+## Now — Pilot owner-observed browser and control-status repair awaiting deployment
+
+The Pilot repair fixes event links by using the Firestore-valid partial boundary
+`startAt(cycle)` while retaining document-ID tie ordering for stable paging and the
+three preceding durable records. Actual Firebase Admin SDK validation now guards
+that boundary; focused fixtures cover the owner's cycle-600 entry, earlier/later
+paging and an unsynchronized startup session.
+
+The operator-status 503 was not a Firebase-rules failure. Firebase Admin SDK 13.10.0
+accepts an explicit RTDB URL through `getDatabaseWithUrl(url, app)`; the prior
+`getDatabase(app, url)` call ignored its unsupported second argument and immediately
+raised `database/invalid-argument` because the app had no default database URL. The
+status path now uses the supported API and logs a bounded stage, SDK code and message
+without credentials or command contents. The UI separately reports rejected owner
+authentication, missing service configuration and an authenticated-but-unavailable
+status read.
+
+Session/cycle, release and receipt-time columns are selectable in the existing
+column area and hidden by default. Their selections survive paging, data-column
+changes and browsing-mode changes; Observation time remains visible and CSV export
+is unchanged.
 
 The approved Pilot–Tab5 operator unit is implemented on `pilot-working` and
 `tab5-working` but is not deployed or installed. M6.37 repairs the reviewed
@@ -30,6 +50,14 @@ values, and stored event-open/event-close records. The displayed open and close
 screenshots represent different occurrences, not a verified matching pair.
 
 ## Verification
+
+- Focused record-browser, UI and operator-control regressions passed 24/24. They
+  include actual Admin SDK rejection of the old empty document-ID boundary and the
+  installed-SDK reproduction/repair of the RTDB initialization failure.
+- The single completion host run passed 158/158 tests. A bounded browser check was
+  attempted without authenticating or issuing commands, but this session's cloud
+  browser could not access localhost and permission to open the deployed owner URL
+  was declined; browser-source verification therefore remains an owner retest.
 
 - M6.37 repair host runs passed 152/152 Pilot tests and 181/181 Tab5 tests.
   Focused cases cover command-v2 shape, immediate duplicate, A → B → A and older

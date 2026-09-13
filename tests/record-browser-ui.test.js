@@ -7,10 +7,16 @@ const assert = require("node:assert/strict");
 const vm = require("node:vm");
 
 class Element {
-  constructor(id) { this.id = id; this.listeners = new Map(); this.disabled = false; this.textContent = ""; this.innerHTML = ""; this.value = ""; this.checked = true; this.style = { setProperty() {} }; }
+  constructor(id) { this.id = id; this.listeners = new Map(); this.disabled = false; this.textContent = ""; this.innerHTML = ""; this.value = ""; this.checked = true; this.dataset = {}; this.style = { values: {}, setProperty(name, value) { this.values[name] = value; } }; }
   addEventListener(name, listener) { this.listeners.set(name, listener); }
   async fire(name) { this.listeners.get(name)?.({ target: this }); await settle(); }
-  querySelectorAll(selector) { return selector === "input" ? this.inputs || [] : []; }
+  querySelectorAll(selector) {
+    const inputs = this.inputs || [];
+    if (selector === "input") return inputs;
+    if (selector === 'input[data-kind="metadata"]:checked') return inputs.filter(item => item.dataset.kind === "metadata" && item.checked);
+    if (selector === 'input[data-kind="data"]:checked') return inputs.filter(item => item.dataset.kind === "data" && item.checked);
+    return [];
+  }
 }
 async function settle() { for (let index = 0; index < 6; index += 1) await new Promise(resolve => setImmediate(resolve)); }
 function response(recordId, extra = {}) {
@@ -19,7 +25,12 @@ function response(recordId, extra = {}) {
 function page(search) {
   const ids = ["records-status", "records-table", "column-picker", "record-day", "record-at", "newer-records", "older-records", "latest-records", "receipt-records", "export-day", "timezone-label", "history-older", "history-newer", "history-panel", "history-list"];
   const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
-  const input = new Element("PumpWatts"); const clock = new Element("ClockValid"); elements["column-picker"].inputs = [input, clock];
+  const input = new Element("PumpWatts"); input.value = "PumpWatts"; input.dataset.kind = "data";
+  const clock = new Element("ClockValid"); clock.value = "ClockValid"; clock.dataset.kind = "data";
+  const session = new Element("session-cycle"); session.value = "session-cycle"; session.dataset.kind = "metadata"; session.checked = false;
+  const release = new Element("release"); release.value = "release"; release.dataset.kind = "metadata"; release.checked = false;
+  const receipt = new Element("receipt-time"); receipt.value = "receipt-time"; receipt.dataset.kind = "metadata"; receipt.checked = false;
+  elements["column-picker"].inputs = [session, release, receipt, input, clock];
   const requests = [];
   const document = {
     querySelector(selector) { return elements[selector.slice(1)] || null; },
@@ -41,7 +52,7 @@ function page(search) {
   };
   const context = { URL, URLSearchParams, Intl, Date, Promise, setImmediate, document, location: { search }, fetch, console, Blob: class {}, URLSearchParams };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "web", "records.js"), "utf8"), context, { filename: "web/records.js" });
-  return { elements, input, requests, ready: settle };
+  return { elements, input, session, release, receipt, requests, ready: settle };
 }
 
 test("browser JavaScript preserves a populated session page at both boundaries", async () => {
@@ -78,4 +89,25 @@ test("browser JavaScript reports an empty session without manufacturing navigati
   assert.equal(view.elements["records-status"].textContent, "No records at this position.");
   assert.equal(view.elements["older-records"].disabled, true);
   assert.equal(view.elements["newer-records"].disabled, true);
+});
+
+test("optional metadata columns default hidden and remain selected across navigation modes", async () => {
+  const view = page("?session=session001&cycle=4&event=E1"); await view.ready();
+  const table = view.elements["records-table"];
+  assert.match(table.innerHTML, /Observation time/);
+  assert.doesNotMatch(table.innerHTML, /Session \/ cycle|Receipt time|<strong>Release<\/strong>/);
+  view.session.checked = true; view.release.checked = true; view.receipt.checked = true;
+  await view.session.fire("change");
+  assert.match(table.innerHTML, /Session \/ cycle/);
+  assert.match(table.innerHTML, /Receipt time/);
+  assert.match(table.innerHTML, /<strong>Release<\/strong>/);
+  await view.elements["newer-records"].fire("click");
+  assert.match(table.innerHTML, /Session \/ cycle/);
+  view.input.checked = false; await view.input.fire("change");
+  assert.match(table.innerHTML, /Receipt time/);
+  await view.elements["latest-records"].fire("click");
+  assert.match(table.innerHTML, /<strong>Release<\/strong>/);
+  await view.elements["receipt-records"].fire("click");
+  assert.match(table.innerHTML, /Session \/ cycle/);
+  assert.match(table.style.values["--record-grid-template"], /170px 180px 190px/);
 });

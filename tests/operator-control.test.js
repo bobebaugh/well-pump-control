@@ -2,6 +2,8 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { initializeApp, deleteApp } = require("firebase-admin/app");
+const { getDatabase } = require("firebase-admin/database");
 const {
   COMMAND_LIFETIME_MS,
   buildOperatorCommand,
@@ -10,6 +12,7 @@ const {
 } = require("../cloud/netlify/lib/operator-control-contract");
 const { _createHandler } = require("../cloud/netlify/functions/operator-control");
 const { createOperatorControlStore } = require("../cloud/netlify/lib/operator-control-store");
+const { _databaseForUrl } = require("../cloud/netlify/lib/firebase");
 
 const now = 1_800_000_000_000;
 const presence = { sessionId: "boot_AAAAAAAA", lastSeenAtMs: now - 1000 };
@@ -161,6 +164,42 @@ test("operator function authenticates and never turns stale presence into a queu
   });
   assert.equal(result.statusCode, 409);
   assert.equal(JSON.parse(result.body).status, "not-delivered");
+});
+
+test("operator status initializes the installed Admin SDK with the approved explicit RTDB URL", async () => {
+  const app = initializeApp({ projectId: "well-pump-control" }, `operator-control-${process.pid}`);
+  const url = "https://well-pump-control-default-rtdb.firebaseio.com";
+  try {
+    assert.throws(() => getDatabase(app, url), /Can't determine Firebase Database URL/);
+    assert.equal(_databaseForUrl(app, url).ref().toString(), `${url}/`);
+  } finally {
+    await deleteApp(app);
+  }
+});
+
+test("operator status failure logs the safe failing stage, SDK code, and message", async () => {
+  const sdkError = Object.assign(new Error("Can't determine Firebase Database URL."), { code: "database/invalid-argument" });
+  const handler = _createHandler({
+    getPilotDatabase: () => { throw sdkError; },
+    env: { PILOT_INGEST_TOKEN: "owner-key" }
+  });
+  const logged = [];
+  const original = console.error;
+  console.error = (...args) => logged.push(args);
+  try {
+    const result = await handler({ httpMethod: "GET", headers: { "X-Pilot-Key": "owner-key" } });
+    assert.equal(result.statusCode, 503);
+    assert.equal(JSON.parse(result.body).code, "control_unavailable");
+  } finally {
+    console.error = original;
+  }
+  assert.equal(logged[0][0], "Operator control failed");
+  assert.deepEqual(logged[0][1], {
+    category: "upstream",
+    stage: "database-initialization",
+    code: "database/invalid-argument",
+    message: "Can't determine Firebase Database URL."
+  });
 });
 
 test("operator function accepts one issued record and returns its evidence", async () => {
