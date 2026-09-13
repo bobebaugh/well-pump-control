@@ -14,6 +14,8 @@ const schemas = [
   "interfaces/current-event-board-v1.schema.json",
   "interfaces/durable-observation-v2.schema.json",
   "interfaces/event-record-v2.schema.json",
+  "interfaces/operator-command-v1.schema.json",
+  "interfaces/operator-command-result-v1.schema.json",
   "contracts/current-observation-v1.schema.json",
   "contracts/durable-observation-v1.schema.json",
   "contracts/event-record-v1.schema.json",
@@ -145,6 +147,27 @@ test("all M2 examples validate against their versioned schemas", () => {
     const example = readJson(examplePath);
     assert.deepEqual(validate(schema, example), [], examplePath);
   }
+});
+
+test("operator command and outcomes satisfy the mirrored closed schemas", () => {
+  const command = {
+    schemaVersion: 1, kind: "operator-command", commandId: "op_1234567890abcdef",
+    commandSequence: 1, clientRequestId: "browser_12345678", siteId: "well-main",
+    targetDeviceId: "tab5-well-main", targetSessionId: "boot_AAAAAAAA",
+    commandType: "restart-shelly1", requestedAtMs: 1800000000000,
+    expiresAtMs: 1800000045000, requestedBy: { type: "user", id: "authenticated-owner" }, payload: {}
+  };
+  const result = {
+    schemaVersion: 1, kind: "operator-command-result", commandId: command.commandId,
+    commandSequence: 1, siteId: "well-main", deviceId: "tab5-well-main",
+    targetSessionId: "boot_AAAAAAAA", reportingSessionId: "boot_AAAAAAAA",
+    commandType: "restart-shelly1", outcome: "accepted",
+    detailCode: "shelly-restart-acknowledged", reportedAtMs: 1800000001000,
+    relayRestoration: "not-applicable"
+  };
+  assert.deepEqual(validate(readJson("interfaces/operator-command-v1.schema.json"), command), []);
+  assert.deepEqual(validate(readJson("interfaces/operator-command-result-v1.schema.json"), result), []);
+  assert.notDeepEqual(validate(readJson("interfaces/operator-command-v1.schema.json"), { ...command, commandType: "clear-events" }), []);
 });
 
 test("M6.35 producer boards, observations, and derived history satisfy their schemas", () => {

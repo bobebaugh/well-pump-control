@@ -13,8 +13,6 @@ const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const SESSION_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 const EXCHANGE_PATTERN = /^[0-9]{14}-sync-[A-Za-z0-9_-]{8,64}-[0-9]{10}$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
-const COMMAND_PATTERN = /^[0-9]{14}-command-[A-Za-z0-9_-]{8,64}-[0-9]{10}$/;
-const COMMAND_TYPES = new Set(["close-event", "set-event-override", "set-global-enable", "reset-shelly-lockout"]);
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -55,36 +53,6 @@ function validateDeviceSyncRequest(value) {
   return value;
 }
 
-function pendingCommands(raw, request) {
-  const commands = isPlainObject(raw) ? Object.values(raw) : [];
-  const allowed = new Set([
-    "schemaVersion", "commandId", "commandSequence", "siteId",
-    "targetDeviceId", "commandType", "requestedAt", "requestedBy",
-    "status", "payload", "completedAt", "resultRecordId",
-    "rejectionReason"
-  ]);
-  return commands.filter(command => (
-    isPlainObject(command) &&
-    Object.keys(command).every(key => allowed.has(key)) &&
-    command.schemaVersion === 1 &&
-    typeof command.commandId === "string" && COMMAND_PATTERN.test(command.commandId) &&
-    command.siteId === request.siteId &&
-    command.targetDeviceId === request.deviceId &&
-    COMMAND_TYPES.has(command.commandType) &&
-    typeof command.requestedAt === "string" && Number.isFinite(Date.parse(command.requestedAt)) &&
-    isPlainObject(command.requestedBy) &&
-    Object.keys(command.requestedBy).length === 2 &&
-    Object.keys(command.requestedBy).every(key => key === "type" || key === "id") &&
-    ["user", "device", "system"].includes(command.requestedBy.type) &&
-    typeof command.requestedBy.id === "string" && command.requestedBy.id.length >= 1 && command.requestedBy.id.length <= 128 &&
-    command.status === "pending" &&
-    isPlainObject(command.payload) &&
-    Number.isInteger(command.commandSequence) &&
-    command.commandSequence >= 1 &&
-    command.commandSequence > request.lastAppliedCommandSequence
-  )).sort((left, right) => left.commandSequence - right.commandSequence);
-}
-
 function rulesReference(raw, fallback) {
   if (isPlainObject(raw) && Number.isInteger(raw.rulesVersion) && raw.rulesVersion >= 1 &&
       typeof raw.contentHash === "string" && HASH_PATTERN.test(raw.contentHash)) {
@@ -102,7 +70,6 @@ function globalEnableValue(raw, fallback) {
 module.exports = {
   DeviceSyncError,
   globalEnableValue,
-  pendingCommands,
   rulesReference,
   validateDeviceSyncRequest
 };

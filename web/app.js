@@ -15,11 +15,19 @@ const monitorStatus = document.querySelector("#monitor-status");
 const eventStatus = document.querySelector("#event-browser-status");
 const openEvents = document.querySelector("#open-events");
 const closedEvents = document.querySelector("#closed-events");
+const operatorUnlock = document.querySelector("#operator-unlock");
+const operatorSummary = document.querySelector("#operator-summary");
+const operatorEvidence = document.querySelector("#operator-evidence");
+const restartConsequence = document.querySelector("#restart-consequence");
+const operatorButtons = [...document.querySelectorAll(".control-button")];
 
 const NORMAL_REFRESH_MS = 60000;
 const LIVE_REFRESH_MS = 1000;
 let telemetryTimer;
 let monitoringUntil = 0;
+let operatorBusy = false;
+let operatorTimer;
+let lastOperatorStatus = null;
 
 function formatTime(date) {
   return new Intl.DateTimeFormat(undefined, {
@@ -56,6 +64,122 @@ async function fetchStatus(path, options = {}) {
   return body;
 }
 
+function pilotKey(promptText = "Enter the pilot owner key") {
+  let key = sessionStorage.getItem("pilotMonitorKey");
+  if (!key) key = window.prompt(promptText);
+  if (key) sessionStorage.setItem("pilotMonitorKey", key);
+  return key;
+}
+
+function commandIdentity() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID().replaceAll("-", "_");
+  return `web_${Date.now()}_${Math.random().toString(36).slice(2, 14)}`;
+}
+
+function shellyLockText(value) {
+  if (value === -1) return "full lockout";
+  if (value === 0) return "normal (islocked = 0)";
+  if (Number.isInteger(value) && value > 0) return `temporary lockout (${value}s remaining)`;
+  return "unknown; never treated as zero";
+}
+
+function renderOperatorStatus(control) {
+  lastOperatorStatus = control;
+  const labels = {
+    idle: "No current request",
+    "not-delivered": "Not delivered",
+    accepted: "Accepted; completion not yet confirmed",
+    "confirmed-completed": "Confirmed completed",
+    failed: "Failed",
+    unknown: "Unknown; execution may have occurred"
+  };
+  const monitor = control.userMonitor === true
+    ? "User Monitor ACTIVE until Tab5 restart"
+    : control.userMonitor === false ? "User Monitor normal" : "User Monitor status unknown";
+  const relay = control.relayRestoration === "unconfirmed"
+    ? "Relay restoration UNCONFIRMED"
+    : `Relay restoration ${control.relayRestoration || "not applicable"}`;
+  operatorSummary.textContent = `${monitor} · ${relay}`;
+  operatorSummary.classList.toggle("alert", control.userMonitor || control.relayRestoration === "unconfirmed");
+  const command = control.command;
+  const identity = command ? ` · #${command.commandSequence} ${command.commandType}` : "";
+  operatorEvidence.textContent = `${labels[control.outcome] || control.outcome}: ${control.detailCode}${identity}. Shelly: ${shellyLockText(control.shellyLock)}; locntr ${Number.isInteger(control.shellyLockoutCount) ? control.shellyLockoutCount : "unknown"}.`;
+  const staged = control.stagedRestartAdoption;
+  restartConsequence.textContent = staged
+    ? `Restart will adopt staged ${staged.releaseId || `package v${staged.packageVersion}`} (${staged.contentHashPrefix || "hash unavailable"}) if it remains valid.`
+    : "Tab5 restart creates a fresh event board and session. No different staged package is currently evidenced.";
+}
+
+function setOperatorBusy(value) {
+  operatorBusy = value;
+  operatorButtons.forEach(button => { button.disabled = value; });
+  operatorUnlock.disabled = value;
+}
+
+async function checkOperatorStatus({ promptForKey = false } = {}) {
+  clearTimeout(operatorTimer);
+  const key = sessionStorage.getItem("pilotMonitorKey") || (promptForKey ? pilotKey() : null);
+  if (!key) return;
+  try {
+    const body = await fetchStatus("/.netlify/functions/operator-control", {
+      headers: { "X-Pilot-Key": key }
+    });
+    operatorUnlock.textContent = "Refresh control status";
+    renderOperatorStatus(body.control);
+    operatorTimer = setTimeout(checkOperatorStatus, 5000);
+  } catch (error) {
+    if (error.body?.code === "unauthorized") {
+      sessionStorage.removeItem("pilotMonitorKey");
+      operatorSummary.textContent = "Owner key not accepted; controls remain locked.";
+      operatorUnlock.textContent = "Unlock status";
+    } else {
+      operatorEvidence.textContent = "Control status unavailable; no command was retried.";
+      operatorTimer = setTimeout(checkOperatorStatus, 15000);
+    }
+  }
+}
+
+function confirmationText(action) {
+  if (action === "enter-user-monitor") return "Enter User Monitor until Tab5 restarts? This deliberately releases and suppresses Tab5 inhibits, but does not override Shelly-local or mechanical protection.";
+  if (action === "restart-tab5") {
+    const staged = lastOperatorStatus?.stagedRestartAdoption;
+    return `Restart the actual Tab5 now? This creates a fresh event board/session${staged ? ` and may adopt staged ${staged.releaseId}` : ""}. Do not retry if the result becomes unknown.`;
+  }
+  return "Restart Shelly 1 now? This does not create pump demand and is not proof that its lockout cleared. Do not retry if the result becomes unknown.";
+}
+
+async function issueOperatorAction(action) {
+  if (operatorBusy || !window.confirm(confirmationText(action))) return;
+  const key = pilotKey();
+  if (!key) return;
+  setOperatorBusy(true);
+  operatorEvidence.textContent = "Submitting one short-lived request…";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const body = await fetchStatus("/.netlify/functions/operator-control", {
+      method: "POST",
+      headers: { "X-Pilot-Key": key, "Content-Type": "application/json" },
+      body: JSON.stringify({ action, clientRequestId: commandIdentity() }),
+      signal: controller.signal
+    });
+    renderOperatorStatus(body.control);
+  } catch (error) {
+    if (error.body?.code === "unauthorized") {
+      sessionStorage.removeItem("pilotMonitorKey");
+      operatorEvidence.textContent = "Not delivered: the owner key was not accepted.";
+    } else if (error.body?.status === "not-delivered" || error.body?.status === "error" && error.body?.code === "invalid_request") {
+      operatorEvidence.textContent = `Not delivered: ${error.body.code}.`;
+    } else {
+      operatorEvidence.textContent = "Unknown: the request may have executed, but its acknowledgment was not received. It will not be retried automatically.";
+    }
+  } finally {
+    clearTimeout(timeout);
+    setOperatorBusy(false);
+    checkOperatorStatus();
+  }
+}
+
 function renderTelemetry(data) {
   const values = data.values || {};
   const shelly1 = data.shelly1 || {};
@@ -79,10 +203,10 @@ function renderTelemetry(data) {
     const state = !fresh ? "checking" : (mismatch ? "offline" : "online");
     const detail = mismatch
       ? `SW0 ${shelly1.sw0 ? "ON" : "OFF"} does not match pump state · RLY0 ${shelly1.rly0 ? "ON" : "OFF"}`
-      : `SW0 ${shelly1.sw0 ? "ON" : "OFF"} · RLY0 ${shelly1.rly0 ? "ON" : "OFF"} · relay not wired`;
+      : `SW0 ${shelly1.sw0 ? "ON" : "OFF"} · RLY0 ${shelly1.rly0 ? "ON" : "OFF"}`;
     setHealth(shelly1Row, state, detail);
   } else if (shelly1.available === false) {
-    setHealth(shelly1Row, "offline", "Not reachable from Tab5 · RLY0 not wired");
+    setHealth(shelly1Row, "offline", "Not reachable from Tab5 · relay state unknown");
   } else {
     setHealth(shelly1Row, "unavailable", "Firmware has not reported Shelly 1 yet");
   }
@@ -212,9 +336,12 @@ async function checkServices() {
 monitorButton.addEventListener("click", () => {
   setMonitoring(monitoringUntil > Date.now() ? "stop" : "start");
 });
+operatorUnlock.addEventListener("click", () => checkOperatorStatus({ promptForKey: true }));
+operatorButtons.forEach(button => button.addEventListener("click", () => issueOperatorAction(button.id)));
 
 checkServices();
 checkTelemetry();
 checkEvents();
+checkOperatorStatus();
 setInterval(checkServices, 300000);
 setInterval(checkEvents, 60000);

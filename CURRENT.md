@@ -1,21 +1,19 @@
 # Current status — Pilot line
 
-## Now — online browser coding unit awaiting owner review
+## Now — Pilot side of M6.36 operator controls awaiting owner review
 
-The owner authorized operating-branch promotion and a design handoff on 2026-09-13.
-M6.35 production, ingestion and event-board synchronization have initial real-device
-and Firestore evidence. This is not completion of all outage or memory tests.
+The approved Pilot–Tab5 operator unit is implemented on `pilot-working` and
+`tab5-working` but is not deployed or installed. Pilot adds authenticated online
+controls for User Monitor, actual Tab5 restart, and Shelly 1 restart. The transport
+uses one replaceable RTDB slot with a unique browser/command identity, exact target
+session, monotonic sequence, and 45-second expiry. The endpoint refuses issuance
+without fresh presence; Tab5 independently enforces session, expiry, clock, and
+duplicate checks at execution. Outcomes distinguish not delivered, accepted,
+confirmed completed, failed, and unknown. Ambiguous restarts are never retried.
 
-The approved online event and durable-record browser coding unit is repaired on
-`pilot-working` and awaits owner review. The repair validates cursors and anchors,
-uses recent detected closures (including restart closures), joins the true opening,
-handles sparse session observations without arithmetic cycle guessing, and keeps
-device time distinct from first reporting and cloud closure detection. It adds
-bounded read-only browser endpoints, all-open event presentation, rules-derived
-viewing columns, observation-time browsing, session/cycle navigation, and a
-whole-local-day raw CSV export. It does not deploy indexes, change rules, publish
-packages, or operate hardware. Read [the browser design handoff](docs/online-browser-design-handoff.md)
-for its evidence and deployment prerequisite.
+The earlier approved event/durable browser remains in this branch and its prior
+evidence still applies. This unit does not alter its history semantics or the
+event-disable/publication workflow.
 
 The latest owner startup runs M6.35 on both CPU A and CPU B with package V17:
 20260913010057-event-v3-v17, hash prefix 207cca64ea14.
@@ -26,6 +24,14 @@ values, and stored event-open/event-close records. The displayed open and close
 screenshots represent different occurrences, not a verified matching pair.
 
 ## Verification
+
+- Current operator-control host run: 151/151 Pilot tests passed. Tests cover the
+  mirrored closed records, 45-second lifetime, authentication, stale presence,
+  outcome derivation, fresh-session restart confirmation, stale-evidence rejection,
+  the three-button browser boundary, and removal of obsolete device-command delivery.
+- The RTDB emulator did not start on this host because firebase-tools requires Java
+  21 and only Java 17 is installed. The rules source was syntax-parsed and remains
+  un-published; its emulator suite is an operational prerequisite before deployment.
 
 - Browser repair: `node --test tests/record-browser.test.js` passes 6/6 using
   Firestore-like timestamp/query fixtures. It covers mixed V1/V2 tie ordering,
@@ -62,17 +68,19 @@ screenshots represent different occurrences, not a verified matching pair.
 
 ## Next
 
-Owner review of the browser repair and one concise real-data browser test cycle. If
-the owner accepts it, decide separately whether to promote source and deploy the
-required Firestore indexes. Do not treat source promotion as index deployment.
+Owner review of the coordinated M6.36 source and the test sequence in the handoff.
+Deployment, RTDB-rules publication, Tab5 file installation/restart, and any branch
+promotion are separate synchronized owner actions. Online controls must not be used
+until the matching Pilot function/rules and Tab5 M6.36 are all in place.
 
 ## Later / unresolved
 
 - Battery charging: retain current 75/80 policy until new limits are chosen.
   Owner finds percentage misleading and expects higher thresholds; input power
   versus charging current remains unexplained. Supported UIFlow interfaces only.
-- Normal/Monitor operator integration, required-source health qualification and
-  Clear Events remain separate from the browser unit.
+- System Monitor automatic actuation remains deferred under issue #6. Missing
+  telemetry does not release inhibits or advance clearing qualification. There is
+  no Clear Events or Monitor OFF control in M6.36.
 - Shelly script-health monitoring (issue #5) remains separate; resolve by script
   name, not assumed ID. Shelly-local lockouts/protections remain authoritative.
 - S020 startup sensitivity, brief Cloud-yellow with a pending record, and potential

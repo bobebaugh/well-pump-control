@@ -3,6 +3,7 @@
 const { createPrivateKey } = require("node:crypto");
 const { cert, getApps, initializeApp } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
+const { getDatabase } = require("firebase-admin/database");
 const { getFirestore } = require("firebase-admin/firestore");
 
 class ConfigurationError extends Error {
@@ -79,8 +80,30 @@ function getPilotAuth() {
   return { auth: getAuth(app), projectId };
 }
 
+function getPilotDatabase() {
+  const { app, projectId } = getPilotApp();
+  const rawUrl = process.env.FIREBASE_RTDB_URL;
+  if (!rawUrl) throw new ConfigurationError("FIREBASE_RTDB_URL is not configured");
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new ConfigurationError("FIREBASE_RTDB_URL is not a valid URL");
+  }
+  const approvedHosts = new Set([
+    `${projectId}-default-rtdb.firebaseio.com`,
+    `${projectId}-default-rtdb.firebasedatabase.app`
+  ]);
+  if (parsed.protocol !== "https:" || !approvedHosts.has(parsed.hostname) ||
+      (parsed.pathname !== "/" && parsed.pathname !== "") || parsed.search || parsed.hash) {
+    throw new ConfigurationError("FIREBASE_RTDB_URL is not the approved project database host");
+  }
+  return { database: getDatabase(app, parsed.origin), projectId };
+}
+
 module.exports = {
   ConfigurationError,
   getPilotAuth,
+  getPilotDatabase,
   getPilotFirestore
 };

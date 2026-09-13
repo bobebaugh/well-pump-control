@@ -6,6 +6,6 @@ CPU A reads the local `/rpc/Shelly.GetStatus` resource once per sample cycle and
 
 The existing pilot ingest already stores the complete observation in the current Firestore document. The `current-power` read function now exposes a small `shelly1` view containing `available`, `sw0`, and `rly0`; older firmware returns nulls and remains compatible.
 
-The monitoring page shows SW0 and RLY0 in the status strip and reports Shelly 1 health. With fresh telemetry, it flags SW0 when it disagrees with the EM-derived pump-running state. The page is status-only: it does not issue relay commands. RLY0 is explicitly labeled not wired.
+The monitoring page shows SW0 and RLY0 in the status strip and reports Shelly 1 health. With fresh telemetry, it flags SW0 when it disagrees with the EM-derived pump-running state. M6.36 adds a separate authenticated Shelly 1 restart control; it does not issue ordinary relay demand and an RPC acknowledgment does not prove lockout clearance. RLY0 remains observation evidence.
 
 This branch does not deploy the cloud candidate and does not change the running Tab5. A physical test requires uploading the reviewed Tab5 files, deploying the matching cloud candidate, and observing stopped/running transitions.

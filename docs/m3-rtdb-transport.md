@@ -7,7 +7,7 @@ least-privilege RTDB rules needed by CPU B. The interpreted device candidate is
 kept separately on `agent/m3-tab5-rtdb-transport`; no runtime file is copied
 into this cloud history.
 
-M3 transports disposable current observations, addressed pending commands,
+M3 historically transported disposable current observations and proposed addressed pending commands,
 device presence/sync state, Global Enable coordination, and rules-release
 metadata. It does not store durable observations/events, evaluate or adopt
 rules, apply commands, operate hardware, add web surfaces, or implement M4 and
@@ -46,6 +46,9 @@ The required Netlify configuration is:
 denies all access by default, grants `tab5-well-main` writes only to its current
 observation, presence, and sync state, and grants reads only to its addressed
 commands, Global Enable coordination, and the current rules pointer.
+
+The proposed command-list portion is obsolete as of M6.36 and is no longer read
+or delivered. Current owner controls use the mirrored short-lived operator slot.
 Parsed rule-structure tests and the official Firebase Realtime Database
 Emulator behavioral matrix cover this candidate. From a fresh checkout, run
 `npm ci` followed by `npm run test:rtdb-rules`; the dedicated command starts an

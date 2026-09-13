@@ -69,6 +69,18 @@ function syncState(changes = {}) {
   };
 }
 
+function operatorResult(changes = {}) {
+  return {
+    schemaVersion: 1, kind: "operator-command-result",
+    commandId: "op_1234567890abcdef", commandSequence: 12,
+    siteId: "well-main", deviceId: "tab5-well-main",
+    targetSessionId: "boot_12345678", reportingSessionId: "boot_12345678",
+    commandType: "restart-shelly1", outcome: "accepted",
+    detailCode: "shelly-restart-acknowledged", reportedAtMs: serverTimestamp(),
+    relayRestoration: "not-applicable", ...changes
+  };
+}
+
 function currentEventBoard(changes = {}) {
   return {
     schemaVersion: 1, kind: "current-event-board", siteId: "well-main",
@@ -114,7 +126,13 @@ before(async () => {
   }).database();
   await environment.withSecurityRulesDisabled(async context => {
     const admin = context.database();
-    await set(ref(admin, `${DEVICE}/commands/cmd-12`), { commandSequence: 12, status: "pending" });
+    await set(ref(admin, `${DEVICE}/operatorControl/command`), {
+      schemaVersion: 1, kind: "operator-command", commandId: "op_1234567890abcdef",
+      commandSequence: 12, clientRequestId: "browser_12345678", siteId: "well-main",
+      targetDeviceId: "tab5-well-main", targetSessionId: "boot_12345678",
+      commandType: "restart-shelly1", requestedAtMs: 1800000000000,
+      expiresAtMs: 1800000045000, requestedBy: { type: "user", id: "authenticated-owner" }, payload: {}
+    });
     await set(ref(admin, `${SITE}/control/globalEnable`), false);
     await set(ref(admin, `${SITE}/rules/current`), { packageVersion: 1, contentHash: "0".repeat(64) });
   });
@@ -128,6 +146,7 @@ test("fixed device can write only valid transport state and server timestamps re
   await assertSucceeds(set(ref(deviceDatabase, `${DEVICE}/currentObservation`), currentObservation()));
   await assertSucceeds(set(ref(deviceDatabase, `${DEVICE}/presence`), presence()));
   await assertSucceeds(set(ref(deviceDatabase, `${DEVICE}/syncState`), syncState()));
+  await assertSucceeds(set(ref(deviceDatabase, `${DEVICE}/operatorControl/result`), operatorResult()));
   await environment.withSecurityRulesDisabled(async context => {
     const stored = await get(ref(context.database(), `${DEVICE}/currentObservation/receivedAtMs`));
     if (!Number.isInteger(stored.val())) throw new Error("server timestamp did not resolve to integer milliseconds");
@@ -135,21 +154,21 @@ test("fixed device can write only valid transport state and server timestamps re
 });
 
 test("fixed device can read only addressed coordination paths", async () => {
-  await assertSucceeds(get(ref(deviceDatabase, `${DEVICE}/commands`)));
+  await assertSucceeds(get(ref(deviceDatabase, `${DEVICE}/operatorControl/command`)));
   await assertSucceeds(get(ref(deviceDatabase, `${SITE}/control/globalEnable`)));
   await assertSucceeds(get(ref(deviceDatabase, `${SITE}/rules/current`)));
-  for (const path of [`${DEVICE}/currentObservation`, `${DEVICE}/presence`, `${DEVICE}/syncState`]) {
+  for (const path of [`${DEVICE}/currentObservation`, `${DEVICE}/presence`, `${DEVICE}/syncState`, `${DEVICE}/operatorControl/result`, `${DEVICE}/operatorControl`]) {
     await assertFails(get(ref(deviceDatabase, path)));
   }
 });
 
 test("unauthenticated, broad, cross-device, cross-site, and unrelated access is denied", async () => {
-  await assertFails(get(ref(anonymousDatabase, `${DEVICE}/commands`)));
+  await assertFails(get(ref(anonymousDatabase, `${DEVICE}/operatorControl/command`)));
   await assertFails(set(ref(anonymousDatabase, `${DEVICE}/presence`), presence()));
   for (const path of [SITE, "v1/sites", "v1", `${SITE}/unrelated`, "unrelated"]) {
     await assertFails(get(ref(deviceDatabase, path)));
   }
-  await assertFails(get(ref(deviceDatabase, `${SITE}/devices/other-device/commands`)));
+  await assertFails(get(ref(deviceDatabase, `${SITE}/devices/other-device/operatorControl/command`)));
   await assertFails(set(ref(deviceDatabase, `${SITE}/devices/other-device/presence`), presence({ deviceId: "other-device" })));
   await assertFails(get(ref(deviceDatabase, "v1/sites/other-site/control/globalEnable")));
   await assertFails(set(ref(deviceDatabase, "v1/sites/other-site/devices/tab5-well-main/presence"), presence({ siteId: "other-site" })));
@@ -157,12 +176,26 @@ test("unauthenticated, broad, cross-device, cross-site, and unrelated access is 
 
 test("device cannot write commands, control, rules, parents, or unrelated paths", async () => {
   for (const [path, value] of [
-    [`${DEVICE}/commands/new`, { commandSequence: 13 }],
+    [`${DEVICE}/operatorControl/command`, { commandSequence: 13 }],
+    [`${DEVICE}/operatorControl/sequence`, 13],
     [`${SITE}/control/globalEnable`, true],
     [`${SITE}/rules/current`, { packageVersion: 2 }],
     [DEVICE, { presence: presence() }],
     [`${SITE}/unrelated`, true]
   ]) await assertFails(set(ref(deviceDatabase, path), value));
+});
+
+test("operator result accepts only the fixed closed device record", async () => {
+  const path = `${DEVICE}/operatorControl/result`;
+  await assertSucceeds(set(ref(deviceDatabase, path), operatorResult()));
+  for (const invalid of [
+    operatorResult({ commandType: "clear-events" }),
+    operatorResult({ outcome: "completed" }),
+    operatorResult({ relayRestoration: "assumed" }),
+    operatorResult({ deviceId: "other-device" }),
+    operatorResult({ unexpected: true })
+  ]) await assertFails(set(ref(deviceDatabase, path), invalid));
+  await assertFails(set(ref(anonymousDatabase, path), operatorResult()));
 });
 
 test("fixed publisher can replace only a complete rules pointer", async () => {

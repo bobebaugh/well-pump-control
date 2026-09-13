@@ -2,7 +2,11 @@
 
 ## Scope and authority
 
-This document defines contracts only. It does not add Netlify functions, Firebase writes, web listeners, device transport, deployment configuration, or Tab5 runtime behavior. CPU A remains the sole operational decision authority. CPU B transports complete observations, events, commands, and synchronization data without reevaluating rules or manipulating hardware.
+This document preserves the historical M2 contract proposal. Its
+`device-command-v1`, command-list, Global Enable, and `control-request` concepts
+are not current control authority. M6.36 uses the mirrored short-lived
+`operator-command-v1`/result records and a single exact-session RTDB slot for the
+three approved controls. CPU A remains the sole operational decision authority.
 
 The existing `ingest-power`, `current-power`, `monitor-session`, `firebase-status`, and `health` functions and the verified legacy power-telemetry contract remain unchanged.
 

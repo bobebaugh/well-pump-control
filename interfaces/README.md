@@ -19,9 +19,11 @@ The same files must be byte-for-byte identical in pilot-working and tab5-working
 | durable-observation-v2.schema.json | Tab5 → Pilot: one rules-driven, fixed-field-set observation with explicit unavailability and coalesced trigger reasons. | Current V3 producer format; v1 ingestion remains supported during rollout. |
 | current-event-board-v1.schema.json | Tab5 → Pilot: complete sparse active-event board. Pilot adds receipt/revision/count fields only in its RTDB projection. | Current best-effort synchronization format. |
 | event-record-v2.schema.json | Pilot reconciliation → Firestore: deterministic open and uncertain inferred-close history derived from accepted boards. | Current V3 event history format; it never claims an exact inferred close time. |
+| operator-command-v1.schema.json | Pilot → Tab5: one short-lived, identity- and session-targeted operator request. | The RTDB location is a replaceable slot, not a durable queue. Tab5 enforces the 45-second expiry, session target, and duplicate boundary before execution. |
+| operator-command-result-v1.schema.json | Tab5 → Pilot: device evidence for the current operator request. | Separates not delivered, accepted, confirmed completed, failed, and unknown outcomes; relay restoration is reported independently. |
 
 ## Change rule
 
 A cross-application record changes only in a bounded interface work unit. Update both mirrored directories, the producing and consuming code, relevant examples/tests, and the version when compatibility is broken. Never silently change the meaning of an existing versioned record.
 
-This directory intentionally does **not** define the old device-command interface: its listed commands include superseded control concepts and it must be reconciled before becoming a current shared record.
+The historical device-command interface remains obsolete. These narrowly scoped operator records replace it for User Monitor and the two restart actions; they do not revive event close, override, or global-enable commands.

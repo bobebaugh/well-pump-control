@@ -14,7 +14,6 @@ const { validateDeviceSyncRequest } = require("../cloud/netlify/lib/device-sync-
 
 const root = path.resolve(__dirname, "..");
 const request = JSON.parse(readFileSync(path.join(root, "contracts/examples/v1/device-sync-request.json"), "utf8"));
-const command = JSON.parse(readFileSync(path.join(root, "contracts/examples/v1/device-command.json"), "utf8"));
 
 function jsonResult(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
@@ -27,13 +26,6 @@ function makeHandler(overrides = {}) {
     calls.push({ url, options });
     if (url.includes("accounts:signInWithCustomToken")) {
       return jsonResult({ idToken: "EXAMPLE_ONLY_ID_TOKEN", refreshToken: "EXAMPLE_ONLY_REFRESH_TOKEN", expiresIn: "3600" });
-    }
-    if (url.includes("/commands.json")) {
-      return jsonResult({
-        stale: { ...command, commandSequence: request.lastAppliedCommandSequence },
-        next: command,
-        otherDevice: { ...command, commandId: command.commandId.replace("0012", "0013"), commandSequence: 13, targetDeviceId: "other-device" }
-      });
     }
     if (url.includes("/control/globalEnable.json")) return jsonResult({ desired: true });
     if (url.includes("/rules/current.json")) return jsonResult({ rulesVersion: 4, contentHash: "f".repeat(64) });
@@ -73,12 +65,12 @@ test("device-sync exchanges a custom token and returns ordered RTDB coordination
   const body = JSON.parse(result.body);
   assert.equal(body.exchangeId, request.exchangeId);
   assert.equal(body.authenticationBootstrap.firebaseCustomToken, "EXAMPLE_ONLY_CUSTOM_TOKEN");
-  assert.equal(body.highWaterCommandSequence, 12);
-  assert.deepEqual(body.pendingCommands.map(item => item.commandSequence), [12]);
+  assert.equal(body.highWaterCommandSequence, request.lastAppliedCommandSequence);
+  assert.deepEqual(body.pendingCommands, []);
   assert.equal(body.globalEnable, true);
   assert.deepEqual(body.currentRules, { version: 4, contentHash: "f".repeat(64) });
   assert.deepEqual(body.canonicalOpenEvents, request.openEventIds);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 3);
   assert.match(calls[0].url, /accounts:signInWithCustomToken\?key=/);
   assert.match(calls[0].options.body, /EXAMPLE_ONLY_PROBE_TOKEN/);
   assert.ok(calls.slice(1).every(call => call.url.includes("auth=EXAMPLE_ONLY_ID_TOKEN")));
@@ -126,8 +118,10 @@ test("RTDB rules are closed by default and scope the fixed device", () => {
   assert.equal(Object.hasOwn(device.currentObservation, ".read"), false);
   assert.equal(Object.hasOwn(device.presence, ".read"), false);
   assert.equal(Object.hasOwn(device.syncState, ".read"), false);
-  assert.match(device.commands[".read"], /auth\.uid == 'tab5-well-main'/);
-  assert.equal(device.commands[".write"], false);
+  assert.match(device.operatorControl.command[".read"], /auth\.uid == 'tab5-well-main'/);
+  assert.equal(device.operatorControl.command[".write"], false);
+  assert.match(device.operatorControl.result[".write"], /auth\.uid == 'tab5-well-main'/);
+  assert.equal(device.operatorControl.result["$other"][".validate"], false);
   assert.equal(site.control.globalEnable[".write"], false);
   assert.match(site.rules.current[".read"], /auth\.uid == 'tab5-well-main'/);
   assert.match(site.rules.current[".read"], /auth\.uid == 'netlify-rules-publisher'/);
@@ -173,45 +167,15 @@ test("duplicate exchange is operationally retry-safe without response replay or 
     second.authenticationBootstrap.firebaseCustomToken);
   assert.notEqual(first.issuedAt, second.issuedAt);
   const rtdbCalls = calls.filter(call => call.url.includes("firebaseio.com"));
-  assert.equal(rtdbCalls.length, 6);
+  assert.equal(rtdbCalls.length, 4);
   assert.ok(rtdbCalls.every(call => (call.options.method || "GET") === "GET"));
 });
 
-test("malformed command envelopes with extra fields are not delivered", async () => {
-  const calls = [];
-  const fetch = async (url, options = {}) => {
-    calls.push({ url, options });
-    if (url.includes("accounts:signInWithCustomToken")) return jsonResult({ idToken: "EXAMPLE_ONLY_ID_TOKEN" });
-    if (url.includes("/commands.json")) return jsonResult({ malformed: { ...command, extraEnvelopeField: true } });
-    if (url.includes("/control/globalEnable.json")) return jsonResult(false);
-    if (url.includes("/rules/current.json")) return jsonResult(null);
-    throw new Error(`unexpected URL ${url}`);
-  };
-  const { handler } = makeHandler({ fetch });
+test("device-sync never reads or delivers the obsolete device-command list", async () => {
+  const { handler, calls } = makeHandler();
   const body = JSON.parse((await handler(event())).body);
   assert.deepEqual(body.pendingCommands, []);
-});
-
-test("malformed nested command actors and schema fields are not delivered", async () => {
-  const variants = [
-    { ...command, requestedBy: { ...command.requestedBy, role: "admin" } },
-    { ...command, requestedBy: { type: "user", id: "x".repeat(129) } },
-    { ...command, requestedAt: "not-a-date" },
-    { ...command, commandId: "command-12" },
-    { ...command, commandSequence: 0 }
-  ];
-  for (const malformed of variants) {
-    const fetch = async (url) => {
-      if (url.includes("accounts:signInWithCustomToken")) return jsonResult({ idToken: "EXAMPLE_ONLY_ID_TOKEN" });
-      if (url.includes("/commands.json")) return jsonResult({ malformed });
-      if (url.includes("/control/globalEnable.json")) return jsonResult(false);
-      if (url.includes("/rules/current.json")) return jsonResult(null);
-      throw new Error(`unexpected URL ${url}`);
-    };
-    const { handler } = makeHandler({ fetch });
-    const body = JSON.parse((await handler(event())).body);
-    assert.deepEqual(body.pendingCommands, []);
-  }
+  assert.equal(calls.some(call => call.url.includes("/commands.json")), false);
 });
 
 test("configuration accepts only the approved project RTDB host", () => {

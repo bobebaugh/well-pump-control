@@ -42,10 +42,30 @@
               "syncState": {
                 ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.hasChildren(['schemaVersion', 'exchangeId', 'siteId', 'deviceId', 'sessionId', 'lastSeenCommandSequence', 'lastAppliedCommandSequence', 'result', 'lastSyncAtMs']) && newData.child('schemaVersion').val() == 1 && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('exchangeId').isString() && newData.child('sessionId').isString() && newData.child('lastSeenCommandSequence').isNumber() && newData.child('lastSeenCommandSequence').val() >= 0 && newData.child('lastAppliedCommandSequence').isNumber() && newData.child('lastAppliedCommandSequence').val() >= 0 && newData.child('result').isString() && newData.child('lastSyncAtMs').isNumber()"
               },
-            "commands": {
-                ".read": "auth != null && auth.uid == 'tab5-well-main'",
-                ".write": false,
-                ".indexOn": ["commandSequence", "status"]
+              "operatorControl": {
+                "command": {
+                  ".read": "auth != null && auth.uid == 'tab5-well-main'",
+                  ".write": false
+                },
+                "sequence": { ".read": false, ".write": false },
+                "result": {
+                  ".write": "auth != null && auth.uid == 'tab5-well-main'",
+                  ".validate": "newData.hasChildren(['schemaVersion', 'kind', 'commandId', 'commandSequence', 'siteId', 'deviceId', 'targetSessionId', 'reportingSessionId', 'commandType', 'outcome', 'detailCode', 'reportedAtMs', 'relayRestoration']) && newData.child('schemaVersion').val() == 1 && newData.child('kind').val() == 'operator-command-result' && newData.child('commandId').isString() && newData.child('commandId').val().matches(/^op_[A-Za-z0-9_-]{8,128}$/) && newData.child('commandSequence').isNumber() && newData.child('commandSequence').val() >= 1 && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('targetSessionId').isString() && newData.child('targetSessionId').val().matches(/^[A-Za-z0-9_-]{8,64}$/) && newData.child('reportingSessionId').isString() && newData.child('reportingSessionId').val().matches(/^[A-Za-z0-9_-]{8,64}$/) && (newData.child('commandType').val() == 'enter-user-monitor' || newData.child('commandType').val() == 'restart-tab5' || newData.child('commandType').val() == 'restart-shelly1') && (newData.child('outcome').val() == 'not-delivered' || newData.child('outcome').val() == 'accepted' || newData.child('outcome').val() == 'confirmed-completed' || newData.child('outcome').val() == 'failed' || newData.child('outcome').val() == 'unknown') && newData.child('detailCode').isString() && newData.child('detailCode').val().matches(/^[a-z0-9-]{1,64}$/) && newData.child('reportedAtMs').isNumber() && (newData.child('relayRestoration').val() == 'not-applicable' || newData.child('relayRestoration').val() == 'not-needed' || newData.child('relayRestoration').val() == 'unconfirmed' || newData.child('relayRestoration').val() == 'confirmed')",
+                  "schemaVersion": { ".validate": true },
+                  "kind": { ".validate": true },
+                  "commandId": { ".validate": true },
+                  "commandSequence": { ".validate": true },
+                  "siteId": { ".validate": true },
+                  "deviceId": { ".validate": true },
+                  "targetSessionId": { ".validate": true },
+                  "reportingSessionId": { ".validate": true },
+                  "commandType": { ".validate": true },
+                  "outcome": { ".validate": true },
+                  "detailCode": { ".validate": true },
+                  "reportedAtMs": { ".validate": true },
+                  "relayRestoration": { ".validate": true },
+                  "$other": { ".validate": false }
+                }
               },
               "rulesV3State": {
                 ".read": "auth != null && auth.uid == 'tab5-well-main'",

@@ -5,7 +5,6 @@ const { ConfigurationError, getPilotAuth } = require("../lib/firebase");
 const {
   DeviceSyncError,
   globalEnableValue,
-  pendingCommands,
   rulesReference,
   validateDeviceSyncRequest
 } = require("../lib/device-sync-contract");
@@ -156,18 +155,11 @@ function createHandler(dependencies = {}) {
       if (!exchanged || typeof exchanged.idToken !== "string") throw new Error("token_exchange_failed");
 
       const root = `v1/sites/${SITE_ID}`;
-      const deviceRoot = `${root}/devices/${DEVICE_ID}`;
       const authQuery = exchanged.idToken;
-      const [rawCommands, rawGlobalEnable, rawRules] = await Promise.all([
-        fetchJson(fetchImpl, rtdbPath(config, `${deviceRoot}/commands`, authQuery)),
+      const [rawGlobalEnable, rawRules] = await Promise.all([
         fetchJson(fetchImpl, rtdbPath(config, `${root}/control/globalEnable`, authQuery)),
         fetchJson(fetchImpl, rtdbPath(config, `${root}/rules/current`, authQuery))
       ]);
-      const commands = pendingCommands(rawCommands, request);
-      const highWater = commands.reduce(
-        (highest, command) => Math.max(highest, command.commandSequence),
-        request.lastAppliedCommandSequence
-      );
       const issuedAt = now();
 
       return response(200, {
@@ -178,13 +170,16 @@ function createHandler(dependencies = {}) {
         deviceId: DEVICE_ID,
         sessionId: request.sessionId,
         issuedAt: issuedAt.toISOString(),
-        highWaterCommandSequence: highWater,
+        highWaterCommandSequence: request.lastAppliedCommandSequence,
         currentRules: rulesReference(rawRules, request.appliedRules),
         // Durable event canonicalization begins with M4/M8. Until then the
         // transport round-trip preserves the device's declared set unchanged.
         canonicalOpenEvents: request.openEventIds,
         globalEnable: globalEnableValue(rawGlobalEnable, request.globalEnable),
-        pendingCommands: commands,
+        // Compatibility-only empty field. The superseded device-command v1
+        // list is never read or delivered; current operator controls use the
+        // short-lived, session-targeted operatorControl slot.
+        pendingCommands: [],
         authenticationBootstrap: {
           firebaseCustomToken: customToken,
           firebaseApiKey: config.firebaseApiKey,

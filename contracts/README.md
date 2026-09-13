@@ -9,12 +9,16 @@ The M2 v1 contracts define the target cloud/RTDB boundary without implementing o
 - `current-observation-v1.schema.json` — disposable RTDB current state;
 - `durable-observation-v1.schema.json` — sparse Firestore observation;
 - `event-record-v1.schema.json` — Firestore event opening or closing;
-- `device-command-v1.schema.json` — RTDB command coordination;
+- `device-command-v1.schema.json` — historical, obsolete command proposal; its
+  override/clear/global-enable meanings are not current authority and are not delivered;
 - `device-sync-v1.schema.json` — `device-sync` request and response;
 - `rules-release-metadata-v1.schema.json` — RTDB current rules pointer.
 - `rules-runtime-release-metadata-v2.schema.json` — RTDB desired immutable Rules Engine runtime package. This supersedes the legacy v1 rules package pointer for new Tab5 releases.
 
 Every schema has one or more valid examples under `examples/v1/`. Unknown observation fields are deliberately preserved. See `docs/cloud-rtdb-contracts-v1.md` for paths, identifiers, idempotency, and the staged endpoint migration.
+
+Current owner controls use the narrow mirrored `interfaces/operator-command-v1`
+and `operator-command-result-v1` records instead of the obsolete proposal.
 
 For durable observations and event transitions, `receivedAt` is cloud-owned. An
 ingest request may omit it; Firestore stores a server Timestamp, and JSON

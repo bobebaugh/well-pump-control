@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://well-pump-control.local/contracts/device-command-v1.schema.json",
-  "title": "RTDB device command v1",
+  "title": "Obsolete historical RTDB device command v1 proposal",
+  "description": "Not current authority and not delivered by M6.36; use interfaces/operator-command-v1 for the three approved controls.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "commandId", "commandSequence", "siteId", "targetDeviceId", "commandType", "requestedAt", "requestedBy", "status", "payload"],

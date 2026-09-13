@@ -163,6 +163,7 @@
               "type": "boolean"
             },
             "pendingCommands": {
+              "description": "Compatibility-only historical field. Current producers return an empty list; operator controls use the mirrored exact-session slot.",
               "type": "array",
               "items": {
                 "$ref": "device-command-v1.schema.json"

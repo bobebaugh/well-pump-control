@@ -6,7 +6,7 @@
   "deviceId": "tab5-well-main",
   "sessionId": "boot_A7f93k2Q",
   "issuedAt": "2026-08-24T17:40:00.150Z",
-  "highWaterCommandSequence": 12,
+  "highWaterCommandSequence": 11,
   "currentRules": {
     "version": 3,
     "contentHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -15,25 +15,7 @@
     "20260824173102-high-pressure-boot_A7f93k2Q-0000000043"
   ],
   "globalEnable": false,
-  "pendingCommands": [
-    {
-      "schemaVersion": 1,
-      "commandId": "20260824173458-command-web_2kP9mQ7z-0000000012",
-      "commandSequence": 12,
-      "siteId": "well-main",
-      "targetDeviceId": "tab5-well-main",
-      "commandType": "close-event",
-      "requestedAt": "2026-08-24T17:34:58.000Z",
-      "requestedBy": {
-        "type": "user",
-        "id": "firebase-uid-example"
-      },
-      "status": "pending",
-      "payload": {
-        "eventId": "20260824173102-high-pressure-boot_A7f93k2Q-0000000043"
-      }
-    }
-  ],
+  "pendingCommands": [],
   "authenticationBootstrap": {
     "firebaseCustomToken": "EXAMPLE_ONLY_CUSTOM_TOKEN_DO_NOT_USE",
     "firebaseApiKey": "EXAMPLE_ONLY_FIREBASE_API_KEY_DO_NOT_USE",

@@ -11,7 +11,7 @@
 <body>
   <header class="topbar">
     <div>
-      <p class="eyebrow">PRIVATE WELL · OBSERVATIONAL PILOT</p>
+      <p class="eyebrow">PRIVATE WELL · MONITORING AND APPROVED CONTROLS</p>
       <h1>Well Pump Monitoring</h1>
     </div>
     <div class="topbar-actions">
@@ -21,7 +21,7 @@
         <button type="button" id="monitor-toggle" class="monitor-button">Start 15-minute live view</button>
         <small id="monitor-status">Standard 60-second refresh</small>
       </div>
-      <div class="pilot-badge"><span></span>Observational pilot</div>
+      <div class="pilot-badge"><span></span>Owner access</div>
     </div>
   </header>
 
@@ -54,6 +54,25 @@
         <p>Shelly 1 · RLY0</p>
         <strong id="rly0-value" class="binary-value">—</strong>
       </div>
+    </section>
+
+    <section class="panel operator-panel" aria-labelledby="operator-title">
+      <div class="panel-heading">
+        <div>
+          <p class="kicker">OWNER CONTROLS</p>
+          <h2 id="operator-title">Investigation and restart</h2>
+        </div>
+        <button type="button" id="operator-unlock" class="secondary-button compact-button">Unlock status</button>
+      </div>
+      <p id="operator-summary" class="operator-summary" aria-live="polite">Controls are locked. Status requires the existing pilot key.</p>
+      <p id="operator-evidence" class="operator-evidence">No command has been requested from this browser.</p>
+      <div class="operator-actions">
+        <button type="button" id="enter-user-monitor" class="control-button warning">Enter User Monitor</button>
+        <button type="button" id="restart-tab5" class="control-button danger">Restart Tab5</button>
+        <button type="button" id="restart-shelly1" class="control-button danger">Restart Shelly 1</button>
+      </div>
+      <p id="restart-consequence" class="operator-warning">Tab5 restart creates a fresh event board and session. A valid staged package may be adopted.</p>
+      <p class="operator-footnote">User Monitor deliberately suppresses Tab5 inhibit application until Tab5 restarts. Shelly-local and mechanical protection remain authoritative. A request or RPC acknowledgment is not relay or lockout-clear confirmation.</p>
     </section>
 
     <section class="workspace">
@@ -144,7 +163,7 @@
 
         <div class="safety-note">
           <strong>Control authority</strong>
-          <p>SW0 and RLY0 are status-only on this page. This page does not issue device controls.</p>
+          <p>SW0 and RLY0 remain evidence. The separate owner controls issue only User Monitor, Tab5 restart, and Shelly 1 restart requests.</p>
         </div>
       </article>
     </section>
