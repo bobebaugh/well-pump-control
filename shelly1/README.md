@@ -124,19 +124,30 @@ throwing, but nothing is published to Tab5 until it is fixed.
 
 ### Removing components
 
-Components declared in `@meta` are **owned by this script** and cannot be deleted
-from the web UI. Per the Shelly documentation they are "created automatically when
-the script starts, updated if the declaration changes, and removed when the script
-is deleted," and "components whose role was removed from the declaration are
-deleted." So there are two clean ways to remove one:
+Components declared in `@meta` are **owned by the declaring script** and cannot be
+deleted from the web UI.
 
-1. Delete the script — all six go with it.
-2. Remove that role from the `@meta` line and restart the script — only that
-   component goes.
+The Shelly documentation says they are "created automatically when the script
+starts... and removed when the script is deleted." **On this device that is wrong
+about the trigger.** Owner-observed: with neither script set to auto-run, a device
+restart recreates every declared component. The declaration provisions them,
+whether or not the script ever runs.
+
+The practical consequence, and the cause of duplicates that keep returning:
+deleting a component by hand does not stick. Any `@meta` still declaring it
+recreates it at the next restart. Removing it for good means removing the
+declaration:
+
+1. Delete the script — all its components go with it.
+2. Remove that role from the `@meta` line — only that component goes.
+
+Because provisioning does not depend on execution, a declaration-only script needs
+no enable-on-boot flag. It only has to exist.
 
 Components created instead through the `Virtual.Add` RPC belong to no script, are
-deletable from the UI, and survive script changes. Leftovers you have been able to
-delete by hand came from that route; ones you cannot delete are script-owned.
+deletable from the UI, and stay deleted. Leftovers that could be removed by hand
+came from that route; ones that cannot be, or that return after a restart, are
+declared in some script's `@meta`.
 
 ### Other scripts using these components
 
