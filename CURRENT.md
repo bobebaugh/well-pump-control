@@ -1,15 +1,21 @@
 # Current status — Pilot line
 
-## Now — Pilot side of M6.36 operator controls awaiting owner review
+## Now — Pilot side of M6.37 operator-control repair awaiting owner review
 
 The approved Pilot–Tab5 operator unit is implemented on `pilot-working` and
-`tab5-working` but is not deployed or installed. Pilot adds authenticated online
-controls for User Monitor, actual Tab5 restart, and Shelly 1 restart. The transport
-uses one replaceable RTDB slot with a unique browser/command identity, exact target
-session, monotonic sequence, and 45-second expiry. The endpoint refuses issuance
-without fresh presence; Tab5 independently enforces session, expiry, clock, and
-duplicate checks at execution. Outcomes distinguish not delivered, accepted,
-confirmed completed, failed, and unknown. Ambiguous restarts are never retried.
+`tab5-working` but is not deployed or installed. M6.37 repairs the reviewed
+operator-control defects without changing the approved controls. Command v2 uses a
+non-empty no-arguments marker that survives RTDB storage. CPU B admission and CPU A
+execution both reject non-increasing command sequences, so duplicates, A → B → A,
+and older different IDs cannot replace or execute after newer work. Session,
+expiry, synchronized-clock, and no-retry boundaries remain.
+
+Online Tab5 restart now atomically preserves the exact accepted request before
+`machine.reset()`. The new session emits a matching completion result and removes
+that marker only after RTDB accepts the result. An unrelated later session never
+confirms an old request; explicit rejection remains rejection, and missing linked
+evidence after possible execution is unknown. A marker-write failure reports
+failure and does not schedule the reset.
 
 The earlier approved event/durable browser remains in this branch and its prior
 evidence still applies. This unit does not alter its history semantics or the
@@ -25,13 +31,17 @@ screenshots represent different occurrences, not a verified matching pair.
 
 ## Verification
 
-- Current operator-control host run: 151/151 Pilot tests passed. Tests cover the
-  mirrored closed records, 45-second lifetime, authentication, stale presence,
-  outcome derivation, fresh-session restart confirmation, stale-evidence rejection,
-  the three-button browser boundary, and removal of obsolete device-command delivery.
-- The RTDB emulator did not start on this host because firebase-tools requires Java
-  21 and only Java 17 is installed. The rules source was syntax-parsed and remains
-  un-published; its emulator suite is an operational prerequisite before deployment.
+- M6.37 repair host runs passed 152/152 Pilot tests and 181/181 Tab5 tests.
+  Focused cases cover command-v2 shape, immediate duplicate, A → B → A and older
+  different-ID rejection at both CPU boundaries, stale pending replacement,
+  expired/old-session rejection, request-linked restart completion, explicit
+  rejection followed by another session, manual restart after expiry, and lost
+  acknowledgements remaining unknown.
+- GitHub Actions Java 21 run 34759331965 passed 12/12 actual RTDB emulator tests.
+  The log specifically confirms that the production command builder's record was
+  written to the emulator, read back through device permissions, and accepted by
+  the checked-out `tab5-working` production CPU-B validator/admission path. This
+  is separate from the permission matrix and the host suites.
 
 - Browser repair: `node --test tests/record-browser.test.js` passes 6/6 using
   Firestore-like timestamp/query fixtures. It covers mixed V1/V2 tie ordering,
@@ -68,10 +78,10 @@ screenshots represent different occurrences, not a verified matching pair.
 
 ## Next
 
-Owner review of the coordinated M6.36 source and the test sequence in the handoff.
+Owner review of the coordinated M6.37 source and the test sequence in the handoff.
 Deployment, RTDB-rules publication, Tab5 file installation/restart, and any branch
 promotion are separate synchronized owner actions. Online controls must not be used
-until the matching Pilot function/rules and Tab5 M6.36 are all in place.
+until the matching Pilot function/rules and Tab5 M6.37 are all in place.
 
 ## Later / unresolved
 
@@ -80,7 +90,7 @@ until the matching Pilot function/rules and Tab5 M6.36 are all in place.
   versus charging current remains unexplained. Supported UIFlow interfaces only.
 - System Monitor automatic actuation remains deferred under issue #6. Missing
   telemetry does not release inhibits or advance clearing qualification. There is
-  no Clear Events or Monitor OFF control in M6.36.
+  no Clear Events or Monitor OFF control in M6.37.
 - Shelly script-health monitoring (issue #5) remains separate; resolve by script
   name, not assumed ID. Shelly-local lockouts/protections remain authoritative.
 - S020 startup sensitivity, brief Cloud-yellow with a pending record, and potential
@@ -95,4 +105,6 @@ Source promotion does not install Tab5 files or publish Firebase rules. New codi
 deployment, package delivery and hardware operations require their applicable owner
 authorization. Preserve mechanical/hardwired/Shelly-local protection; CPU A remains
 sole local event/control authority. No routine flash/SD logging or durable outbox.
-GitHub is the portable source of truth. Keep environment setup bounded.
+GitHub is the portable source of truth. Keep environment setup bounded. The
+restart marker's atomic write/removal and reset linkage are host-simulated;
+installed-device filesystem and reset behavior remain owner acceptance evidence.
