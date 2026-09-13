@@ -101,11 +101,23 @@ a Tab5 restart, Clear Events, or Monitor.
 
 Not set by the script — configure these on the Shelly before installing:
 
+- **Delete the old test-harness script first.** Virtual components are owned by the
+  script that declares them. If the harness is still present, its `IsLocked` and
+  `loCntr` survive alongside this script's, Tab5 sees each name twice, and
+  `normalize_shelly1_components` rejects the entire acquisition as ambiguous — so
+  the device reads as unavailable rather than as an obvious duplicate fault.
 - `switch:0` power-on default **on**, so RLY0 closes on boot and a script failure
   leaves the pump able to run.
 - `input:0` in a mode that reports a level in `status.state`, since edges are taken
   from the status handler.
 - The script set to **run on startup**.
+
+### The `@meta` line
+
+It must be the **first line of the file**. It is what declares the six virtual
+components; anywhere else and `Script.getVcHandle` returns `undefined` for every
+one of them. The script guards against that and logs a warning rather than
+throwing, but nothing is published to Tab5 until it is fixed.
 
 ## Status
 
