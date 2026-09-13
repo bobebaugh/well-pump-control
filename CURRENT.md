@@ -17,6 +17,15 @@ without credentials or command contents. The UI separately reports rejected owne
 authentication, missing service configuration and an authenticated-but-unavailable
 status read.
 
+The same unsupported `getDatabase(app, url)` call also remained in the rules-engine
+V3 device-status read, which is the cause of the separately parked rules-editor Tab5
+status-read failure. That path now resolves its database through
+`getDatabaseWithUrl(url, app)` behind a `_deviceStatusDatabase` seam, so the default
+read is covered by actual SDK validation instead of an injected mock. Its URL
+validation, timeout, and error categories are unchanged; the parked editor failure
+is expected to clear on deployment but has not yet been confirmed against live
+Firebase.
+
 Session/cycle, release and receipt-time columns are selectable in the existing
 column area and hidden by default. Their selections survive paging, data-column
 changes and browsing-mode changes; Observation time remains visible and CSV export
@@ -54,6 +63,11 @@ screenshots represent different occurrences, not a verified matching pair.
 - Focused record-browser, UI and operator-control regressions passed 24/24. They
   include actual Admin SDK rejection of the old empty document-ID boundary and the
   installed-SDK reproduction/repair of the RTDB initialization failure.
+- The device-status follow-up added one focused regression that reproduces the
+  production `Can't determine Firebase Database URL.` failure against the installed
+  SDK and passes only with the supported call; the full host run passed 159/159.
+  `rules-engine-v3-compatibility` also passed here, so the previously recorded
+  `null !== 0` result was only a missing `python3` on the owner's PATH, not a defect.
 - The single completion host run passed 158/158 tests. A bounded browser check was
   attempted without authenticating or issuing commands, but this session's cloud
   browser could not access localhost and permission to open the deployed owner URL
@@ -123,7 +137,8 @@ until the matching Pilot function/rules and Tab5 M6.37 are all in place.
   name, not assumed ID. Shelly-local lockouts/protections remain authoritative.
 - S020 startup sensitivity, brief Cloud-yellow with a pending record, and potential
   two-second polling remain separate questions, not approved changes here.
-- Rules editor Tab5 status-read failure remains parked by owner.
+- Rules editor Tab5 status-read failure: the `getDatabase(app, url)` cause is fixed
+  in source and host-verified. It stays open until an owner read confirms it live.
 - Never fabricate unavailable values, physical action success or exact inferred
   close time. Runtime packages adopt only on restart with an empty event board.
 

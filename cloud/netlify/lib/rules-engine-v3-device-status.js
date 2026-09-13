@@ -9,12 +9,17 @@ function normalizeDeviceStatus(value) {
 class DeviceStatusError extends Error {
   constructor(code) { super(code); this.code = code; }
 }
+function deviceStatusDatabase(app, url) {
+  // getDatabase(app) takes no URL argument; an explicit database URL needs
+  // getDatabaseWithUrl(url, app) or the SDK cannot determine the URL at all.
+  const {getDatabaseWithUrl} = require('firebase-admin/database');
+  return getDatabaseWithUrl(url, app);
+}
 async function readDeviceStatus(dependencies = {}) {
   const read = dependencies.read || (async () => {
-    const {getDatabase} = require('firebase-admin/database');
     const {auth} = require('./firebase').getPilotAuth();
     const url = require('./rules-store')._approvedRtdbUrl(process.env.FIREBASE_RTDB_URL);
-    const snapshot = await getDatabase(auth.app,url).ref('v1/sites/well-main/devices/tab5-well-main/rulesV3State').get();
+    const snapshot = await deviceStatusDatabase(auth.app,url).ref('v1/sites/well-main/devices/tab5-well-main/rulesV3State').get();
     return snapshot.val();
   });
   let timer;
@@ -35,4 +40,4 @@ function statusErrorCode(error) {
   if (/permission|denied|unauthorized/i.test(String(error?.code || ''))) return 'tab5_status_denied';
   return 'tab5_status_read_failed';
 }
-module.exports={normalizeDeviceStatus,readDeviceStatus,statusErrorCode};
+module.exports={normalizeDeviceStatus,readDeviceStatus,statusErrorCode,_deviceStatusDatabase:deviceStatusDatabase};
