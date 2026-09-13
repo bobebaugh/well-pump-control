@@ -684,14 +684,19 @@ class ObservationSelectionTests(unittest.TestCase):
             self.assertIsNone(reason)
             self.assertEqual(reloaded["reference"], adopted["reference"])
 
-    def test_rules_adoption_is_the_only_runtime_flash_write(self):
+    def test_only_rules_adoption_and_restart_evidence_write_runtime_flash(self):
         pilot_source = PILOT_PATH.read_text(encoding="utf-8")
         launcher_source = (PILOT_PATH.parent / "main.py").read_text(encoding="utf-8")
         cloud_source = (PILOT_PATH.parent / "cloud.py").read_text(encoding="utf-8")
 
         self.assertIn("with open(temporary_path, 'w')", pilot_source)
         self.assertNotIn("open('/flash/", launcher_source)
-        self.assertNotRegex(cloud_source, r"\bopen\s*\([^\n]*['\"](?:w|a|x)[+b]?['\"]")
+        cloud_writes = re.findall(
+            r"\bopen\s*\([^\n]*['\"](?:w|a|x)[+b]?['\"]", cloud_source)
+        self.assertEqual(cloud_writes, ["open(temporary_path, 'w'"])
+        self.assertIn("OPERATOR_RESTART_MARKER_FILE = 'operator-restart-pending.json'",
+                      cloud_source)
+        self.assertIn("def prepare_tab5_restart(", cloud_source)
 
     def test_runtime_pointer_is_exact_v2_shape_and_summary_hides_values(self):
         raw = self.runtime_body()

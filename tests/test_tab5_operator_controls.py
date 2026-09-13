@@ -81,7 +81,18 @@ class OperatorControlTests(unittest.TestCase):
         self.assertEqual(decide(fresh, "boot_AAAAAAAA", 1_800_000_046_000, True)[1],
                          "command-expired")
         self.assertEqual(decide(fresh, "boot_AAAAAAAA", 1_800_000_001_000, True,
-                                fresh["commandId"])[1], "duplicate-command")
+                                7, fresh["commandId"])[1], "duplicate-command")
+        newer = command(commandId="op_BBBBBBBBBBBBBBBB", commandSequence=8)
+        self.assertEqual(decide(newer, "boot_AAAAAAAA", 1_800_000_001_000, True,
+                                7, fresh["commandId"])[0], "accepted")
+        self.assertEqual(decide(fresh, "boot_AAAAAAAA", 1_800_000_001_000, True,
+                                8, newer["commandId"])[1],
+                         "stale-command-sequence")
+        older_different = command(
+            commandId="op_CCCCCCCCCCCCCCCC", commandSequence=6)
+        self.assertEqual(decide(
+            older_different, "boot_AAAAAAAA", 1_800_000_001_000, True,
+            8, newer["commandId"])[1], "stale-command-sequence")
         self.assertEqual(decide(fresh, "boot_AAAAAAAA", None, False)[1],
                          "clock-not-synchronized")
 
@@ -145,7 +156,8 @@ class OperatorControlTests(unittest.TestCase):
         launcher = (PILOT_PATH.parent / "main.py").read_text(encoding="utf-8")
         self.assertIn("cloud.start()", launcher)
         self.assertIn("_thread.start_new_thread(_pilot_worker", launcher)
-        self.assertIn("Release M6.36 launcher", launcher)
+        self.assertIn("Release M6.37 launcher", launcher)
+        self.assertIn("cloud.prepare_tab5_restart(selected_command)", loop)
 
 
 if __name__ == "__main__":

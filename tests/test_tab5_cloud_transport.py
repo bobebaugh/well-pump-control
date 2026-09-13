@@ -8,6 +8,7 @@ import importlib.util
 import json
 import pathlib
 import sys
+import tempfile
 import types
 import unittest
 
@@ -387,12 +388,12 @@ class CloudTransportTests(unittest.TestCase):
         with self.assertRaises(self.cloud.TransportError):
             self.cloud._copy_current_observation({"schemaVersion": 2}, "boot_12345678")
 
-    def test_operator_command_is_closed_session_targeted_and_not_requeued(self):
-        def command(sequence=12, **changes):
+    def test_operator_command_sequence_high_water_blocks_replay_and_stale_replacement(self):
+        def command(sequence=12, command_id="op_1234567890abcdef", **changes):
             value = {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "kind": "operator-command",
-                "commandId": "op_1234567890abcdef",
+                "commandId": command_id,
                 "commandSequence": sequence,
                 "clientRequestId": "browser_12345678",
                 "siteId": "well-main",
@@ -402,27 +403,38 @@ class CloudTransportTests(unittest.TestCase):
                 "requestedAtMs": 1800000000000,
                 "expiresAtMs": 1800000045000,
                 "requestedBy": {"type": "user", "id": "authenticated-owner"},
-                "payload": {},
+                "payload": {"kind": "none"},
             }
             value.update(changes)
             return value
 
         original_id = self.cloud._last_queued_operator_command_id
         original_pending = self.cloud._pending_operator_command
+        original_sequence = self.cloud._last_delivered_command_sequence
         try:
             self.cloud._last_queued_operator_command_id = None
             self.cloud._pending_operator_command = None
+            self.cloud._last_delivered_command_sequence = 0
             self.assertTrue(self.cloud._queue_operator_command(command()))
             self.assertFalse(self.cloud._queue_operator_command(command()))
-            self.assertEqual(self.cloud.take_operator_command()["commandSequence"], 12)
+            self.assertFalse(self.cloud._queue_operator_command(
+                command(11, "op_olderdifferent1")))
+            self.assertEqual(self.cloud._pending_operator_command["commandSequence"], 12)
+            self.assertTrue(self.cloud._queue_operator_command(
+                command(13, "op_newercommand001")))
+            self.assertEqual(self.cloud.take_operator_command()["commandSequence"], 13)
+            self.assertFalse(self.cloud._queue_operator_command(command()))
+            self.assertFalse(self.cloud._queue_operator_command(
+                command(11, "op_olderdifferent2")))
             self.assertIsNone(self.cloud.take_operator_command())
         finally:
             self.cloud._last_queued_operator_command_id = original_id
             self.cloud._pending_operator_command = original_pending
+            self.cloud._last_delivered_command_sequence = original_sequence
 
     def test_malformed_command_extra_fields_are_rejected(self):
         command = {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "kind": "operator-command",
             "commandId": "op_1234567890abcdef",
             "commandSequence": 12,
@@ -434,7 +446,7 @@ class CloudTransportTests(unittest.TestCase):
             "requestedAtMs": 1800000000000,
             "expiresAtMs": 1800000045000,
             "requestedBy": {"type": "user", "id": "authenticated-owner"},
-            "payload": {},
+            "payload": {"kind": "none"},
             "unexpected": True,
         }
         self.assertIsNone(self.cloud._validate_operator_command(command))
@@ -446,10 +458,56 @@ class CloudTransportTests(unittest.TestCase):
             {"commandId": "command-12"},
             {"commandSequence": 0},
             {"commandType": "clear-events"},
+            {"payload": {}},
+            {"payload": {"kind": "none", "unexpected": True}},
+            {"payload": {"kind": "arguments"}},
         ):
             malformed = dict(command)
             malformed.update(changes)
             self.assertIsNone(self.cloud._validate_operator_command(malformed))
+        self.assertIsNone(self.cloud._validate_operator_command(
+            command, "boot_other000"))
+
+    def test_restart_completion_is_loaded_only_from_persisted_exact_command(self):
+        command = {
+            "schemaVersion": 2, "kind": "operator-command",
+            "commandId": "op_1234567890abcdef", "commandSequence": 12,
+            "clientRequestId": "browser_12345678", "siteId": "well-main",
+            "targetDeviceId": "tab5-well-main",
+            "targetSessionId": self.cloud.device_session_id(),
+            "commandType": "restart-tab5", "requestedAtMs": 1800000000000,
+            "expiresAtMs": 1800000045000,
+            "requestedBy": {"type": "user", "id": "authenticated-owner"},
+            "payload": {"kind": "none"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(pathlib.Path(directory) / "operator-restart-pending.json")
+            temporary = str(pathlib.Path(directory) / ".operator-restart-pending.write")
+            self.assertTrue(self.cloud.prepare_tab5_restart(
+                command, path=path, temporary_path=temporary))
+            completion = self.cloud._load_tab5_restart_completion(
+                "boot_BBBBBBBB", path=path)
+            self.assertEqual(completion["commandId"], command["commandId"])
+            self.assertEqual(completion["commandSequence"], command["commandSequence"])
+            self.assertEqual(completion["targetSessionId"], command["targetSessionId"])
+            self.assertEqual(completion["reportingSessionId"], "boot_BBBBBBBB")
+            self.assertEqual(completion["outcome"], "confirmed-completed")
+            self.assertEqual(completion["detailCode"], "tab5-restart-new-session")
+            self.assertIsNone(self.cloud._load_tab5_restart_completion(
+                command["targetSessionId"], path=path))
+            original_path = self.cloud.OPERATOR_RESTART_MARKER_FILE
+            original_pending = self.cloud._pending_operator_result
+            original_completion = self.cloud._operator_restart_completion_result
+            try:
+                self.cloud.OPERATOR_RESTART_MARKER_FILE = path
+                self.cloud._pending_operator_result = completion
+                self.cloud._operator_restart_completion_result = completion
+                self.assertTrue(self.cloud._ack_operator_result(completion))
+                self.assertFalse(pathlib.Path(path).exists())
+            finally:
+                self.cloud.OPERATOR_RESTART_MARKER_FILE = original_path
+                self.cloud._pending_operator_result = original_pending
+                self.cloud._operator_restart_completion_result = original_completion
 
     def test_operator_result_coalesces_newer_evidence(self):
         original = self.cloud._pending_operator_result

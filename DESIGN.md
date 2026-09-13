@@ -38,16 +38,21 @@ Existing versioned record meanings do not change silently. An incompatible recor
 gets a new version.
 
 The operator-control transport is a single replaceable RTDB slot, not a durable
-queue. The authenticated web endpoint targets the latest device presence session
-and gives each request a unique browser identity, command identity, monotonic
-sequence, and 45-second lifetime. Forty-five seconds covers multiple passes of the
-10-second coordination poll without making an outage-delayed request useful. Tab5
-checks schema, exact boot session, synchronized UTC expiry, and duplicate identity
-again at the execution boundary. A reconnect cannot make an expired or old-session
-request execute. The stored result distinguishes not delivered, accepted,
-confirmed completed, failed, and unknown. A timeout after possible execution is
-unknown and is never automatically retried. Fresh session/device evidence, not an
-RPC acknowledgement or a cached connected indicator, establishes completion.
+queue. Command v2 carries a non-empty no-arguments payload marker so the complete
+closed record survives an RTDB write/read round trip. The authenticated web
+endpoint targets the latest device presence session and gives each request a unique
+browser identity, command identity, monotonic sequence, and 45-second lifetime.
+Forty-five seconds covers multiple passes of the 10-second coordination poll
+without making an outage-delayed request useful. CPU B queue admission and CPU A
+execution each reject a sequence at or below their current session high-water
+mark; a stale request cannot replace a newer pending request. Tab5 also checks the
+exact boot session, synchronized UTC expiry, and duplicate identity. A reconnect
+cannot make an expired or old-session request execute. The stored result
+distinguishes not delivered, accepted, confirmed completed, failed, and unknown.
+A timeout after possible execution is unknown and is never automatically retried.
+Online Tab5 restart persists the exact accepted request before reset, and the new
+session reports completion from that marker. A session change without the matching
+result remains unknown; it never confirms an old request.
 
 Durable observation v2 contains a small identity/time/release header and the fixed
 set of every logging-enabled Device, Calculated, and System field in the running

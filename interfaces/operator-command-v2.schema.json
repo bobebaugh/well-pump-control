@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/operator-command-v2.schema.json",
+  "title": "Short-lived operator command",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "commandId", "commandSequence", "clientRequestId", "siteId", "targetDeviceId", "targetSessionId", "commandType", "requestedAtMs", "expiresAtMs", "requestedBy", "payload"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "kind": { "const": "operator-command" },
+    "commandId": { "type": "string", "pattern": "^op_[A-Za-z0-9_-]{8,128}$" },
+    "commandSequence": { "type": "integer", "minimum": 1 },
+    "clientRequestId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,128}$" },
+    "siteId": { "const": "well-main" },
+    "targetDeviceId": { "const": "tab5-well-main" },
+    "targetSessionId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "commandType": { "type": "string", "enum": ["enter-user-monitor", "restart-tab5", "restart-shelly1"] },
+    "requestedAtMs": { "type": "integer", "minimum": 0 },
+    "expiresAtMs": { "type": "integer", "minimum": 0 },
+    "requestedBy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "const": "user" },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "none" }
+      }
+    }
+  }
+}

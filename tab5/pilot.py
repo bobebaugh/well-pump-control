@@ -1,4 +1,4 @@
-# Release: 2026-09-13 M6.36 — approved User Monitor and restart controls.
+# Release: 2026-09-13 M6.37 — repaired operator command transport and evidence.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -45,7 +45,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.36'
+SOFTWARE_RELEASE = 'M6.37'
 OPERATOR_COMMAND_LIFETIME_MS = 45000
 OPERATOR_CONFIRM_WINDOW_MS = 8000
 SHELLY_RESTART_CONFIRM_MS = 60000
@@ -689,14 +689,21 @@ def shelly1_restart_request(request_get=None):
 
 
 def operator_command_execution_decision(command, session_id, utc_ms,
-                                        clock_synced, last_command_id=None):
-    """Enforce identity, session, expiry, and duplicate checks at execution."""
+                                        clock_synced, last_command_sequence=0,
+                                        last_command_id=None):
+    """Enforce identity, session, expiry, and monotonic sequence at execution."""
     if not isinstance(command, dict):
         return 'not-delivered', 'invalid-command'
     if command.get('targetSessionId') != session_id:
         return 'not-delivered', 'old-session'
     if command.get('commandId') == last_command_id:
         return 'not-delivered', 'duplicate-command'
+    sequence = command.get('commandSequence')
+    if (not isinstance(sequence, int) or isinstance(sequence, bool) or
+            sequence < 1):
+        return 'not-delivered', 'invalid-command-sequence'
+    if sequence <= last_command_sequence:
+        return 'not-delivered', 'stale-command-sequence'
     if clock_synced is not True or not isinstance(utc_ms, int):
         return 'not-delivered', 'clock-not-synchronized'
     requested = command.get('requestedAtMs')
@@ -4957,7 +4964,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.36: User Monitor and supported restart controls; V3 authority')
+log('CPU A release M6.37: repaired operator controls; V3 authority')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.
@@ -5039,6 +5046,7 @@ last_cycle_work_ms = None
 session_uptime_ms = 0
 heap_min_free_bytes = None
 last_operator_command_id = None
+last_operator_command_sequence = 0
 online_operator_command = None
 monitor_result_command = None
 monitor_relay_restoration = 'not-applicable'
@@ -5257,11 +5265,14 @@ while True:
         decision, detail = operator_command_execution_decision(
             online_operator_command, device_session_id,
             utc_epoch_ms(clock_synced), clock_synced,
-            last_operator_command_id)
-        last_operator_command_id = online_operator_command.get('commandId')
-        cloud.mark_operator_command_applied(
-            online_operator_command.get('commandId'),
-            online_operator_command.get('commandSequence'))
+            last_operator_command_sequence, last_operator_command_id)
+        received_sequence = online_operator_command.get('commandSequence')
+        if (online_operator_command.get('targetSessionId') == device_session_id and
+                isinstance(received_sequence, int) and
+                not isinstance(received_sequence, bool) and
+                received_sequence > last_operator_command_sequence):
+            last_operator_command_sequence = received_sequence
+            last_operator_command_id = online_operator_command.get('commandId')
         if decision != 'accepted':
             cloud.submit_operator_result(operator_result(
                 online_operator_command, device_session_id,
@@ -5269,6 +5280,8 @@ while True:
             operator_control_status = 'ONLINE NOT DELIVERED: {}'.format(
                 detail.upper())
         else:
+            cloud.mark_operator_command_applied(
+                online_operator_command.get('commandId'), received_sequence)
             selected_action = online_operator_command.get('commandType')
             selected_command = online_operator_command
     elif operator_local_pending_action is not None:
@@ -5302,13 +5315,22 @@ while True:
             operator_control_status = 'USER MONITOR ACCEPTED; RELAY {}'.format(
                 monitor_relay_restoration.upper())
     elif selected_action == 'restart-tab5':
-        if selected_command is not None:
+        restart_evidence_ready = (
+            selected_command is None or
+            cloud.prepare_tab5_restart(selected_command))
+        if restart_evidence_ready:
+            if selected_command is not None:
+                cloud.submit_operator_result(operator_result(
+                    selected_command, device_session_id, 'accepted',
+                    'tab5-restart-scheduled'))
+            operator_control_status = 'TAB5 RESTART ACCEPTED; NEW SESSION PENDING'
+            tab5_restart_due_ms = time.ticks_add(
+                observation_ticks_ms, TAB5_RESTART_DELAY_MS)
+        else:
             cloud.submit_operator_result(operator_result(
-                selected_command, device_session_id, 'accepted',
-                'tab5-restart-scheduled'))
-        operator_control_status = 'TAB5 RESTART ACCEPTED; NEW SESSION PENDING'
-        tab5_restart_due_ms = time.ticks_add(
-            observation_ticks_ms, TAB5_RESTART_DELAY_MS)
+                selected_command, device_session_id, 'failed',
+                'tab5-restart-evidence-write-failed'))
+            operator_control_status = 'TAB5 RESTART FAILED: EVIDENCE NOT SAVED'
     elif selected_action == 'restart-shelly1':
         if observation['status'].get('shelly1_available') is not True:
             outcome, detail = 'failed', 'shelly-unavailable-before-request'

@@ -17,9 +17,11 @@ Initial automated coverage will include:
 - M6.34 explicit charging-request initialization, failed-setter retry and
   75/80 hysteresis; battery failure/staleness display; signed current; wrap-safe
   loop/acquisition timing; and bounded MicroPython heap minimum tracking.
-- M6.36 User Monitor entry/release suppression with preserved event ownership,
+- M6.37 User Monitor entry/release suppression with preserved event ownership,
   local two-tap controls, short-lived online command identity/session/expiry
-  boundaries, actual Tab5 restart wiring, and Shelly restart outcomes followed
-  by fresh `islocked` evidence.
+  boundaries, RTDB-stable command-v2 validation, monotonic sequence high-water
+  rejection on CPU B and CPU A, request-linked restart completion after the
+  actual reset, and Shelly restart outcomes followed by fresh `islocked`
+  evidence.
 
 Physical pump observation, Tab5 display behavior, and network-loss recovery remain field acceptance tests.

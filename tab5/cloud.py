@@ -1,4 +1,4 @@
-# Release: 2026-09-13 M6.36 — short-lived operator command transport.
+# Release: 2026-09-13 M6.37 — repaired short-lived operator command transport.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -68,6 +68,8 @@ RTDB_RETRY_MAX_MS = 60000
 RTDB_MIN_OPERATION_GAP_MS = 100
 TOKEN_REFRESH_MARGIN_MS = 300000
 OPERATOR_COMMAND_LIFETIME_MS = 45000
+OPERATOR_RESTART_MARKER_FILE = 'operator-restart-pending.json'
+OPERATOR_RESTART_MARKER_TEMP_FILE = '.operator-restart-pending.write'
 APPROVED_FIREBASE_PROJECT_ID = 'well-pump-control'
 APPROVED_RTDB_URLS = (
     'https://well-pump-control-default-rtdb.firebaseio.com',
@@ -295,11 +297,13 @@ def _validate_operator_command(command, session_id=None):
         'commandType', 'requestedAtMs', 'expiresAtMs', 'requestedBy', 'payload')
     if any(field not in allowed for field in command) or len(command) != len(allowed):
         return None
-    if command.get('schemaVersion') != 1 or command.get('kind') != 'operator-command':
+    if command.get('schemaVersion') != 2 or command.get('kind') != 'operator-command':
         return None
     if command.get('siteId') != SITE_ID or command.get('targetDeviceId') != RTDB_DEVICE_ID:
         return None
     if not _operator_token(command.get('targetSessionId'), '', 8, 64):
+        return None
+    if session_id is not None and command.get('targetSessionId') != session_id:
         return None
     if command.get('commandType') not in (
             'enter-user-monitor', 'restart-tab5', 'restart-shelly1'):
@@ -321,9 +325,63 @@ def _validate_operator_command(command, session_id=None):
             actor.get('type') != 'user' or
             not isinstance(actor.get('id'), str) or not 1 <= len(actor['id']) <= 128):
         return None
-    if command.get('payload') != {}:
+    payload = command.get('payload')
+    if (not isinstance(payload, dict) or len(payload) != 1 or
+            payload.get('kind') != 'none'):
         return None
     return command
+
+
+def prepare_tab5_restart(command, path=OPERATOR_RESTART_MARKER_FILE,
+                         temporary_path=OPERATOR_RESTART_MARKER_TEMP_FILE):
+    """Persist the exact accepted request so the new session can prove completion."""
+    command = _validate_operator_command(command, _session_id)
+    if command is None or command.get('commandType') != 'restart-tab5':
+        return False
+    try:
+        with open(temporary_path, 'w') as handle:
+            handle.write(ujson.dumps(command))
+            try:
+                handle.flush()
+            except Exception:
+                pass
+        os.rename(temporary_path, path)
+        return True
+    except Exception:
+        try:
+            os.remove(temporary_path)
+        except Exception:
+            pass
+        return False
+
+
+def _load_tab5_restart_completion(session_id,
+                                  path=OPERATOR_RESTART_MARKER_FILE):
+    """Build new-session evidence only from an exact request persisted before reset."""
+    try:
+        with open(path, 'r') as handle:
+            command = ujson.loads(handle.read())
+    except Exception:
+        return None
+    command = _validate_operator_command(command)
+    if (command is None or command.get('commandType') != 'restart-tab5' or
+            command.get('targetSessionId') == session_id):
+        return None
+    return {
+        'schemaVersion': 1,
+        'kind': 'operator-command-result',
+        'commandId': command.get('commandId'),
+        'commandSequence': command.get('commandSequence'),
+        'siteId': SITE_ID,
+        'deviceId': RTDB_DEVICE_ID,
+        'targetSessionId': command.get('targetSessionId'),
+        'reportingSessionId': session_id,
+        'commandType': 'restart-tab5',
+        'outcome': 'confirmed-completed',
+        'detailCode': 'tab5-restart-new-session',
+        'reportedAtMs': 0,
+        'relayRestoration': 'not-applicable',
+    }
 
 
 def log(msg):
@@ -439,6 +497,7 @@ _last_applied_command_sequence = 0
 
 _operator_result_lock = _thread.allocate_lock()
 _pending_operator_result = None
+_operator_restart_completion_result = None
 
 _sync_lock = _thread.allocate_lock()
 _sync_state = None
@@ -466,6 +525,8 @@ _applied_rules_lock = _thread.allocate_lock()
 _applied_rules_reference = dict(PRE_M6_TRANSPORT_ONLY_RULES_REFERENCE)
 
 _session_id = _new_session_id()
+_pending_operator_result = _load_tab5_restart_completion(_session_id)
+_operator_restart_completion_result = _pending_operator_result
 _sync_sequence = 0
 
 _start_lock = _thread.allocate_lock()
@@ -837,11 +898,17 @@ def _take_operator_result():
 
 
 def _ack_operator_result(item):
-    global _pending_operator_result
+    global _pending_operator_result, _operator_restart_completion_result
     _operator_result_lock.acquire()
     try:
         if _pending_operator_result is item:
             _pending_operator_result = None
+            if _operator_restart_completion_result is item:
+                _operator_restart_completion_result = None
+                try:
+                    os.remove(OPERATOR_RESTART_MARKER_FILE)
+                except Exception:
+                    pass
             return True
         return False
     finally:
@@ -1073,12 +1140,12 @@ def _queue_operator_command(command):
         return False
     _command_lock.acquire()
     try:
-        if command.get('commandId') == _last_queued_operator_command_id:
+        sequence = command.get('commandSequence')
+        if sequence <= _last_delivered_command_sequence:
             return False
         _pending_operator_command = command
         _last_queued_operator_command_id = command.get('commandId')
-        _last_delivered_command_sequence = max(
-            _last_delivered_command_sequence, command.get('commandSequence'))
+        _last_delivered_command_sequence = sequence
         return True
     finally:
         _command_lock.release()
@@ -1856,7 +1923,7 @@ def start():
         if _started:
             return False
         _started = True
-        log('CPU B release M6.36: session-targeted operator control transport')
+        log('CPU B release M6.37: monotonic operator control transport')
         _thread.start_new_thread(_worker, ())
         return True
     finally:
