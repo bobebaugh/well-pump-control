@@ -4,13 +4,26 @@ Device-side scripts for the Shelly 1 that holds RLY0 in the automation-controlle
 G/B− loop. These run on the Shelly, not on Tab5. They are kept here because their
 output is a Pilot–Tab5 interface, not because Tab5 executes them.
 
-| File | Purpose |
-| --- | --- |
-| `anti-chatter.js` | Short-cycle protection. Owns RLY0, publishes `IsLocked` and `loCntr`. |
-| `test-harness.js` | Bench tool. Attaches to those two components and counts `IsLocked` down. Declares nothing, never touches the relay. |
+| File | Purpose | Status |
+| --- | --- | --- |
+| `anti-chatter.js` | Short-cycle protection. Owns RLY0, declares and publishes `IsLocked` and `loCntr`. | Not yet run on hardware |
+| `test-harness-standalone.js` | Bench tool that declares its own copies of the two components. | Known working on the device |
+| `test-harness-attaching.js` | Same bench tool, declaring nothing and attaching to the components `anti-chatter.js` owns. | Unproven — see below |
 
-Pause `anti-chatter.js` before starting `test-harness.js`. Both tick `IsLocked`
-down once a second, so running them together halves every lock.
+Neither harness reads or writes `switch:0` or `input:0`, so neither can move the
+relay.
+
+**Only one script may declare these names at a time.** `test-harness-standalone.js`
+declares its own, so installing it beside `anti-chatter.js` gives Tab5 two
+components called `IsLocked` and two called `loCntr`, and its reader rejects the
+entire acquisition. Use one or the other, not both.
+
+`test-harness-attaching.js` exists to remove that restriction. It has no
+declaration and no `Script.getVcHandle` — it discovers the components by name
+through `Shelly.GetComponents` and attaches with `Virtual.getHandle`. Whether the
+device permits that is untested. If it saves and runs, the two can coexist as long
+as `anti-chatter.js` is paused first, since both tick `IsLocked` down once a second
+and running them together halves every lock.
 
 ## Authority
 
