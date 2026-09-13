@@ -121,10 +121,20 @@ screenshots represent different occurrences, not a verified matching pair.
   rejections, denial on device-owned `result`, `sequence`, `presence`,
   `currentObservation`, `rulesV3State`, site control and rules, and an ETag conflict
   that leaves the winning command in place. The Tab5 validator round-trip is retained.
-- **These emulator tests have not been executed.** The emulator starts in this
-  environment (OpenJDK 21.0.10, valid v4.11.2 jar, listening on 127.0.0.1:9000) but
-  loading the rules file into it is blocked here, reproducibly. They are syntax-checked
-  only and must pass in GitHub Actions before the identity is considered proven.
+- GitHub Actions run 34778283867 at `0900dfd` passed 18/18 real RTDB emulator tests,
+  including all six operator-identity cases. Run 34777903520 at `8dbe840` passed 17/18:
+  the identity grants were already proven there, and the single failure was the ETag
+  conflict test itself sending no authentication, so its conditional read was denied and
+  returned no ETag. The emulator does implement `X-Firebase-ETag` and `If-Match`; the
+  request was wrong, not the feature. It now sends the harness admin token, the
+  equivalent of the `?auth=<idToken>` every production request carries, and reports the
+  status and body on failure. The conflict assertion is unchanged.
+- Emulator success proves the published rules text authorizes this identity. It does not
+  establish that the deployed Firebase project accepts the production service account's
+  custom token, and no rules have been published yet.
+- The emulator cannot be run in this environment: loading any RTDB rules file is blocked
+  here, reproduced with a copy outside the repository and with a minimal closed rules
+  file. Emulator evidence for this line comes from GitHub Actions only.
 - The device-status follow-up added one focused regression that reproduces the
   production `Can't determine Firebase Database URL.` failure against the installed
   SDK and passes only with the supported call; the full host run passed 159/159.
