@@ -101,11 +101,23 @@ a Tab5 restart, Clear Events, or Monitor.
 
 Not set by the script — configure these on the Shelly before installing:
 
-- **Delete the old test-harness script first.** Virtual components are owned by the
-  script that declares them. If the harness is still present, its `IsLocked` and
-  `loCntr` survive alongside this script's, Tab5 sees each name twice, and
-  `normalize_shelly1_components` rejects the entire acquisition as ambiguous — so
-  the device reads as unavailable rather than as an obvious duplicate fault.
+- **Delete leftover components by hand, not just the old script.** Virtual
+  components outlive the script that declared them and survive a reboot, so
+  removing a previous script leaves its `IsLocked` and `loCntr` behind. Check
+  Settings → User-defined components and delete every duplicate before installing.
+  Tab5's `normalize_shelly1_components` rejects any name it finds twice, and it
+  rejects the **entire acquisition** — so a duplicate makes the device read as
+  unavailable rather than as an obvious duplicate fault. Exactly six components
+  should remain, one per name.
+- **Only one script may declare these names.** A second script sharing them
+  produces the duplicates above, and two scripts would both tick `IsLocked` down.
+  Setting values from the UI, an RPC call, or an external tool is fine — the script
+  adopts external writes deliberately.
+- **Mind the ten-component budget.** This script uses six of the device's ten
+  slots. If leftovers have accumulated, delete them before installing or the
+  declaration will fail partway, leaving some handles undefined. If slots get
+  tight, `MaxLOcntr` and `TimeToResetLOcntr` are the two least likely to need
+  field tuning and could become constants in the script.
 - `switch:0` power-on default **on**, so RLY0 closes on boot and a script failure
   leaves the pump able to run.
 - `input:0` in a mode that reports a level in `status.state`, since edges are taken
