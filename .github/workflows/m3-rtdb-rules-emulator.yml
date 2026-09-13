@@ -8,6 +8,8 @@ on:
     paths:
       - firebase/rtdb.rules.json
       - firebase.json
+      - cloud/netlify/lib/operator-control-contract.js
+      - interfaces/operator-command-v2.schema.json
       - tests/emulator/rtdb-rules.test.js
       - package.json
       - package-lock.json
@@ -19,6 +21,8 @@ on:
     paths:
       - firebase/rtdb.rules.json
       - firebase.json
+      - cloud/netlify/lib/operator-control-contract.js
+      - interfaces/operator-command-v2.schema.json
       - tests/emulator/rtdb-rules.test.js
       - package.json
       - package-lock.json
@@ -35,6 +39,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Check out matching Tab5 command consumer
+        uses: actions/checkout@v4
+        with:
+          ref: tab5-working
+          path: tab5-working
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -45,3 +54,5 @@ jobs:
           java-version: 21
       - run: npm ci
       - run: npm run test:rtdb-rules
+        env:
+          TAB5_OPERATOR_PROBE: ${{ github.workspace }}/tab5-working/tests/operator_command_validation_probe.py

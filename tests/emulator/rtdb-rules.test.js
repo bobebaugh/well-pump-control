@@ -1,13 +1,17 @@
 "use strict";
 
 const { after, before, test } = require("node:test");
+const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 const { readFileSync } = require("node:fs");
+const { dirname } = require("node:path");
 const {
   assertFails,
   assertSucceeds,
   initializeTestEnvironment
 } = require("@firebase/rules-unit-testing");
 const { get, ref, serverTimestamp, set } = require("firebase/database");
+const { buildOperatorCommand } = require("../../cloud/netlify/lib/operator-control-contract");
 
 const PROJECT_ID = "demo-well-pump-control";
 const SITE = "v1/sites/well-main";
@@ -19,6 +23,16 @@ let publisherDatabase;
 let v3PublisherDatabase;
 let eventBoardWriterDatabase;
 let wrongEventBoardWriterDatabase;
+
+const productionOperatorCommand = buildOperatorCommand({
+  action: "restart-shelly1",
+  clientRequestId: "browser_12345678"
+}, {
+  commandId: "op_1234567890abcdef",
+  commandSequence: 12,
+  targetSessionId: "boot_12345678",
+  requestedAtMs: 1800000000000
+});
 
 function emulatorAddress() {
   const value = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
@@ -126,13 +140,8 @@ before(async () => {
   }).database();
   await environment.withSecurityRulesDisabled(async context => {
     const admin = context.database();
-    await set(ref(admin, `${DEVICE}/operatorControl/command`), {
-      schemaVersion: 1, kind: "operator-command", commandId: "op_1234567890abcdef",
-      commandSequence: 12, clientRequestId: "browser_12345678", siteId: "well-main",
-      targetDeviceId: "tab5-well-main", targetSessionId: "boot_12345678",
-      commandType: "restart-shelly1", requestedAtMs: 1800000000000,
-      expiresAtMs: 1800000045000, requestedBy: { type: "user", id: "authenticated-owner" }, payload: {}
-    });
+    await set(ref(admin, `${DEVICE}/operatorControl/command`),
+      productionOperatorCommand);
     await set(ref(admin, `${SITE}/control/globalEnable`), false);
     await set(ref(admin, `${SITE}/rules/current`), { packageVersion: 1, contentHash: "0".repeat(64) });
   });
@@ -160,6 +169,28 @@ test("fixed device can read only addressed coordination paths", async () => {
   for (const path of [`${DEVICE}/currentObservation`, `${DEVICE}/presence`, `${DEVICE}/syncState`, `${DEVICE}/operatorControl/result`, `${DEVICE}/operatorControl`]) {
     await assertFails(get(ref(deviceDatabase, path)));
   }
+});
+
+test("production operator command survives RTDB and enters the actual Tab5 validator", async () => {
+  const probe = process.env.TAB5_OPERATOR_PROBE;
+  assert.ok(probe, "TAB5_OPERATOR_PROBE must point to the tab5-working validation adapter");
+  await environment.withSecurityRulesDisabled(async context => {
+    await set(ref(context.database(), `${DEVICE}/operatorControl/command`),
+      productionOperatorCommand);
+  });
+  const stored = await assertSucceeds(
+    get(ref(deviceDatabase, `${DEVICE}/operatorControl/command`)));
+  assert.deepEqual(stored.val(), productionOperatorCommand);
+  const validation = spawnSync("python3", [probe], {
+    cwd: dirname(probe),
+    input: JSON.stringify(stored.val()),
+    encoding: "utf8"
+  });
+  assert.equal(validation.status, 0,
+    `Tab5 validator rejected RTDB value: ${validation.stderr || validation.stdout}`);
+  assert.deepEqual(JSON.parse(validation.stdout), {
+    accepted: true, commandSequence: productionOperatorCommand.commandSequence
+  });
 });
 
 test("unauthenticated, broad, cross-device, cross-site, and unrelated access is denied", async () => {

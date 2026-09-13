@@ -36,7 +36,7 @@ function validateOperatorRequest(value) {
 function buildOperatorCommand(request, identity) {
   const requestedAtMs = identity.requestedAtMs;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: "operator-command",
     commandId: identity.commandId,
     commandSequence: identity.commandSequence,
@@ -48,7 +48,7 @@ function buildOperatorCommand(request, identity) {
     requestedAtMs,
     expiresAtMs: requestedAtMs + COMMAND_LIFETIME_MS,
     requestedBy: { type: "user", id: "authenticated-owner" },
-    payload: {}
+    payload: { kind: "none" }
   };
 }
 
@@ -63,6 +63,16 @@ function matchingResult(command, result) {
     result.commandSequence === command.commandSequence &&
     result.targetSessionId === command.targetSessionId &&
     result.commandType === command.commandType;
+}
+
+function confirmedRestartResult(command, result, nowMs) {
+  return matchingResult(command, result) &&
+    result.outcome === "confirmed-completed" &&
+    result.detailCode === "tab5-restart-new-session" &&
+    result.reportingSessionId !== command.targetSessionId &&
+    Number.isInteger(result.reportedAtMs) &&
+    result.reportedAtMs >= command.requestedAtMs &&
+    result.reportedAtMs <= nowMs;
 }
 
 function stagedRestartConsequence(rulesV3State) {
@@ -115,19 +125,33 @@ function deriveOperatorStatus(snapshot, nowMs) {
     requestedAtMs: command.requestedAtMs,
     expiresAtMs: command.expiresAtMs
   };
+  const unlinkedRestartSession = command.commandType === "restart-tab5" &&
+    freshPresence(presence, nowMs) &&
+    presence.sessionId !== command.targetSessionId &&
+    presence.lastSeenAtMs > command.requestedAtMs;
 
-  if (command.commandType === "restart-tab5" && freshPresence(presence, nowMs) &&
-      presence.sessionId !== command.targetSessionId &&
-      presence.lastSeenAtMs > command.requestedAtMs) {
-    base.outcome = "confirmed-completed";
-    base.detailCode = "fresh-tab5-session";
-    return base;
-  }
   if (matchingResult(command, result)) {
-    base.outcome = result.outcome;
-    base.detailCode = result.detailCode;
-    base.relayRestoration = result.relayRestoration;
-    if (result.outcome !== "accepted" || nowMs <= command.expiresAtMs + COMPLETION_GRACE_MS) return base;
+    if (command.commandType === "restart-tab5" &&
+        result.outcome === "confirmed-completed") {
+      if (confirmedRestartResult(command, result, nowMs)) {
+        base.outcome = result.outcome;
+        base.detailCode = result.detailCode;
+        base.relayRestoration = result.relayRestoration;
+        return base;
+      }
+    } else {
+      base.outcome = result.outcome;
+      base.detailCode = result.detailCode;
+      base.relayRestoration = result.relayRestoration;
+      if (result.outcome !== "accepted" ||
+          (!unlinkedRestartSession &&
+           nowMs <= command.expiresAtMs + COMPLETION_GRACE_MS)) return base;
+    }
+  }
+  if (unlinkedRestartSession) {
+    base.outcome = "unknown";
+    base.detailCode = "new-session-without-request-evidence";
+    return base;
   }
   if (nowMs > command.expiresAtMs) {
     base.outcome = "unknown";

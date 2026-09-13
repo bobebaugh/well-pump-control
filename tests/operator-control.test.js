@@ -25,30 +25,86 @@ test("operator command is closed, session-targeted, and lives exactly 45 seconds
   assert.equal(validateOperatorRequest(request), request);
   assert.equal(command.expiresAtMs - command.requestedAtMs, COMMAND_LIFETIME_MS);
   assert.equal(command.targetSessionId, presence.sessionId);
-  assert.deepEqual(command.payload, {});
+  assert.equal(command.schemaVersion, 2);
+  assert.deepEqual(command.payload, { kind: "none" });
   assert.throws(() => validateOperatorRequest({ ...request, action: "clear-events" }), /invalid_request/);
 });
 
-test("status distinguishes not delivered, accepted, confirmed, failed, and unknown", () => {
+test("status distinguishes not delivered, accepted, failed, and unknown", () => {
   const base = { command, presence };
   assert.equal(deriveOperatorStatus(base, now + 1000).outcome, "not-delivered");
   assert.equal(deriveOperatorStatus({ ...base, result: {
     commandId: command.commandId, commandSequence: 7,
     targetSessionId: command.targetSessionId, commandType: command.commandType,
     outcome: "accepted", detailCode: "monitor-request-accepted",
-    relayRestoration: "unconfirmed"
+    relayRestoration: "unconfirmed", reportingSessionId: presence.sessionId,
+    reportedAtMs: now + 500
   } }, now + 1000).outcome, "accepted");
   assert.equal(deriveOperatorStatus(base, command.expiresAtMs + 1).outcome, "unknown");
   assert.equal(deriveOperatorStatus({ ...base, result: {
     commandId: command.commandId, commandSequence: 7,
     targetSessionId: command.targetSessionId, commandType: command.commandType,
     outcome: "failed", detailCode: "monitor-event-unavailable",
-    relayRestoration: "not-applicable"
+    relayRestoration: "not-applicable", reportingSessionId: presence.sessionId,
+    reportedAtMs: now + 500
   } }, now + 1000).outcome, "failed");
+});
+
+test("Tab5 restart completion requires request-linked new-session evidence", () => {
   const restart = { ...command, commandType: "restart-tab5" };
-  assert.equal(deriveOperatorStatus({ command: restart, presence: {
-    sessionId: "boot_BBBBBBBB", lastSeenAtMs: now + 5000
-  } }, now + 6000).outcome, "confirmed-completed");
+  const newPresence = { sessionId: "boot_BBBBBBBB", lastSeenAtMs: now + 5000 };
+  const completed = {
+    commandId: restart.commandId, commandSequence: restart.commandSequence,
+    targetSessionId: restart.targetSessionId, commandType: restart.commandType,
+    reportingSessionId: newPresence.sessionId, outcome: "confirmed-completed",
+    detailCode: "tab5-restart-new-session", reportedAtMs: now + 4000,
+    relayRestoration: "not-applicable"
+  };
+  assert.equal(deriveOperatorStatus({
+    command: restart, result: completed, presence: newPresence
+  }, now + 6000).outcome, "confirmed-completed");
+  assert.equal(deriveOperatorStatus({
+    command: restart, result: completed,
+    presence: { sessionId: "boot_CCCCCCCC", lastSeenAtMs: now + 9000 }
+  }, now + 10_000).outcome, "confirmed-completed");
+
+  const lostAllAcknowledgments = deriveOperatorStatus({
+    command: restart, presence: newPresence
+  }, now + 6000);
+  assert.equal(lostAllAcknowledgments.outcome, "unknown");
+  assert.equal(lostAllAcknowledgments.detailCode,
+    "new-session-without-request-evidence");
+
+  const expiredManualRestart = deriveOperatorStatus({
+    command: restart,
+    presence: { sessionId: "boot_MANUAL00", lastSeenAtMs: restart.expiresAtMs + 5000 }
+  }, restart.expiresAtMs + 6000);
+  assert.equal(expiredManualRestart.outcome, "unknown");
+  assert.equal(expiredManualRestart.detailCode, "new-session-without-request-evidence");
+
+  const rejected = { ...completed, reportingSessionId: restart.targetSessionId,
+    outcome: "not-delivered", detailCode: "command-expired", reportedAtMs: now + 1000 };
+  const rejectedThenRestarted = deriveOperatorStatus({
+    command: restart, result: rejected, presence: newPresence
+  }, now + 6000);
+  assert.equal(rejectedThenRestarted.outcome, "not-delivered");
+  assert.equal(rejectedThenRestarted.detailCode, "command-expired");
+
+  const acceptedLostCompletion = { ...completed,
+    reportingSessionId: restart.targetSessionId, outcome: "accepted",
+    detailCode: "tab5-restart-scheduled", reportedAtMs: now + 1000 };
+  const lostAcknowledgment = deriveOperatorStatus({
+    command: restart, result: acceptedLostCompletion, presence: newPresence
+  }, now + 6000);
+  assert.equal(lostAcknowledgment.outcome, "unknown");
+  assert.equal(lostAcknowledgment.detailCode, "new-session-without-request-evidence");
+
+  const wrongCompletion = deriveOperatorStatus({
+    command: restart,
+    result: { ...completed, detailCode: "fresh-tab5-session" },
+    presence: newPresence
+  }, now + 6000);
+  assert.equal(wrongCompletion.outcome, "unknown");
 });
 
 test("status exposes explicit Monitor, relay, staged adoption, and Shelly evidence", () => {

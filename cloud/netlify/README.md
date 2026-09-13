@@ -24,7 +24,7 @@ deterministic event-record-v2 history, and conditionally mirrors only the newest
 accepted revision to RTDB. It does not interpret relay consequences or influence
 Tab5 lifecycle/control state.
 
-The coordinated M6.36 source adds the authenticated `operator-control` endpoint.
+The coordinated M6.37 source adds the authenticated `operator-control` endpoint.
 It uses the existing pilot key, requires fresh Tab5 presence, and transactionally
 replaces one RTDB command slot with a 45-second, exact-session request. The endpoint
 does not retry an ambiguous command and reports device results/fresh-session
