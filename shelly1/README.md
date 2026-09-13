@@ -101,23 +101,14 @@ a Tab5 restart, Clear Events, or Monitor.
 
 Not set by the script — configure these on the Shelly before installing:
 
-- **Delete leftover components by hand, not just the old script.** Virtual
-  components outlive the script that declared them and survive a reboot, so
-  removing a previous script leaves its `IsLocked` and `loCntr` behind. Check
-  Settings → User-defined components and delete every duplicate before installing.
-  Tab5's `normalize_shelly1_components` rejects any name it finds twice, and it
-  rejects the **entire acquisition** — so a duplicate makes the device read as
-  unavailable rather than as an obvious duplicate fault. Exactly six components
-  should remain, one per name.
-- **Only one script may declare these names.** A second script sharing them
-  produces the duplicates above, and two scripts would both tick `IsLocked` down.
-  Setting values from the UI, an RPC call, or an external tool is fine — the script
-  adopts external writes deliberately.
+- **Exactly one script may declare these names.** Components declared in `@meta`
+  are owned by the declaring script. Two scripts declaring the same names create
+  two sets, and Tab5's `normalize_shelly1_components` rejects any name it finds
+  twice — rejecting the **entire acquisition**, so the device reads as unavailable
+  rather than as an obvious duplicate fault. Exactly six should exist, one per name.
 - **Mind the ten-component budget.** This script uses six of the device's ten
-  slots. If leftovers have accumulated, delete them before installing or the
-  declaration will fail partway, leaving some handles undefined. If slots get
-  tight, `MaxLOcntr` and `TimeToResetLOcntr` are the two least likely to need
-  field tuning and could become constants in the script.
+  slots. If slots get tight, `MaxLOcntr` and `TimeToResetLOcntr` are the two least
+  likely to need field tuning and could become constants in the script.
 - `switch:0` power-on default **on**, so RLY0 closes on boot and a script failure
   leaves the pump able to run.
 - `input:0` in a mode that reports a level in `status.state`, since edges are taken
@@ -130,6 +121,38 @@ It must be the **first line of the file**. It is what declares the six virtual
 components; anywhere else and `Script.getVcHandle` returns `undefined` for every
 one of them. The script guards against that and logs a warning rather than
 throwing, but nothing is published to Tab5 until it is fixed.
+
+### Removing components
+
+Components declared in `@meta` are **owned by this script** and cannot be deleted
+from the web UI. Per the Shelly documentation they are "created automatically when
+the script starts, updated if the declaration changes, and removed when the script
+is deleted," and "components whose role was removed from the declaration are
+deleted." So there are two clean ways to remove one:
+
+1. Delete the script — all six go with it.
+2. Remove that role from the `@meta` line and restart the script — only that
+   component goes.
+
+Components created instead through the `Virtual.Add` RPC belong to no script, are
+deletable from the UI, and survive script changes. Leftovers you have been able to
+delete by hand came from that route; ones you cannot delete are script-owned.
+
+### Other scripts using these components
+
+A second script must **not** re-declare the names — that is what produces
+duplicates. It attaches to the existing components instead:
+
+```javascript
+let lock = Virtual.getHandle("number:202");   // resolve the id by name first
+lock.setValue(0);
+```
+
+Handles expose `getValue`, `setValue`, `getStatus`, `getConfig`, `setConfig`, `on`
+and `off`. Resolve the id by matching `config.name`, the same way Tab5 does and for
+the same reason — the numeric id is assigned at creation and is not stable across a
+rebuild. This script adopts external writes to `IsLocked` and `loCntr` deliberately,
+so a utility written this way keeps working.
 
 ## Status
 
