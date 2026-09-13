@@ -12,6 +12,9 @@ const sw0Value = document.querySelector("#sw0-value");
 const rly0Value = document.querySelector("#rly0-value");
 const monitorButton = document.querySelector("#monitor-toggle");
 const monitorStatus = document.querySelector("#monitor-status");
+const eventStatus = document.querySelector("#event-browser-status");
+const openEvents = document.querySelector("#open-events");
+const closedEvents = document.querySelector("#closed-events");
 
 const NORMAL_REFRESH_MS = 60000;
 const LIVE_REFRESH_MS = 1000;
@@ -93,7 +96,28 @@ function clearTelemetry() {
   pfValue.textContent = "—";
   setBinaryValue(sw0Value, null);
   setBinaryValue(rly0Value, null);
-  setHealth(shelly1Row, "unavailable", "Awaiting Tab5 telemetry · RLY0 not wired");
+  setHealth(shelly1Row, "unavailable", "Awaiting Tab5 telemetry");
+}
+
+function eventTime(event) { const value = event?.opening?.observedAt || event?.firstReportedAt || event?.detectedAt || event?.restartDetectedAt; return value ? formatTime(new Date(value)) : "Unknown device time"; }
+function eventLink(event) { const cycle = Math.max(0, (event?.opening?.cycleSequence || 0) - 3); return `/records.html?session=${encodeURIComponent(event.sessionId || "")}&cycle=${cycle}&event=${encodeURIComponent(event.eventDefinitionId || "")}`; }
+function escapeEventHtml(value) { return String(value ?? "").replace(/[&<>\"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]); }
+function eventCard(event, close = null) { const severity = String(event.severity || "Info").toLowerCase(); const closure = close ? `<span>Closed by ${escapeEventHtml(close.closeReason)}; detection ${escapeEventHtml(eventTime(close))}. Device close time unknown.</span>` : "<span>Open</span>"; return `<article class="event-card ${severity}"><strong>${escapeEventHtml(event.severity || "Info")} · ${escapeEventHtml(event.displayName || event.eventDefinitionId)}</strong><span>Opened ${escapeEventHtml(eventTime(event))}</span>${closure}<a href="${eventLink(event)}">View nearby observations</a></article>`; }
+async function checkEvents() {
+  try {
+    const data = await fetchStatus("/.netlify/functions/record-browser?view=home");
+    const board = data.board;
+    const open = Object.values(board?.openEvents || {});
+    openEvents.innerHTML = open.length ? open.map(entry => eventCard({ ...entry, ...entry.slot, opening: entry.slot?.opening })).join("") : "<p class='event-empty'>No open events reported by the latest successful board.</p>";
+    closedEvents.innerHTML = data.recentClosed?.length ? data.recentClosed.map(item => eventCard(item.open, item.close)).join("") : "<p class='event-empty'>No recent closed occurrences.</p>";
+    const ageSeconds = board?.lastReportAt ? Math.max(0, Math.round((Date.now() - Date.parse(board.lastReportAt)) / 1000)) : null;
+    eventStatus.textContent = board ? (ageSeconds > 120 ? `Event board is stale (${ageSeconds}s since the last successful board); open events are retained.` : `Last successful board ${formatTime(new Date(board.lastReportAt))}.`) : "No successful event board is stored yet.";
+    localStorage.setItem("pilotLastEventBoard", JSON.stringify({ board, at: Date.now() }));
+  } catch (error) {
+    const prior = JSON.parse(localStorage.getItem("pilotLastEventBoard") || "null");
+    if (prior?.board) { openEvents.innerHTML = Object.values(prior.board.openEvents || {}).map(entry => eventCard({ ...entry, ...entry.slot, opening: entry.slot?.opening })).join(""); eventStatus.textContent = `Event board read failed; showing last known board from ${formatTime(new Date(prior.at))}.`; }
+    else eventStatus.textContent = error.body?.code === "configuration_missing" ? "Event browser configuration is unavailable." : error.body?.code === "read_denied" ? "Event board read is denied by the current service configuration." : "Event board read failed.";
+  }
 }
 
 function updateMonitorControls() {
@@ -191,4 +215,6 @@ monitorButton.addEventListener("click", () => {
 
 checkServices();
 checkTelemetry();
+checkEvents();
 setInterval(checkServices, 300000);
+setInterval(checkEvents, 60000);

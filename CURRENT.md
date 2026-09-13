@@ -1,15 +1,18 @@
 # Current status — Pilot line
 
-## Now — M6.35 initial bench closeout
+## Now — online browser coding unit awaiting owner review
 
 The owner authorized operating-branch promotion and a design handoff on 2026-09-13.
 M6.35 production, ingestion and event-board synchronization have initial real-device
 and Firestore evidence. This is not completion of all outage or memory tests.
 
-Read [the browser design handoff](docs/online-browser-design-handoff.md) for the
-current next-unit scope, source bases, evidence and unresolved issues. It supersedes
-older NEXT-UNIT.md/editor-review next-step suggestions. Verify live branch tips;
-this document does not contain its own future commit hash.
+The approved online event and durable-record browser coding unit is implemented on
+`pilot-working` and awaits owner review. It adds bounded read-only browser endpoints,
+all-open event presentation, V3 occurrence joining, rules-derived viewing columns,
+observation-time browsing, session/cycle navigation, and a whole-local-day raw CSV
+export. It does not deploy indexes, change rules, publish packages, or operate
+hardware. Read [the browser design handoff](docs/online-browser-design-handoff.md)
+for its evidence and deployment prerequisite.
 
 The latest owner startup runs M6.35 on both CPU A and CPU B with package V17:
 20260913010057-event-v3-v17, hash prefix 207cca64ea14.
@@ -35,10 +38,9 @@ screenshots represent different occurrences, not a verified matching pair.
 
 ## Next
 
-Fresh bounded design review for the online event/durable-record browser, followed
-by one coding prompt and owner discussion before implementation. Home shows all
-open events first and recent closed events; durable navigation uses selectable
-rules-derived columns and event-time links. See the handoff for full requirements.
+Owner review of the browser unit and one concise real-data browser test cycle. If the
+owner accepts it, decide separately whether to promote source and deploy the required
+Firestore indexes. Do not treat source promotion as index deployment.
 
 ## Later / unresolved
 

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#09111f">
+  <title>Durable records — Well Pump Monitoring</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/records.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div><p class="eyebrow">PRIVATE WELL · OBSERVATIONAL PILOT</p><h1>Durable records</h1></div>
+    <div class="topbar-actions"><a class="nav-link" href="/">Home</a><a class="nav-link" href="/rules-engine.html">Rules Engine</a></div>
+  </header>
+  <main class="records-main">
+    <section class="panel records-toolbar">
+      <div><p class="kicker">OBSERVATION TIME</p><h2>Durable observation browser</h2><small id="timezone-label"></small></div>
+      <div class="records-actions">
+        <label>Local date/time<input id="record-at" type="datetime-local"></label>
+        <button id="latest-records" class="primary-button" type="button">Latest</button>
+        <button id="receipt-records" class="secondary-button" type="button">Receipt-time fallback</button>
+        <button id="older-records" class="secondary-button" type="button">Older</button>
+        <button id="newer-records" class="secondary-button" type="button" disabled>Newer</button>
+        <label>Export local date<input id="record-day" type="date"></label>
+        <button id="export-day" class="secondary-button" type="button">Export whole day CSV</button>
+      </div>
+    </section>
+    <p id="records-status" class="browser-status" aria-live="polite">Loading durable records…</p>
+    <section class="panel column-panel"><div><p class="kicker">SAVED WORKING RULES</p><h2>Columns</h2></div><div id="column-picker" class="column-picker"></div></section>
+    <section class="panel records-table-panel"><div id="records-table" class="records-table"></div></section>
+    <section id="history-panel" class="panel history-panel" hidden><div class="panel-heading"><div><p class="kicker">EVENT HISTORY</p><h2>Occurrences</h2></div></div><div id="history-list" class="event-list"></div></section>
+  </main>
+</body>
+</html>

@@ -21,7 +21,7 @@
         <button type="button" id="monitor-toggle" class="monitor-button">Start 15-minute live view</button>
         <small id="monitor-status">Standard 60-second refresh</small>
       </div>
-      <div class="pilot-badge"><span></span>Monitor only</div>
+      <div class="pilot-badge"><span></span>Observational pilot</div>
     </div>
   </header>
 
@@ -63,7 +63,7 @@
             <p class="kicker">SYSTEM OVERVIEW</p>
             <h2>Pressure system</h2>
           </div>
-          <span class="tag unavailable">Pressure sensor not installed</span>
+          <span class="tag unavailable">Pressure telemetry unavailable</span>
         </div>
 
         <div class="tank-scene" aria-label="Future pressure tank visualization">
@@ -138,13 +138,13 @@
           </div>
           <div class="health-row" id="health-shelly1">
             <span class="health-dot unavailable"></span>
-            <div><strong>Shelly 1</strong><small>Awaiting Tab5 telemetry · RLY0 not wired</small></div>
+            <div><strong>Shelly 1</strong><small>Awaiting Tab5 telemetry</small></div>
           </div>
         </div>
 
         <div class="safety-note">
           <strong>Control authority</strong>
-          <p>SW0 and RLY0 are status-only on this page. RLY0 is installed but not wired to the pump circuit.</p>
+          <p>SW0 and RLY0 are status-only on this page. This page does not issue device controls.</p>
         </div>
       </article>
     </section>
@@ -153,18 +153,15 @@
       <div class="panel-heading">
         <div>
           <p class="kicker">EVENTS</p>
-          <h2>Recent activity</h2>
+          <h2>Open events and recent occurrences</h2>
         </div>
-        <span class="tag">Newest first</span>
+        <a class="secondary-button compact-button" href="/records.html">Latest durable records</a>
       </div>
-      <div class="event-table" role="table" aria-label="Recent events">
-        <div class="event-head" role="row">
-          <span>Time</span><span>Type</span><span>Source</span><span>Details</span>
-        </div>
-        <div class="event-empty" role="row">
-          <span>No events have been received.</span>
-        </div>
-      </div>
+      <div id="event-browser-status" class="browser-status">Loading event board…</div>
+      <div id="open-events" class="event-list" aria-live="polite"></div>
+      <h3 class="event-subheading">Recent closed occurrences</h3>
+      <div id="closed-events" class="event-list"></div>
+      <a class="history-link" href="/records.html?history=1">Browse event history</a>
     </section>
   </main>
 

@@ -2,6 +2,9 @@
   "database": {
     "rules": "firebase/rtdb.rules.json"
   },
+  "firestore": {
+    "indexes": "firestore.indexes.json"
+  },
   "emulators": {
     "database": {
       "port": 9000

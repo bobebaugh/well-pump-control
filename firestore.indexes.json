@@ -1,0 +1,48 @@
+{
+  "indexes": [
+    { "collectionGroup": "eventRecords", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "schemaVersion", "order": "ASCENDING" },
+      { "fieldPath": "deviceId", "order": "ASCENDING" },
+      { "fieldPath": "recordType", "order": "ASCENDING" },
+      { "fieldPath": "firstReportedAt", "order": "DESCENDING" }
+    ] },
+    { "collectionGroup": "observations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "schemaVersion", "order": "ASCENDING" },
+      { "fieldPath": "deviceId", "order": "ASCENDING" },
+      { "fieldPath": "observedAt", "order": "DESCENDING" }
+    ] },
+    { "collectionGroup": "observations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "schemaVersion", "order": "ASCENDING" },
+      { "fieldPath": "deviceId", "order": "ASCENDING" },
+      { "fieldPath": "time.observedAt", "order": "DESCENDING" }
+    ] },
+    { "collectionGroup": "observations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "schemaVersion", "order": "ASCENDING" },
+      { "fieldPath": "deviceId", "order": "ASCENDING" },
+      { "fieldPath": "observedAt", "order": "ASCENDING" }
+    ] },
+    { "collectionGroup": "observations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "schemaVersion", "order": "ASCENDING" },
+      { "fieldPath": "deviceId", "order": "ASCENDING" },
+      { "fieldPath": "time.observedAt", "order": "ASCENDING" }
+    ] },
+    { "collectionGroup": "observations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "schemaVersion", "order": "ASCENDING" },
+      { "fieldPath": "deviceId", "order": "ASCENDING" },
+      { "fieldPath": "receivedAt", "order": "DESCENDING" }
+    ] },
+    { "collectionGroup": "observations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "schemaVersion", "order": "ASCENDING" },
+      { "fieldPath": "deviceId", "order": "ASCENDING" },
+      { "fieldPath": "sessionId", "order": "ASCENDING" },
+      { "fieldPath": "sequence", "order": "ASCENDING" }
+    ] },
+    { "collectionGroup": "observations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "schemaVersion", "order": "ASCENDING" },
+      { "fieldPath": "deviceId", "order": "ASCENDING" },
+      { "fieldPath": "sessionId", "order": "ASCENDING" },
+      { "fieldPath": "cycleSequence", "order": "ASCENDING" }
+    ] }
+  ],
+  "fieldOverrides": []
+}
