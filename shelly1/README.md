@@ -7,6 +7,10 @@ output is a Pilot–Tab5 interface, not because Tab5 executes them.
 | File | Purpose |
 | --- | --- |
 | `anti-chatter.js` | Short-cycle protection. Owns RLY0, publishes `IsLocked` and `loCntr`. |
+| `test-harness.js` | Bench tool. Attaches to those two components and counts `IsLocked` down. Declares nothing, never touches the relay. |
+
+Pause `anti-chatter.js` before starting `test-harness.js`. Both tick `IsLocked`
+down once a second, so running them together halves every lock.
 
 ## Authority
 
