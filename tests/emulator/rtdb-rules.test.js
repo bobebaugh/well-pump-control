@@ -465,32 +465,56 @@ test("an ETag conflict does not overwrite the winning command", async () => {
     commandId: "op_loser12345678900", commandSequence: 31,
     targetSessionId: "boot_12345678", requestedAtMs: 1800000200001
   });
-  // ETag compare-and-set is REST-only, so this exercises the conflict semantics
-  // the store depends on over the emulator's REST endpoint. The namespace comes
-  // from the configured database rather than a guessed convention.
+  // ETag compare-and-set is REST-only, so the conflict semantics the store
+  // depends on are exercised over the emulator's REST endpoint. Production
+  // authenticates every RTDB request with ?auth=<idToken>; the emulator's
+  // equivalent for a test harness is the admin bearer token. An unauthenticated
+  // request is subject to the rules, is denied at this path, and returns no
+  // ETag at all. Authorization for the operator identity itself is proven by
+  // the preceding tests, so this one isolates conflict behavior.
   const { host, port } = emulatorAddress();
   const configuredUrl = operatorDatabase?.app?.options?.databaseURL;
   const namespace = configuredUrl
     ? new URL(configuredUrl).searchParams.get("ns") || PROJECT_ID
     : PROJECT_ID;
   const url = `http://${host}:${port}/${path}.json?ns=${namespace}`;
-  const read = await fetch(url, { headers: { "X-Firebase-ETag": "true" } });
-  const etag = read.headers.get("etag");
-  assert.ok(etag, "the emulator must return an ETag for compare-and-set");
-  const first = await fetch(url, {
-    method: "PUT", headers: { "Content-Type": "application/json", "If-Match": etag },
+  const admin = { Authorization: "Bearer owner" };
+  // Read each body exactly once so a failure reports the status and body that
+  // the previous opaque "no ETag" assertion could not.
+  const send = async options => {
+    const response = await fetch(url, options);
+    const body = (await response.text()).slice(0, 200);
+    return { status: response.status, etag: response.headers.get("etag"), body };
+  };
+
+  const read = await send({ headers: { ...admin, "X-Firebase-ETag": "true" } });
+  assert.equal(read.status, 200, `conditional read failed: ${read.status} ${read.body}`);
+  assert.ok(read.etag, `no ETag on ${url} -> ${read.status} ${read.body}`);
+
+  const first = await send({
+    method: "PUT",
+    headers: { ...admin, "Content-Type": "application/json", "If-Match": read.etag },
     body: JSON.stringify(winner)
   });
-  assert.equal(first.status, 200);
+  assert.equal(first.status, 200, `winning write failed: ${first.status} ${first.body}`);
+
   // The second writer still holds the stale ETag and must be refused outright.
-  const second = await fetch(url, {
-    method: "PUT", headers: { "Content-Type": "application/json", "If-Match": etag },
+  const second = await send({
+    method: "PUT",
+    headers: { ...admin, "Content-Type": "application/json", "If-Match": read.etag },
     body: JSON.stringify(loser)
   });
-  assert.equal(second.status, 412);
+  assert.equal(second.status, 412, `stale write was not refused: ${second.status} ${second.body}`);
+
   await environment.withSecurityRulesDisabled(async context => {
     const stored = await get(ref(context.database(), path));
-    assert.equal(stored.val().commandId, winner.commandId);
+    assert.equal(stored.val().commandId, winner.commandId, "the loser overwrote the winner");
+    assert.deepEqual(stored.val(), winner);
+  });
+  // The winning record is also what the device and the operator identity read.
+  const throughRules = await get(ref(operatorDatabase, path));
+  assert.equal(throughRules.val().commandId, winner.commandId);
+  await environment.withSecurityRulesDisabled(async context => {
     await set(ref(context.database(), path), productionOperatorCommand);
   });
 });
