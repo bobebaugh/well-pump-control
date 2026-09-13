@@ -8,6 +8,7 @@
           "devices": {
             "tab5-well-main": {
               "currentObservation": {
+                ".read": "auth != null && auth.uid == 'netlify-operator-control' && auth.token.siteId == 'well-main' && auth.token.deviceId == 'tab5-well-main' && auth.token.purpose == 'operator-control'",
                 ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.hasChildren(['schemaVersion', 'siteId', 'deviceId', 'sessionId', 'sequence', 'observedAt', 'receivedAtMs', 'source', 'values', 'status']) && newData.child('schemaVersion').val() == 1 && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('sessionId').isString() && newData.child('sequence').isNumber() && newData.child('sequence').val() >= 0 && newData.child('observedAt').isString() && newData.child('receivedAtMs').isNumber() && newData.child('source').val() == 'tab5' && newData.child('values').hasChildren() && newData.child('status').hasChildren()"
               },
               "currentEventBoard": {
@@ -37,15 +38,41 @@
                 "$other": { ".validate": false }
               },
               "presence": {
+                ".read": "auth != null && auth.uid == 'netlify-operator-control' && auth.token.siteId == 'well-main' && auth.token.deviceId == 'tab5-well-main' && auth.token.purpose == 'operator-control'",
                 ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.hasChildren(['schemaVersion', 'siteId', 'deviceId', 'sessionId', 'lastSeenAtMs']) && newData.child('schemaVersion').val() == 1 && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('sessionId').isString() && newData.child('lastSeenAtMs').isNumber()"
               },
               "syncState": {
                 ".write": "auth != null && auth.uid == 'tab5-well-main' && newData.hasChildren(['schemaVersion', 'exchangeId', 'siteId', 'deviceId', 'sessionId', 'lastSeenCommandSequence', 'lastAppliedCommandSequence', 'result', 'lastSyncAtMs']) && newData.child('schemaVersion').val() == 1 && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('exchangeId').isString() && newData.child('sessionId').isString() && newData.child('lastSeenCommandSequence').isNumber() && newData.child('lastSeenCommandSequence').val() >= 0 && newData.child('lastAppliedCommandSequence').isNumber() && newData.child('lastAppliedCommandSequence').val() >= 0 && newData.child('result').isString() && newData.child('lastSyncAtMs').isNumber()"
               },
               "operatorControl": {
+                ".read": "auth != null && auth.uid == 'netlify-operator-control' && auth.token.siteId == 'well-main' && auth.token.deviceId == 'tab5-well-main' && auth.token.purpose == 'operator-control'",
                 "command": {
                   ".read": "auth != null && auth.uid == 'tab5-well-main'",
-                  ".write": false
+                  ".write": "auth != null && auth.uid == 'netlify-operator-control' && auth.token.siteId == 'well-main' && auth.token.deviceId == 'tab5-well-main' && auth.token.purpose == 'operator-control'",
+                  ".validate": "newData.hasChildren(['schemaVersion', 'kind', 'commandId', 'commandSequence', 'clientRequestId', 'siteId', 'targetDeviceId', 'targetSessionId', 'commandType', 'requestedAtMs', 'expiresAtMs', 'requestedBy', 'payload']) && newData.child('schemaVersion').val() == 2 && newData.child('kind').val() == 'operator-command' && newData.child('commandId').isString() && newData.child('commandId').val().matches(/^op_[A-Za-z0-9_-]{8,128}$/) && newData.child('commandSequence').isNumber() && newData.child('commandSequence').val() >= 1 && newData.child('clientRequestId').isString() && newData.child('clientRequestId').val().matches(/^[A-Za-z0-9_-]{8,128}$/) && newData.child('siteId').val() == 'well-main' && newData.child('targetDeviceId').val() == 'tab5-well-main' && newData.child('targetSessionId').isString() && newData.child('targetSessionId').val().matches(/^[A-Za-z0-9_-]{8,64}$/) && (newData.child('commandType').val() == 'enter-user-monitor' || newData.child('commandType').val() == 'restart-tab5' || newData.child('commandType').val() == 'restart-shelly1') && newData.child('requestedAtMs').isNumber() && newData.child('requestedAtMs').val() >= 0 && newData.child('expiresAtMs').isNumber() && newData.child('expiresAtMs').val() > newData.child('requestedAtMs').val()",
+                  "schemaVersion": { ".validate": true },
+                  "kind": { ".validate": true },
+                  "commandId": { ".validate": true },
+                  "commandSequence": { ".validate": true },
+                  "clientRequestId": { ".validate": true },
+                  "siteId": { ".validate": true },
+                  "targetDeviceId": { ".validate": true },
+                  "targetSessionId": { ".validate": true },
+                  "commandType": { ".validate": true },
+                  "requestedAtMs": { ".validate": true },
+                  "expiresAtMs": { ".validate": true },
+                  "requestedBy": {
+                    ".validate": "newData.hasChildren(['type', 'id']) && newData.child('type').val() == 'user' && newData.child('id').isString() && newData.child('id').val().length > 0 && newData.child('id').val().length <= 128",
+                    "type": { ".validate": true },
+                    "id": { ".validate": true },
+                    "$other": { ".validate": false }
+                  },
+                  "payload": {
+                    ".validate": "newData.hasChildren(['kind']) && newData.child('kind').val() == 'none'",
+                    "kind": { ".validate": true },
+                    "$other": { ".validate": false }
+                  },
+                  "$other": { ".validate": false }
                 },
                 "sequence": { ".read": false, ".write": false },
                 "result": {
@@ -68,7 +95,7 @@
                 }
               },
               "rulesV3State": {
-                ".read": "auth != null && auth.uid == 'tab5-well-main'",
+                ".read": "auth != null && (auth.uid == 'tab5-well-main' || (auth.uid == 'netlify-operator-control' && auth.token.siteId == 'well-main' && auth.token.deviceId == 'tab5-well-main' && auth.token.purpose == 'operator-control'))",
                 ".write": "auth != null && auth.uid == 'tab5-well-main'",
                 ".validate": "newData.hasChildren(['schemaVersion', 'kind', 'siteId', 'deviceId', 'sessionId', 'executionEnabled', 'executionState', 'reportedAtMs']) && newData.child('schemaVersion').val() == 2 && newData.child('kind').val() == 'rules-v3-runtime-state' && newData.child('siteId').val() == 'well-main' && newData.child('deviceId').val() == 'tab5-well-main' && newData.child('sessionId').isString() && newData.child('sessionId').val().length > 0 && newData.child('executionEnabled').isBoolean() && ((newData.child('executionEnabled').val() == true && newData.child('executionState').val() == 'running' && newData.child('running').exists()) || (newData.child('executionEnabled').val() == false && newData.child('executionState').val() == 'unavailable' && !newData.child('running').exists())) && newData.child('reportedAtMs').isNumber() && newData.child('reportedAtMs').val() >= 0",
                 "schemaVersion": { ".validate": true },

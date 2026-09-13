@@ -115,12 +115,36 @@ test("RTDB rules are closed by default and scope the fixed device", () => {
   const site = rules.v1.sites["well-main"];
   const device = site.devices["tab5-well-main"];
   assert.match(device.currentObservation[".write"], /auth\.uid == 'tab5-well-main'/);
-  assert.equal(Object.hasOwn(device.currentObservation, ".read"), false);
-  assert.equal(Object.hasOwn(device.presence, ".read"), false);
+  // The operator-control service reads device state as a purpose-scoped Firebase
+  // Auth identity, the same shape as the rules publisher and event-board writer.
+  // Every grant below must name that identity, its site, its device and its
+  // purpose, so none of them widens the closed default.
+  const operator = /auth\.uid == 'netlify-operator-control'/;
+  const operatorScope = [
+    /auth\.token\.siteId == 'well-main'/,
+    /auth\.token\.deviceId == 'tab5-well-main'/,
+    /auth\.token\.purpose == 'operator-control'/
+  ];
+  for (const grant of [
+    device.currentObservation[".read"],
+    device.presence[".read"],
+    device.operatorControl[".read"],
+    device.operatorControl.command[".write"]
+  ]) {
+    assert.match(grant, operator);
+    for (const claim of operatorScope) assert.match(grant, claim);
+  }
+  assert.match(device.rulesV3State[".read"], operator);
+  assert.match(device.rulesV3State[".read"], /auth\.uid == 'tab5-well-main'/);
   assert.equal(Object.hasOwn(device.syncState, ".read"), false);
+  assert.equal(Object.hasOwn(device.currentEventBoard, ".read"), true);
   assert.match(device.operatorControl.command[".read"], /auth\.uid == 'tab5-well-main'/);
-  assert.equal(device.operatorControl.command[".write"], false);
+  // A written command must still be the exact closed v2 record, and the result
+  // node stays device-owned: the operator identity has no write grant on it.
+  assert.match(device.operatorControl.command[".validate"], /'operator-command'/);
+  assert.equal(device.operatorControl.command["$other"][".validate"], false);
   assert.match(device.operatorControl.result[".write"], /auth\.uid == 'tab5-well-main'/);
+  assert.doesNotMatch(device.operatorControl.result[".write"], operator);
   assert.equal(device.operatorControl.result["$other"][".validate"], false);
   assert.equal(site.control.globalEnable[".write"], false);
   assert.match(site.rules.current[".read"], /auth\.uid == 'tab5-well-main'/);

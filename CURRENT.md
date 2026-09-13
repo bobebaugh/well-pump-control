@@ -25,10 +25,16 @@ unchanged. An aborted write is reported as indeterminate and never as delivered;
 write rejected with an HTTP status did not apply. No code path now depends on
 service-account RTDB authorization; `getPilotDatabase` has no remaining callers.
 
-**This repair cannot function until the owner publishes an RTDB rules grant for
-`netlify-operator-control`.** Until then the function fails fast with the new
-`control_denied` state instead of hanging. The exact grant is recorded in the handoff;
-no rules file change was made in this unit.
+`firebase/rtdb.rules.json` now carries the matching grant: `netlify-operator-control`
+reads `currentObservation`, `presence`, `rulesV3State` and `operatorControl`, and writes
+`operatorControl/command` under a `.validate` enforcing the closed command-v2 record.
+`operatorControl/result` stays device-only, `syncState` stays unreadable, and the root
+default remains closed. This is narrower than what it replaces: an Admin SDK bypass with
+unrestricted access becomes a rules-governed identity scoped to five paths.
+
+**The rules must still be published by the owner before online controls work.** Source
+promotion does not publish them. Until they are published the function fails fast with
+the new `control_denied` state instead of hanging.
 
 The earlier browser and status repairs stand unchanged. The Pilot repair fixes event links by using the Firestore-valid partial boundary
 `startAt(cycle)` while retaining document-ID tie ordering for stable paging and the
