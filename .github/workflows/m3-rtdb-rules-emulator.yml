@@ -4,8 +4,7 @@ on:
   push:
     branches:
       - pilot
-      - 'agent/**'
-      - 'claude/**'
+      - pilot-working
     paths:
       - firebase/rtdb.rules.json
       - firebase.json
@@ -16,6 +15,7 @@ on:
   pull_request:
     branches:
       - pilot
+      - pilot-working
     paths:
       - firebase/rtdb.rules.json
       - firebase.json
