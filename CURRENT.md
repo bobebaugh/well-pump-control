@@ -6,12 +6,15 @@ The owner authorized operating-branch promotion and a design handoff on 2026-09-
 M6.35 production, ingestion and event-board synchronization have initial real-device
 and Firestore evidence. This is not completion of all outage or memory tests.
 
-The approved online event and durable-record browser coding unit is implemented on
-`pilot-working` and awaits owner review. It adds bounded read-only browser endpoints,
-all-open event presentation, V3 occurrence joining, rules-derived viewing columns,
-observation-time browsing, session/cycle navigation, and a whole-local-day raw CSV
-export. It does not deploy indexes, change rules, publish packages, or operate
-hardware. Read [the browser design handoff](docs/online-browser-design-handoff.md)
+The approved online event and durable-record browser coding unit is repaired on
+`pilot-working` and awaits owner review. The repair validates cursors and anchors,
+uses recent detected closures (including restart closures), joins the true opening,
+handles sparse session observations without arithmetic cycle guessing, and keeps
+device time distinct from first reporting and cloud closure detection. It adds
+bounded read-only browser endpoints, all-open event presentation, rules-derived
+viewing columns, observation-time browsing, session/cycle navigation, and a
+whole-local-day raw CSV export. It does not deploy indexes, change rules, publish
+packages, or operate hardware. Read [the browser design handoff](docs/online-browser-design-handoff.md)
 for its evidence and deployment prerequisite.
 
 The latest owner startup runs M6.35 on both CPU A and CPU B with package V17:
@@ -24,7 +27,14 @@ screenshots represent different occurrences, not a verified matching pair.
 
 ## Verification
 
-- 168 Tab5 and 134 Pilot host tests passed, independently rerun during review.
+- Browser repair: `node --test tests/record-browser.test.js` passes 6/6 using
+  Firestore-like timestamp/query fixtures. It covers mixed V1/V2 tie ordering,
+  first/next pages, anchors, receipt fallback, malformed cursors, >50 closures,
+  both close reasons, sparse unsynchronized session navigation and missing prior
+  records. A bounded localhost mock was also operated in a real browser: event
+  session → Latest/date anchor/receipt fallback, older/newer paging, and column
+  changes were exercised. This is mock-backend evidence, not a live Firebase audit.
+- 168 Tab5 and 134 Pilot host tests passed, independently rerun during prior review.
 - Corrected RTDB rules at f97f909a137f9faf2c369614178f72d5a75f7869 passed
   10/10 local demo-project emulator tests. Java 21.0.12.1, Node 22.22.2,
   npm 10.9.7; npm ci then npm run test:rtdb-rules; clean emulator shutdown.
@@ -38,9 +48,9 @@ screenshots represent different occurrences, not a verified matching pair.
 
 ## Next
 
-Owner review of the browser unit and one concise real-data browser test cycle. If the
-owner accepts it, decide separately whether to promote source and deploy the required
-Firestore indexes. Do not treat source promotion as index deployment.
+Owner review of the browser repair and one concise real-data browser test cycle. If
+the owner accepts it, decide separately whether to promote source and deploy the
+required Firestore indexes. Do not treat source promotion as index deployment.
 
 ## Later / unresolved
 

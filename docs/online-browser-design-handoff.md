@@ -92,8 +92,9 @@ At coding-unit completion, synchronize with the owner before promotion and provi
 ## Browser-unit deployment prerequisite
 
 The browser unit adds `firestore.indexes.json` for bounded V1/V2 observation,
-session/cycle, and V3 occurrence reads. The source change does not publish those
-indexes. Before the owner uses the hosted browser, deploy the checked-in Firestore
-indexes through the established owner-controlled Firebase workflow and wait for them
-to become ready. No rules, package, hardware, or device-control deployment is part of
-that prerequisite.
+receipt-time, ascending and descending session/cycle, and V3 closure reads (separate
+inferred and restart detection-time indexes). The source change does not publish
+those indexes. Before the owner uses the hosted browser, deploy the checked-in
+Firestore indexes through the established owner-controlled Firebase workflow and wait
+for them to become ready. No rules, package, hardware, or device-control deployment
+is part of that prerequisite.

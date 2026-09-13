@@ -6,6 +6,20 @@
       { "fieldPath": "recordType", "order": "ASCENDING" },
       { "fieldPath": "firstReportedAt", "order": "DESCENDING" }
     ] },
+    { "collectionGroup": "eventRecords", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "schemaVersion", "order": "ASCENDING" },
+      { "fieldPath": "deviceId", "order": "ASCENDING" },
+      { "fieldPath": "recordType", "order": "ASCENDING" },
+      { "fieldPath": "closeReason", "order": "ASCENDING" },
+      { "fieldPath": "detectedAt", "order": "DESCENDING" }
+    ] },
+    { "collectionGroup": "eventRecords", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "schemaVersion", "order": "ASCENDING" },
+      { "fieldPath": "deviceId", "order": "ASCENDING" },
+      { "fieldPath": "recordType", "order": "ASCENDING" },
+      { "fieldPath": "closeReason", "order": "ASCENDING" },
+      { "fieldPath": "restartDetectedAt", "order": "DESCENDING" }
+    ] },
     { "collectionGroup": "observations", "queryScope": "COLLECTION", "fields": [
       { "fieldPath": "schemaVersion", "order": "ASCENDING" },
       { "fieldPath": "deviceId", "order": "ASCENDING" },
@@ -42,6 +56,18 @@
       { "fieldPath": "deviceId", "order": "ASCENDING" },
       { "fieldPath": "sessionId", "order": "ASCENDING" },
       { "fieldPath": "cycleSequence", "order": "ASCENDING" }
+    ] },
+    { "collectionGroup": "observations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "schemaVersion", "order": "ASCENDING" },
+      { "fieldPath": "deviceId", "order": "ASCENDING" },
+      { "fieldPath": "sessionId", "order": "ASCENDING" },
+      { "fieldPath": "sequence", "order": "DESCENDING" }
+    ] },
+    { "collectionGroup": "observations", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "schemaVersion", "order": "ASCENDING" },
+      { "fieldPath": "deviceId", "order": "ASCENDING" },
+      { "fieldPath": "sessionId", "order": "ASCENDING" },
+      { "fieldPath": "cycleSequence", "order": "DESCENDING" }
     ] }
   ],
   "fieldOverrides": []

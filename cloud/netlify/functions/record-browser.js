@@ -8,10 +8,18 @@ const SITE_ID = "well-main";
 const DEVICE_ID = "tab5-well-main";
 const headers = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const idField = FieldPath.documentId();
+class BrowserInputError extends Error { constructor(code) { super(code); this.code = code; } }
 function json(statusCode, body) { return { statusCode, headers, body: JSON.stringify(body) }; }
 function limit(value, fallback = MAX_PAGE_SIZE) { const number = Number(value); return Number.isInteger(number) && number > 0 ? Math.min(number, MAX_PAGE_SIZE) : fallback; }
-function date(value) { const result = new Date(value); return Number.isFinite(result.getTime()) ? result : null; }
-function serialise(snapshot) { return { ...snapshot.data(), recordId: snapshot.data().recordId || snapshot.id, receivedAt: iso(snapshot.data().receivedAt), observedAt: iso(snapshot.data().observedAt), time: { ...snapshot.data().time, observedAt: iso(snapshot.data().time?.observedAt) } }; }
+function date(value) { const result = new Date(value); return typeof value === "string" && Number.isFinite(result.getTime()) ? result : null; }
+function cursor(query, kind) {
+  const raw = query.cursor;
+  if (raw === undefined || raw === null || raw === "") return null;
+  const parsed = _decodeCursor(raw);
+  if (!parsed || (kind === "time" && !parsed.time) || (kind === "sequence" && !Number.isInteger(parsed.sequence))) throw new BrowserInputError("invalid_cursor");
+  return parsed.time ? { ...parsed, time: new Date(parsed.time) } : parsed;
+}
+function serialise(snapshot) { return { ...snapshot.data(), recordId: snapshot.data().recordId || snapshot.id, receivedAt: iso(snapshot.data().receivedAt), observedAt: iso(snapshot.data().observedAt), firstReportedAt: iso(snapshot.data().firstReportedAt), detectedAt: iso(snapshot.data().detectedAt), restartDetectedAt: iso(snapshot.data().restartDetectedAt), time: { ...snapshot.data().time, observedAt: iso(snapshot.data().time?.observedAt) } }; }
 function draftFromSnapshots(snapshots) { return Object.fromEntries(snapshots.map(snapshot => [snapshot.id, snapshot.exists ? snapshot.data().items : null])); }
 function requireApprovedDb(provider) { const result = provider(); if (result.projectId !== "well-pump-control" || result.databaseId !== "(default)") throw new ConfigurationError("Firestore target is not the approved pilot database"); return result.db; }
 
@@ -28,8 +36,10 @@ function timeQuery(observations, schemaVersion, field, before, count) {
   return query.limit(count).get();
 }
 async function observationPage(site, query) {
-  const observations = site.collection("observations"); const cursor = _decodeCursor(query.cursor) || (() => { const anchor = date(query.anchor); return anchor ? { time: anchor.toISOString(), id: "\uffff" } : null; })(); const count = limit(query.limit);
-  const [one, two] = await Promise.all([timeQuery(observations, 1, "observedAt", cursor, count), timeQuery(observations, 2, "time.observedAt", cursor, count)]);
+  const observations = site.collection("observations"); let pageCursor = cursor(query, "time");
+  if (!pageCursor && query.anchor !== undefined) { const anchor = date(query.anchor); if (!anchor) throw new BrowserInputError("invalid_anchor"); pageCursor = { time: anchor, id: "\uffff" }; }
+  const count = limit(query.limit);
+  const [one, two] = await Promise.all([timeQuery(observations, 1, "observedAt", pageCursor, count), timeQuery(observations, 2, "time.observedAt", pageCursor, count)]);
   const catalogState = await savedCatalog(site);
   if (!catalogState.catalog) return { status: "configuration", code: "saved_rules_missing", records: [], catalog: [] };
   const records = [...one.docs, ...two.docs].map(serialise).sort((a, b) => {
@@ -38,45 +48,77 @@ async function observationPage(site, query) {
   }).slice(0, count);
   const columns = String(query.columns || "").split(",").filter(name => catalogState.catalog.some(item => item.name === name));
   const next = records.at(-1); const nextTime = next && (next.schemaVersion === 2 ? next.time.observedAt : next.observedAt);
-  return { status: records.length ? "ok" : "empty", catalog: catalogState.catalog, defaultColumns: eventDefaultColumns(catalogState.events, query.event, catalogState.catalog), records: records.map(item => observationView(item, columns)), nextCursor: next ? _encodeCursor({ time: nextTime, id: next.recordId }) : null };
+  return { status: records.length ? "ok" : "empty", catalog: catalogState.catalog, defaultColumns: eventDefaultColumns(catalogState.events, query.event, catalogState.catalog), records: records.map(item => observationView(item, columns)), nextCursor: next ? _encodeCursor({ time: nextTime, id: next.recordId }) : null, previousCursor: pageCursor ? _encodeCursor({ time: pageCursor.time.toISOString(), id: pageCursor.id }) : null };
 }
 async function receiptPage(site, query) {
-  const observations = site.collection("observations"); const cursor = _decodeCursor(query.cursor); const count = limit(query.limit);
-  const read = schema => { let request = observations.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", schema).orderBy("receivedAt", "desc").orderBy(idField, "desc"); if (cursor) request = request.startAfter(Timestamp.fromDate(cursor.time), cursor.id); return request.limit(count).get(); };
+  const observations = site.collection("observations"); const pageCursor = cursor(query, "time"); const count = limit(query.limit);
+  const read = schema => { let request = observations.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", schema).orderBy("receivedAt", "desc").orderBy(idField, "desc"); if (pageCursor) request = request.startAfter(Timestamp.fromDate(pageCursor.time), pageCursor.id); return request.limit(count).get(); };
   const [one, two, catalogState] = await Promise.all([read(1), read(2), savedCatalog(site)]);
   if (!catalogState.catalog) return { status: "configuration", code: "saved_rules_missing", records: [], catalog: [] };
   const columns = String(query.columns || "").split(",").filter(name => catalogState.catalog.some(item => item.name === name));
   const records = [...one.docs, ...two.docs].map(serialise).sort((left, right) => right.receivedAt.localeCompare(left.receivedAt) || right.recordId.localeCompare(left.recordId)).slice(0, count);
   const last = records.at(-1);
-  return { status: records.length ? "ok" : "empty", source: "receipt-time-fallback", catalog: catalogState.catalog, defaultColumns: eventDefaultColumns(catalogState.events, query.event, catalogState.catalog), records: records.map(item => observationView(item, columns)), nextCursor: last ? _encodeCursor({ time: last.receivedAt, id: last.recordId }) : null };
+  return { status: records.length ? "ok" : "empty", source: "receipt-time-fallback", catalog: catalogState.catalog, defaultColumns: eventDefaultColumns(catalogState.events, query.event, catalogState.catalog), records: records.map(item => observationView(item, columns)), nextCursor: last ? _encodeCursor({ time: last.receivedAt, id: last.recordId }) : null, previousCursor: pageCursor ? _encodeCursor({ time: pageCursor.time.toISOString(), id: pageCursor.id }) : null };
 }
 async function sessionPage(site, query) {
   const sessionId = typeof query.session === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(query.session) ? query.session : null;
   const cycle = Number(query.cycle);
   if (!sessionId || !Number.isInteger(cycle) || cycle < 0) return { status: "error", code: "invalid_session_navigation", records: [], catalog: [] };
-  const observations = site.collection("observations"); const count = limit(query.limit);
+  const observations = site.collection("observations"); const count = limit(query.limit); const pageCursor = cursor(query, "sequence"); const direction = query.direction === "before" ? "before" : "after";
   const around = async (schema, field) => {
     const base = observations.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", schema).where("sessionId", "==", sessionId);
-    return (await base.orderBy(field, "asc").startAt(cycle).limit(count).get()).docs;
+    // Contract-generated observation IDs sort after "0". In descending order this
+    // selects strictly earlier durable observations, not arithmetic cycle numbers.
+    if (pageCursor && direction === "before") return (await base.orderBy(field, "desc").orderBy(idField, "desc").startAfter(pageCursor.sequence, "0").limit(count).get()).docs.reverse();
+    if (pageCursor) return (await base.orderBy(field, "asc").orderBy(idField, "asc").startAfter(pageCursor.sequence, pageCursor.id).limit(count).get()).docs;
+    const [previous, following] = await Promise.all([
+      base.orderBy(field, "desc").orderBy(idField, "desc").startAfter(cycle, "0").limit(3).get(),
+      base.orderBy(field, "asc").orderBy(idField, "asc").startAt(cycle, "").limit(count).get()
+    ]);
+    return [...previous.docs.reverse(), ...following.docs];
   };
   const [one, two, catalogState] = await Promise.all([around(1, "sequence"), around(2, "cycleSequence"), savedCatalog(site)]);
   if (!catalogState.catalog) return { status: "configuration", code: "saved_rules_missing", records: [], catalog: [] };
   const columns = String(query.columns || "").split(",").filter(name => catalogState.catalog.some(item => item.name === name));
-  const records = [...one, ...two].map(serialise).sort((left, right) => (left.schemaVersion === 2 ? left.cycleSequence : left.sequence) - (right.schemaVersion === 2 ? right.cycleSequence : right.sequence)).slice(0, count);
-  return { status: records.length ? "ok" : "empty", catalog: catalogState.catalog, defaultColumns: eventDefaultColumns(catalogState.events, query.event, catalogState.catalog), records: records.map(item => observationView(item, columns)), nextCursor: null, navigation: { sessionId, cycle } };
+  const records = [...one, ...two].map(serialise).sort((left, right) => {
+    const leftSequence = left.schemaVersion === 2 ? left.cycleSequence : left.sequence;
+    const rightSequence = right.schemaVersion === 2 ? right.cycleSequence : right.sequence;
+    return leftSequence - rightSequence || left.recordId.localeCompare(right.recordId);
+  });
+  const sequence = record => record.schemaVersion === 2 ? record.cycleSequence : record.sequence;
+  const selected = pageCursor ? records.slice(0, count) : [
+    ...records.filter(record => sequence(record) < cycle).slice(-3),
+    ...records.filter(record => sequence(record) >= cycle).slice(0, count)
+  ];
+  const first = selected.at(0); const last = selected.at(-1);
+  return { status: selected.length ? "ok" : "empty", catalog: catalogState.catalog, defaultColumns: eventDefaultColumns(catalogState.events, query.event, catalogState.catalog), records: selected.map(item => observationView(item, columns)), nextCursor: last ? _encodeCursor({ sequence: sequence(last), id: last.recordId }) : null, previousCursor: first ? _encodeCursor({ sequence: sequence(first), id: first.recordId }) : null, navigation: { sessionId, cycle } };
 }
-async function eventHistory(site, count) {
+function closureTime(record) { return iso(record.closeReason === "ended-by-restart" ? record.restartDetectedAt : record.detectedAt); }
+function closureQuery(history, reason, field, pageCursor, count) {
+  let request = history.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", 2).where("recordType", "==", "event-close").where("closeReason", "==", reason).orderBy(field, "desc").orderBy(idField, "desc");
+  if (pageCursor) request = request.startAfter(Timestamp.fromDate(pageCursor.time), pageCursor.id);
+  return request.limit(count).get();
+}
+async function eventHistory(site, count, query = {}) {
   const history = site.collection("eventRecords");
-  const openings = await history.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", 2).where("recordType", "==", "event-open").orderBy("firstReportedAt", "desc").orderBy(idField, "desc").limit(count).get();
-  const openRecords = openings.docs.map(serialise);
-  const closeIds = openRecords.map(item => item.recordId.replace("event-open--", "event-close--"));
-  const closeSnapshots = closeIds.length ? await site.firestore.getAll(...closeIds.map(id => history.doc(id))) : [];
-  return joinOccurrences([...openRecords, ...closeSnapshots.filter(item => item.exists).map(serialise)]);
+  const pageCursor = cursor(query, "time");
+  const [inferred, restart] = await Promise.all([
+    closureQuery(history, "inferred-board-disappearance", "detectedAt", pageCursor, count),
+    closureQuery(history, "ended-by-restart", "restartDetectedAt", pageCursor, count)
+  ]);
+  const closes = [...inferred.docs, ...restart.docs].map(serialise).sort((left, right) => {
+    const order = closureTime(right).localeCompare(closureTime(left)); return order || right.recordId.localeCompare(left.recordId);
+  }).slice(0, count);
+  const openIds = closes.map(item => item.recordId.replace("event-close--", "event-open--"));
+  const openingSnapshots = openIds.length ? await site.firestore.getAll(...openIds.map(id => history.doc(id))) : [];
+  const occurrences = joinOccurrences([...closes, ...openingSnapshots.filter(item => item.exists).map(serialise)]).filter(item => item.close);
+  const last = closes.at(-1);
+  return { occurrences, nextCursor: last ? _encodeCursor({ time: closureTime(last), id: last.recordId }) : null, previousCursor: pageCursor ? _encodeCursor({ time: pageCursor.time.toISOString(), id: pageCursor.id }) : null };
 }
 async function home(site) {
   const [boardSnapshot, history] = await Promise.all([site.collection("eventBoardState").doc(DEVICE_ID).get(), eventHistory(site, 10)]);
   const board = boardSnapshot.exists ? boardSnapshot.data() : null;
-  return { status: board ? "ok" : "empty", board: board ? { ...board, lastReportAt: iso(board.lastReportAt), lastBoardProducedAt: iso(board.lastBoardProducedAt) } : null, recentClosed: history.filter(item => item.close) };
+  return { status: board ? "ok" : "empty", board: board ? { ...board, lastReportAt: iso(board.lastReportAt), lastBoardProducedAt: iso(board.lastBoardProducedAt) } : null, recentClosed: history.occurrences };
 }
 async function exportDay(site, query) {
   const start = date(query.start); const end = date(query.end);
@@ -100,11 +142,12 @@ function createHandler(dependencies = {}) {
         if (result.error) return json(result.error === "export_too_large" ? 413 : 400, { status: "error", code: result.error, count: result.count });
         return { statusCode: 200, headers: { "Content-Type": "text/csv; charset=utf-8", "Cache-Control": "no-store", "Content-Disposition": "attachment; filename=durable-observations.csv", "X-Export-Record-Count": String(result.count) }, body: result.csv };
       }
-      if (query.view === "history") return json(200, { status: "ok", occurrences: await eventHistory(site, limit(query.limit, 50)) });
+      if (query.view === "history") return json(200, { status: "ok", ...(await eventHistory(site, limit(query.limit, 50), query)) });
       if (query.view === "session") return json(200, await sessionPage(site, query));
       if (query.view === "receipt") return json(200, await receiptPage(site, query));
       return json(200, await observationPage(site, query));
     } catch (error) {
+      if (error instanceof BrowserInputError) return json(400, { status: "error", code: error.code });
       const configuration = error instanceof ConfigurationError;
       const denied = !configuration && /permission|denied/i.test(String(error?.code || ""));
       console.error("Record browser read failed", { category: configuration ? "configuration" : denied ? "denied" : "firestore", code: error?.code || "unknown" });

@@ -37,6 +37,12 @@ function catalogFromSavedDraft(draft) {
 }
 
 function conditionFields(condition) { return (condition?.clauses || []).map(item => item?.field).filter(Boolean); }
+function guardedFields(phase) {
+  return (phase?.guardedGroups || []).flatMap(group => [
+    ...conditionFields(group?.guard),
+    ...(group?.assignments || []).map(item => item?.target)
+  ]).filter(Boolean);
+}
 function eventDefaultColumns(events, eventDefinitionId, catalog) {
   const event = (events || []).find(item => item?.id === eventDefinitionId);
   const requested = new Set([
@@ -44,8 +50,8 @@ function eventDefaultColumns(events, eventDefinitionId, catalog) {
     ...conditionFields(event?.closing?.condition),
     ...(event?.onOpen?.assignments || []).map(item => item?.target),
     ...(event?.onClose?.assignments || []).map(item => item?.target),
-    ...((event?.onOpen?.guardedGroups || []).flatMap(group => conditionFields(group?.condition))),
-    ...((event?.onClose?.guardedGroups || []).flatMap(group => conditionFields(group?.condition)))
+    ...guardedFields(event?.onOpen),
+    ...guardedFields(event?.onClose)
   ]);
   return (catalog || []).filter(item => requested.has(item.name)).map(item => item.name);
 }
@@ -96,7 +102,13 @@ function decodeCursor(value) {
   if (!value || typeof value !== "string" || value.length > 1000) return null;
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
-    return typeof parsed?.time === "string" && typeof parsed?.id === "string" ? parsed : null;
+    if (typeof parsed?.id !== "string" || !parsed.id || parsed.id.length > 256) return null;
+    if (typeof parsed?.time === "string") {
+      const time = new Date(parsed.time);
+      return Number.isFinite(time.getTime()) ? { time: time.toISOString(), id: parsed.id } : null;
+    }
+    if (Number.isInteger(parsed?.sequence) && parsed.sequence >= 0 && parsed.sequence <= Number.MAX_SAFE_INTEGER) return { sequence: parsed.sequence, id: parsed.id };
+    return null;
   } catch { return null; }
 }
 

@@ -99,10 +99,10 @@ function clearTelemetry() {
   setHealth(shelly1Row, "unavailable", "Awaiting Tab5 telemetry");
 }
 
-function eventTime(event) { const value = event?.opening?.observedAt || event?.firstReportedAt || event?.detectedAt || event?.restartDetectedAt; return value ? formatTime(new Date(value)) : "Unknown device time"; }
-function eventLink(event) { const cycle = Math.max(0, (event?.opening?.cycleSequence || 0) - 3); return `/records.html?session=${encodeURIComponent(event.sessionId || "")}&cycle=${cycle}&event=${encodeURIComponent(event.eventDefinitionId || "")}`; }
+function eventTime(value) { return value ? formatTime(new Date(value)) : "Unknown time"; }
+function eventLink(event) { const cycle = event?.opening?.cycleSequence || 0; return `/records.html?session=${encodeURIComponent(event.sessionId || "")}&cycle=${cycle}&event=${encodeURIComponent(event.eventDefinitionId || "")}`; }
 function escapeEventHtml(value) { return String(value ?? "").replace(/[&<>\"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]); }
-function eventCard(event, close = null) { const severity = String(event.severity || "Info").toLowerCase(); const closure = close ? `<span>Closed by ${escapeEventHtml(close.closeReason)}; detection ${escapeEventHtml(eventTime(close))}. Device close time unknown.</span>` : "<span>Open</span>"; return `<article class="event-card ${severity}"><strong>${escapeEventHtml(event.severity || "Info")} · ${escapeEventHtml(event.displayName || event.eventDefinitionId)}</strong><span>Opened ${escapeEventHtml(eventTime(event))}</span>${closure}<a href="${eventLink(event)}">View nearby observations</a></article>`; }
+function eventCard(event, close = null) { const severity = String(event.severity || "Info").toLowerCase(); const opening = event?.opening?.observedAt ? `Device opening ${escapeEventHtml(eventTime(event.opening.observedAt))}` : `Device opening time unknown${event?.firstReportedAt ? `; first reported ${escapeEventHtml(eventTime(event.firstReportedAt))}` : ""}`; const closure = close ? `<span>Closed by ${escapeEventHtml(close.closeReason)}; cloud detection ${escapeEventHtml(eventTime(close.detectedAt || close.restartDetectedAt))}. Device close time unknown.</span>` : "<span>Open in the last successful board</span>"; return `<article class="event-card ${severity}"><strong>${escapeEventHtml(event.severity || "Info")} · ${escapeEventHtml(event.displayName || event.eventDefinitionId)}</strong><span>${opening}</span>${closure}<a href="${eventLink(event)}">View nearby observations</a></article>`; }
 async function checkEvents() {
   try {
     const data = await fetchStatus("/.netlify/functions/record-browser?view=home");
