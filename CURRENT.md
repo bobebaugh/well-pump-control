@@ -34,6 +34,11 @@ screenshots represent different occurrences, not a verified matching pair.
   records. A bounded localhost mock was also operated in a real browser: event
   session → Latest/date anchor/receipt fallback, older/newer paging, and column
   changes were exercised. This is mock-backend evidence, not a live Firebase audit.
+- Fresh host run: `node --test tests/*.test.js` passed 139/140. The only failure,
+  `rules-engine-v3-compatibility` (`null !== 0` while starting its Python resolver),
+  was reproduced unchanged at pre-browser parent `167a40ed`; it is pre-existing and
+  unrelated to the browser repair. `npm` was not on this host PATH, so the equivalent
+  Node test command was used directly.
 - 168 Tab5 and 134 Pilot host tests passed, independently rerun during prior review.
 - Corrected RTDB rules at f97f909a137f9faf2c369614178f72d5a75f7869 passed
   10/10 local demo-project emulator tests. Java 21.0.12.1, Node 22.22.2,
