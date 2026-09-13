@@ -27,6 +27,8 @@ FUNCTIONS = {
     "build_events_hmi_model",
     "navigation_page_at",
     "navigation_selection_allowed",
+    "operator_control_at",
+    "arm_operator_control",
 }
 CONSTANTS = {
     "STALE_AFTER_MS",
@@ -45,6 +47,13 @@ CONSTANTS = {
     "NAV_SYSTEM_X",
     "NAV_EVENTS_X",
     "NAV_W",
+    "CONTROL_Y",
+    "CONTROL_H",
+    "CONTROL_W",
+    "CONTROL_MONITOR_X",
+    "CONTROL_TAB5_X",
+    "CONTROL_SHELLY_X",
+    "OPERATOR_CONFIRM_WINDOW_MS",
     "ADC_DIVIDER",
     "ADC_LSB_UV_AT_PIN",
     "ADC_UV_PER_COUNT",
@@ -79,6 +88,7 @@ def load_hmi_logic():
                 nodes.append(node)
     namespace = {"time": types.SimpleNamespace(
         ticks_diff=lambda left, right: left - right,
+        ticks_add=lambda value, delta: value + delta,
     )}
     exec(compile(ast.Module(body=nodes, type_ignores=[]),
                  str(PILOT_PATH), "exec"), namespace)
@@ -179,7 +189,7 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertEqual(model["pump_state"], "RUNNING")
         self.assertEqual(model["pressure_status"], "NOT COMMISSIONED")
         self.assertIsNone(model["pressure_psi"])
-        self.assertEqual(model["shelly_lock"], "NOT REPORTED")
+        self.assertEqual(model["shelly_lock"], "UNKNOWN")
         self.assertEqual(model["shelly1"], "SW0 ON  RLY0 OFF")
         self.assertEqual(model["age_text"], "EM <1s  S1 <1s  ADC <1s")
         self.assertEqual(model["wifi_indicator"], "green")
@@ -208,17 +218,25 @@ class HmiFoundationTests(unittest.TestCase):
             "CLOUD OK <1s  RTDB OK <1s  Q0/8",
         )
 
-    def test_events_model_is_truthful_and_has_no_override_authority(self):
+    def test_events_model_exposes_monitor_and_lock_evidence(self):
         sample = observation()
         sample["status"].update({"rules_runtime_state": "RUNNING V3",
                                  "v3_active_event_ids": ["E007"]})
         model = self.logic["build_events_hmi_model"](sample)
         self.assertEqual(model["event_engine"], "RUNNING V3")
         self.assertEqual(model["active_events"], "E007")
-        self.assertEqual(model["event_override"], "NOT AVAILABLE")
-        self.assertEqual(model["system_override"], "NOT AVAILABLE")
-        self.assertEqual(model["shelly_lock"], "NOT REPORTED")
-        self.assertEqual(model["shelly_override"], "NOT AVAILABLE")
+        self.assertEqual(model["user_monitor"], "NORMAL")
+        self.assertEqual(model["relay_restoration"], "NOT-APPLICABLE")
+        self.assertEqual(model["shelly_lock"], "UNKNOWN")
+        self.assertIsNone(model["shelly_lockout_count"])
+
+    def test_shelly_lock_states_are_not_conflated(self):
+        status = self.logic["shelly_local_lock_status"]
+        self.assertEqual(status(True, -1), "FULL LOCKOUT")
+        self.assertEqual(status(True, 0), "NORMAL")
+        self.assertEqual(status(True, 37), "TEMP 37s")
+        self.assertEqual(status(True, None), "UNKNOWN")
+        self.assertEqual(status(False, 0), "UNAVAILABLE")
 
     def test_cloud_color_requires_confirmed_cpu_b_responses(self):
         state = self.logic["cloud_indicator_state"]
@@ -249,22 +267,35 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertIsNone(select(850, 650))
         self.assertIsNone(select(100, 500))
 
-    def test_events_page_is_display_only_scaffolding(self):
+    def test_events_page_has_only_the_three_approved_controls(self):
         source = PILOT_PATH.read_text(encoding="utf-8")
         tree = ast.parse(source)
         node = next(item for item in tree.body
                     if isinstance(item, ast.FunctionDef) and
                     item.name == "render_events")
         events_source = ast.get_source_segment(source, node)
-        self.assertIn("V3 EVENTS ACTIVE; COMMANDS AND RETAINED EVENT BROWSER PENDING",
-                      events_source)
-        self.assertNotIn("relay", events_source.lower())
-        self.assertNotIn("request", events_source.lower())
-        self.assertNotIn("submit", events_source.lower())
+        self.assertIn("enter-user-monitor", events_source)
+        self.assertIn("restart-tab5", events_source)
+        self.assertIn("restart-shelly1", events_source)
+        self.assertNotIn("clear-events", events_source)
         self.assertNotIn("cloud.", events_source)
 
-    def test_release_is_m635(self):
-        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.35")
+    def test_operator_controls_require_two_taps_and_are_page_scoped(self):
+        at = self.logic["operator_control_at"]
+        arm = self.logic["arm_operator_control"]
+        events = self.logic["HMI_PAGE_EVENTS"]
+        self.assertEqual(at(100, 430, events), "enter-user-monitor")
+        self.assertEqual(at(500, 430, events), "restart-tab5")
+        self.assertEqual(at(900, 430, events), "restart-shelly1")
+        self.assertIsNone(at(100, 430, self.logic["HMI_PAGE_NOW"]))
+        action, until, execute = arm("restart-tab5", 1000, None, None)
+        self.assertEqual((action, execute), ("restart-tab5", None))
+        self.assertEqual(arm("restart-tab5", 2000, action, until)[2],
+                         "restart-tab5")
+        self.assertIsNone(arm("restart-tab5", 2000, action, until, True)[2])
+
+    def test_release_is_m636(self):
+        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.36")
 
     def test_touch_service_is_not_limited_to_remaining_cycle_sleep(self):
         source = PILOT_PATH.read_text(encoding="utf-8")

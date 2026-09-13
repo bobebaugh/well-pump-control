@@ -37,6 +37,18 @@ history from accepted boards. Event browsing and summaries remain later work.
 Existing versioned record meanings do not change silently. An incompatible record
 gets a new version.
 
+The operator-control transport is a single replaceable RTDB slot, not a durable
+queue. The authenticated web endpoint targets the latest device presence session
+and gives each request a unique browser identity, command identity, monotonic
+sequence, and 45-second lifetime. Forty-five seconds covers multiple passes of the
+10-second coordination poll without making an outage-delayed request useful. Tab5
+checks schema, exact boot session, synchronized UTC expiry, and duplicate identity
+again at the execution boundary. A reconnect cannot make an expired or old-session
+request execute. The stored result distinguishes not delivered, accepted,
+confirmed completed, failed, and unknown. A timeout after possible execution is
+unknown and is never automatically retried. Fresh session/device evidence, not an
+RPC acknowledgement or a cached connected indicator, establishes completion.
+
 Durable observation v2 contains a small identity/time/release header and the fixed
 set of every logging-enabled Device, Calculated, and System field in the running
 package. Unavailable selected fields stay present with a reason. Change and Delta
@@ -115,18 +127,38 @@ Other material changes, confirmed acquisition-availability transitions and the
 maximum durable interval can still select records containing the current values.
 Delta comparisons retain the existing previous-durable-observation baseline.
 
-## Event meaning and remaining mode integration
+## Event meaning and operator mode
 
 Closing policies are independent owner choices, not automatically the inverse of
 opening conditions. S010 is an informational alarm for relay ON while locked and
 remains open until relay ON with lock zero. It never takes relay ownership.
 
-Normal and Monitor are the two kernel modes. Intended Monitor continues observation,
-calculation, logging, event evaluation and ownership bookkeeping while suppressing
-Tab5 inhibit application. Operator and required-source owners must be reconciled;
-operator Normal must not clear a bad-source owner. Web requests, Clear Events and
-required-source occurrence inputs remain incomplete, and require separate design
-review before integration. System Override is removed from the intended design.
+Normal and Monitor are the two kernel modes. User Monitor is a deliberate temporary
+investigation bypass entered through the package's manual Monitor occurrence. It
+continues observation, calculations, event evaluation, logging, and ownership
+bookkeeping while suppressing physical application of Tab5 inhibits. Entry does
+not wait for the triggering condition to recover, does not close the inhibiting
+event, and attempts release only through the normal owner-release path. Fresh,
+valid `islocked = 0` evidence remains mandatory before a relay-close request; an
+accepted Monitor request does not prove RLY0 moved. User Monitor lasts until an
+actual Tab5 restart. There is no Monitor OFF or Clear Events control in this unit.
+
+Tab5 restart uses the supported whole-device reset, so CPU A and CPU B begin a new
+session and V3 starts with a fresh event/owner/calculation board. Conditions may
+qualify again. A different valid staged package may be adopted by the existing
+restart-only path; configuration, staged bytes, credentials, and unrelated
+persistent state are not erased. Shelly 1 restart uses its supported `Shelly.Reboot`
+RPC through the same operator-command architecture. Acknowledgement is only
+accepted; confirmed completion requires a later fresh `islocked = 0` acquisition.
+Full (`-1`), temporary (positive seconds), normal (`0`), and missing/invalid
+(unknown) lock evidence remain distinct, and `locntr` is reported separately.
+Restart creates no ordinary pump demand and no anti-short-cycle algorithm is
+implemented here.
+
+System Monitor automatic actuation remains deferred under issue #6. Missing
+telemetry neither releases a latched inhibit nor proves or advances recovery.
+Existing closing conditions and explicit availability fields remain unchanged;
+no internal occurrence generation or timeout-based release is added.
 
 An event closes only while open. Subsequent relay restoration/confirmation is
 separate kernel/dispatch work, subject to current lock evidence and other owners.

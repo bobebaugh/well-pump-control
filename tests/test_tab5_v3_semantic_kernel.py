@@ -266,6 +266,26 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
         self.assertEqual(self.logic["rules_v3_effective_mode"](resolved, state), "Normal")
         self.assertEqual(self.action_values(actions, "PumpEnable"), [False])
 
+    def test_event_can_close_in_monitor_without_fabricated_relay_action(self):
+        operator = copy.deepcopy(self.fixture["events"][1])
+        voltage = inhibit("VOLTAGE", "SupplyVoltage", "gt", 265,
+                          "SupplyVoltage", "lt", 265)
+        resolved = self.resolved([operator, voltage])
+        state = self.logic["new_rules_v3_kernel"](resolved)
+        state, _, _ = self.step(
+            resolved, state, 0, occurrences={"OperatorMonitorRequest": True})
+        state, actions, records = self.step(
+            resolved, state, 1000, self.fields(SupplyVoltage=270.0))
+        self.assertEqual([item["type"] for item in records], ["open"])
+        self.assertEqual(self.action_values(actions, "PumpEnable"), [])
+        state, actions, records = self.step(
+            resolved, state, 2000, self.fields(SupplyVoltage=240.0))
+        self.assertEqual([(item["eventId"], item["type"]) for item in records],
+                         [("VOLTAGE", "close")])
+        self.assertEqual(self.action_values(actions, "PumpEnable"), [])
+        self.assertEqual(self.logic["rules_v3_effective_mode"](resolved, state),
+                         "Monitor")
+
     def test_08_islocked_tri_state_gates_enable_selection(self):
         event = inhibit("VOLTAGE", "SupplyVoltage", "gt", 265,
                         "SupplyVoltage", "lt", 265)
@@ -281,6 +301,27 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
                 state, actions, records = self.step(resolved, state, 1000, closing)
                 self.assertEqual([item["type"] for item in records], ["close"])
                 self.assertEqual(self.action_values(actions, "PumpEnable"), expected)
+
+    def test_monitor_releases_existing_inhibit_without_closing_its_event(self):
+        operator = copy.deepcopy(self.fixture["events"][1])
+        voltage = inhibit("VOLTAGE", "SupplyVoltage", "gt", 265,
+                          "SupplyVoltage", "lt", 265)
+        resolved = self.resolved([operator, voltage])
+        state = self.logic["new_rules_v3_kernel"](resolved)
+        state, actions, _ = self.step(
+            resolved, state, 0,
+            self.fields(SupplyVoltage=270.0, PumpEnable=True, IsLocked=0))
+        self.assertEqual(self.action_values(actions, "PumpEnable"), [False])
+        state, actions, records = self.step(
+            resolved, state, 1000,
+            self.fields(SupplyVoltage=270.0, PumpEnable=False, IsLocked=0),
+            occurrences={"OperatorMonitorRequest": True})
+        self.assertTrue(state["events"]["VOLTAGE"]["active"])
+        self.assertNotIn(("VOLTAGE", "close"),
+                         [(item["eventId"], item["type"]) for item in records])
+        self.assertEqual(self.logic["rules_v3_effective_mode"](resolved, state),
+                         "Monitor")
+        self.assertEqual(self.action_values(actions, "PumpEnable"), [True])
 
     def test_09_shelly_timed_reenable_is_reasserted_off_with_active_owner(self):
         event = inhibit("VOLTAGE", "SupplyVoltage", "gt", 265,
@@ -321,6 +362,21 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
         self.assertEqual(records, [])
         self.assertEqual(actions, [])
         self.assertFalse(state["events"]["VOLTAGE"]["active"])
+
+    def test_missing_telemetry_never_releases_existing_latched_inhibit(self):
+        event = inhibit("LATCH", "PumpWatts", "lt", 500,
+                        "PumpWatts", "gte", 500, event_class="latched")
+        resolved = self.resolved([event])
+        state = self.logic["new_rules_v3_kernel"](resolved)
+        state, _, records = self.step(
+            resolved, state, 0, self.fields(PumpWatts=100.0, PumpEnable=True))
+        self.assertEqual([item["type"] for item in records], ["open"])
+        missing = self.fields(PumpEnable=False)
+        missing.pop("PumpWatts")
+        state, actions, records = self.step(resolved, state, 1000, missing)
+        self.assertTrue(state["events"]["LATCH"]["active"])
+        self.assertEqual(records, [])
+        self.assertNotIn(True, self.action_values(actions, "PumpEnable"))
 
     def test_12_guarded_groups_use_one_frozen_transition_snapshot(self):
         package = copy.deepcopy(self.fixture)

@@ -1,4 +1,4 @@
-# Release: 2026-09-12 M6.35 — bounded observations and event-board transport.
+# Release: 2026-09-13 M6.36 — short-lived operator command transport.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -67,7 +67,7 @@ RTDB_RETRY_BASE_MS = 5000
 RTDB_RETRY_MAX_MS = 60000
 RTDB_MIN_OPERATION_GAP_MS = 100
 TOKEN_REFRESH_MARGIN_MS = 300000
-COMMAND_QUEUE_DEPTH = 8
+OPERATOR_COMMAND_LIFETIME_MS = 45000
 APPROVED_FIREBASE_PROJECT_ID = 'well-pump-control'
 APPROVED_RTDB_URLS = (
     'https://well-pump-control-default-rtdb.firebaseio.com',
@@ -273,77 +273,57 @@ def _form_value(value):
     return str(value).replace('%', '%25').replace('+', '%2B').replace('&', '%26').replace('=', '%3D')
 
 
-def _valid_command_id(value):
-    if not isinstance(value, str) or len(value) < 42 or len(value) > 98:
+def _operator_token(value, prefix='', minimum=8, maximum=128):
+    if not isinstance(value, str) or not minimum <= len(value) <= maximum:
         return False
-    if value[14:23] != '-command-' or value[-11] != '-':
+    if prefix and not value.startswith(prefix):
         return False
-    session = value[23:-11]
-    if (not value[:14].isdigit() or not value[-10:].isdigit() or
-            len(session) < 8 or len(session) > 64):
-        return False
-    for char in session:
+    for char in value:
         if not (('0' <= char <= '9') or ('A' <= char <= 'Z') or
                 ('a' <= char <= 'z') or char in '_-'):
             return False
     return True
 
 
-def _valid_command_time(value):
-    return (isinstance(value, str) and 20 <= len(value) <= 35 and
-            value[4] == '-' and value[7] == '-' and value[10] in 'Tt' and
-            (value[-1] in 'Zz' or '+' in value[11:] or '-' in value[11:]))
-
-
-def _filter_new_commands(raw_commands, last_sequence):
-    if isinstance(raw_commands, dict):
-        candidates = raw_commands.values()
-    elif isinstance(raw_commands, list):
-        candidates = raw_commands
-    else:
-        return []
-    accepted = []
-    allowed_fields = (
-        'schemaVersion', 'commandId', 'commandSequence', 'siteId',
-        'targetDeviceId', 'commandType', 'requestedAt', 'requestedBy',
-        'status', 'payload', 'completedAt', 'resultRecordId',
-        'rejectionReason')
-    command_types = (
-        'close-event', 'set-event-override', 'set-global-enable',
-        'reset-shelly-lockout')
-    for command in candidates:
-        if not isinstance(command, dict):
-            continue
-        if any(field not in allowed_fields for field in command):
-            continue
-        if command.get('schemaVersion') != 1:
-            continue
-        if command.get('siteId') != SITE_ID or command.get('targetDeviceId') != RTDB_DEVICE_ID:
-            continue
-        if command.get('status') != 'pending':
-            continue
-        if command.get('commandType') not in command_types:
-            continue
-        if not _valid_command_time(command.get('requestedAt')):
-            continue
-        actor = command.get('requestedBy')
-        if not isinstance(actor, dict) or actor.get('type') not in ('user', 'device', 'system'):
-            continue
-        if len(actor) != 2 or 'type' not in actor or 'id' not in actor:
-            continue
-        if (not isinstance(actor.get('id'), str) or
-                len(actor.get('id')) < 1 or len(actor.get('id')) > 128):
-            continue
-        if not isinstance(command.get('payload'), dict):
-            continue
-        sequence = command.get('commandSequence')
-        if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence <= last_sequence:
-            continue
-        if not _valid_command_id(command.get('commandId')):
-            continue
-        accepted.append(command)
-    accepted.sort(key=lambda item: item.get('commandSequence'))
-    return accepted
+def _validate_operator_command(command, session_id=None):
+    """Validate the current mirrored command; execution checks time again."""
+    if not isinstance(command, dict):
+        return None
+    allowed = (
+        'schemaVersion', 'kind', 'commandId', 'commandSequence',
+        'clientRequestId', 'siteId', 'targetDeviceId', 'targetSessionId',
+        'commandType', 'requestedAtMs', 'expiresAtMs', 'requestedBy', 'payload')
+    if any(field not in allowed for field in command) or len(command) != len(allowed):
+        return None
+    if command.get('schemaVersion') != 1 or command.get('kind') != 'operator-command':
+        return None
+    if command.get('siteId') != SITE_ID or command.get('targetDeviceId') != RTDB_DEVICE_ID:
+        return None
+    if not _operator_token(command.get('targetSessionId'), '', 8, 64):
+        return None
+    if command.get('commandType') not in (
+            'enter-user-monitor', 'restart-tab5', 'restart-shelly1'):
+        return None
+    if not _operator_token(command.get('commandId'), 'op_', 11, 131):
+        return None
+    if not _operator_token(command.get('clientRequestId')):
+        return None
+    sequence = command.get('commandSequence')
+    requested = command.get('requestedAtMs')
+    expires = command.get('expiresAtMs')
+    if (not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1 or
+            not isinstance(requested, int) or isinstance(requested, bool) or requested < 0 or
+            not isinstance(expires, int) or isinstance(expires, bool) or
+            expires - requested != OPERATOR_COMMAND_LIFETIME_MS):
+        return None
+    actor = command.get('requestedBy')
+    if (not isinstance(actor, dict) or len(actor) != 2 or
+            actor.get('type') != 'user' or
+            not isinstance(actor.get('id'), str) or not 1 <= len(actor['id']) <= 128):
+        return None
+    if command.get('payload') != {}:
+        return None
+    return command
 
 
 def log(msg):
@@ -452,9 +432,13 @@ _transport_status = {
 }
 
 _command_lock = _thread.allocate_lock()
-_pending_commands = []
+_pending_operator_command = None
+_last_queued_operator_command_id = None
 _last_delivered_command_sequence = 0
 _last_applied_command_sequence = 0
+
+_operator_result_lock = _thread.allocate_lock()
+_pending_operator_result = None
 
 _sync_lock = _thread.allocate_lock()
 _sync_state = None
@@ -797,19 +781,20 @@ def _publish_event_board(item):
     return reply.get('decision')
 
 
-def take_command():
-    """Transfer the next complete command to CPU A, at most once per session."""
+def take_operator_command():
+    """Transfer the current short-lived operator command once per session."""
+    global _pending_operator_command
     _command_lock.acquire()
     try:
-        if not _pending_commands:
-            return None
-        return _pending_commands.pop(0)
+        command = _pending_operator_command
+        _pending_operator_command = None
+        return command
     finally:
         _command_lock.release()
 
 
-def mark_command_applied(command_id, command_sequence):
-    """Record CPU A's applied high-water mark without applying any command."""
+def mark_operator_command_applied(command_id, command_sequence):
+    """Record CPU A's execution-boundary high-water mark."""
     global _last_applied_command_sequence
     if not isinstance(command_id, str) or not isinstance(command_sequence, int):
         return False
@@ -820,6 +805,47 @@ def mark_command_applied(command_id, command_sequence):
         return True
     finally:
         _command_lock.release()
+
+
+def submit_operator_result(result):
+    """Coalesce device evidence for the current operator command."""
+    global _pending_operator_result
+    if not isinstance(result, dict):
+        return False
+    _operator_result_lock.acquire()
+    try:
+        _pending_operator_result = result
+        return True
+    finally:
+        _operator_result_lock.release()
+
+
+def _operator_result_pending():
+    _operator_result_lock.acquire()
+    try:
+        return _pending_operator_result is not None
+    finally:
+        _operator_result_lock.release()
+
+
+def _take_operator_result():
+    _operator_result_lock.acquire()
+    try:
+        return _pending_operator_result
+    finally:
+        _operator_result_lock.release()
+
+
+def _ack_operator_result(item):
+    global _pending_operator_result
+    _operator_result_lock.acquire()
+    try:
+        if _pending_operator_result is item:
+            _pending_operator_result = None
+            return True
+        return False
+    finally:
+        _operator_result_lock.release()
 
 
 def take_sync_message():
@@ -1039,20 +1065,21 @@ def _queue_rules_v3_release(metadata, raw_release):
         _rules_v3_lock.release()
 
 
-def _queue_commands(commands):
+def _queue_operator_command(command):
+    global _pending_operator_command, _last_queued_operator_command_id
     global _last_delivered_command_sequence
+    command = _validate_operator_command(command, _session_id)
+    if command is None:
+        return False
     _command_lock.acquire()
     try:
-        for command in commands:
-            sequence = command.get('commandSequence')
-            if sequence <= _last_delivered_command_sequence:
-                continue
-            if len(_pending_commands) >= COMMAND_QUEUE_DEPTH:
-                # Commands are ordered. Stop rather than discard an older
-                # unseen command or advance the sequence beyond queue capacity.
-                break
-            _pending_commands.append(command)
-            _last_delivered_command_sequence = sequence
+        if command.get('commandId') == _last_queued_operator_command_id:
+            return False
+        _pending_operator_command = command
+        _last_queued_operator_command_id = command.get('commandId')
+        _last_delivered_command_sequence = max(
+            _last_delivered_command_sequence, command.get('commandSequence'))
+        return True
     finally:
         _command_lock.release()
 
@@ -1253,8 +1280,8 @@ def _request_device_sync():
     noncredential = dict(reply)
     noncredential.pop('authenticationBootstrap', None)
     _set_sync_state(noncredential)
-    _queue_commands(_filter_new_commands(
-        reply.get('pendingCommands'), _last_delivered_command_sequence))
+    # The old device-command list is deliberately ignored. Current operator
+    # requests arrive only through the mirrored, session-targeted RTDB slot.
     return request, bootstrap
 
 
@@ -1360,7 +1387,7 @@ def _rules_pointer_key_summary(value):
 def _run_rules_v3_staging_step(schedule, rtdb_action):
     """Perform one V3 download/report operation outside V2 coordination.
 
-    V2 coordination remains its fixed global-enable/rules/commands exchange.
+    Coordination remains its fixed global-enable/rules/operator-command exchange.
     This independent, low-priority step never adds a V2 stage or changes the
     V2 schedule outcome. It carries status and bytes only; CPU A validates,
     stages, and adopts only at restart.
@@ -1418,6 +1445,8 @@ def _next_rtdb_action(schedule, now, current_sequence=None):
         return 'token-refresh'
     if schedule['syncWritePending']:
         return 'sync-state'
+    if _operator_result_pending():
+        return 'operator-result'
     # Finish an in-progress coordination snapshot before selecting another
     # class of work. It is a fixed three-read exchange followed by one pending
     # sync-state write, so this cannot create an unbounded current blackout.
@@ -1484,6 +1513,15 @@ def _run_rtdb_step(schedule, latest_observation):
         elif action == 'sync-state':
             _write_sync_state(auth, 'ok', schedule['exchangeId'])
             schedule['syncWritePending'] = False
+        elif action == 'operator-result':
+            result = _take_operator_result()
+            if result is not None:
+                report = dict(result)
+                report['reportedAtMs'] = {'.sv': 'timestamp'}
+                _rtdb_put(auth,
+                          'v1/sites/{}/devices/{}/operatorControl/result'.format(
+                              SITE_ID, RTDB_DEVICE_ID), report)
+                _ack_operator_result(result)
         elif action == 'current-observation':
             current = _copy_current_observation(latest_observation, _session_id)
             _rtdb_put(auth,
@@ -1505,14 +1543,12 @@ def _run_rtdb_step(schedule, latest_observation):
             if key_summary != schedule['lastRulesPointerKeySummary']:
                 schedule['lastRulesPointerKeySummary'] = key_summary
                 log('RTDB rules pointer read [M6.7 keys={}]'.format(key_summary))
-            schedule['coordinationStage'] = 'commands'
-        elif action == 'commands':
-            commands = _rtdb_get(
-                auth, 'v1/sites/{}/devices/{}/commands'.format(
+            schedule['coordinationStage'] = 'operator-command'
+        elif action == 'operator-command':
+            command = _rtdb_get(
+                auth, 'v1/sites/{}/devices/{}/operatorControl/command'.format(
                     SITE_ID, RTDB_DEVICE_ID))
-            fresh = _filter_new_commands(
-                commands, _last_delivered_command_sequence)
-            _queue_commands(fresh)
+            queued = _queue_operator_command(command)
             _set_sync_state({
                 'schemaVersion': 1,
                 'kind': 'rtdb-coordination-snapshot',
@@ -1521,7 +1557,7 @@ def _run_rtdb_step(schedule, latest_observation):
                 'sessionId': _session_id,
                 'globalEnable': schedule['coordination'].get('globalEnable'),
                 'currentRules': schedule['coordination'].get('currentRules'),
-                'pendingCommandCount': len(fresh),
+                'pendingCommandCount': 1 if queued else 0,
             })
             schedule['coordinationStage'] = None
             schedule['coordination'] = {}
@@ -1533,7 +1569,7 @@ def _run_rtdb_step(schedule, latest_observation):
         if action == 'presence':
             schedule['nextPresenceAt'] = time.ticks_add(
                 completed_at, RTDB_PRESENCE_PERIOD_MS)
-        elif action == 'commands':
+        elif action == 'operator-command':
             schedule['nextCoordinationAt'] = time.ticks_add(
                 completed_at, RTDB_COORDINATION_PERIOD_MS)
         _complete_rtdb_action(schedule, action, completed_at, True)
@@ -1820,7 +1856,7 @@ def start():
         if _started:
             return False
         _started = True
-        log('CPU B release M6.35: bounded observations and event-board transport')
+        log('CPU B release M6.36: session-targeted operator control transport')
         _thread.start_new_thread(_worker, ())
         return True
     finally:

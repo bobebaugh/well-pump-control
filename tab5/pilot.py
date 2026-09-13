@@ -1,4 +1,4 @@
-# Release: 2026-09-12 M6.35 — rules-driven observations and current event board.
+# Release: 2026-09-13 M6.36 — approved User Monitor and restart controls.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -32,6 +32,7 @@ SHELLY_1_COMPONENTS_URL = ('http://192.168.50.201/rpc/Shelly.GetComponents?'
                            'dynamic_only=true&include=%5B%22config%22%2C%22status%22%5D')
 SHELLY_1_STOP_URL = 'http://192.168.50.201/rpc/Switch.Set?id=0&on=false'
 SHELLY_1_SWITCH_URL = 'http://192.168.50.201/rpc/Switch.Set?id={}&on={}'
+SHELLY_1_RESTART_URL = 'http://192.168.50.201/rpc/Shelly.Reboot'
 SAMPLE_PERIOD_MS = 1000
 SHELLY_TIMEOUT_S = 1  # requests has whole-second granularity; C++ used 750ms
 STALE_AFTER_MS = 3000
@@ -44,7 +45,11 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.35'
+SOFTWARE_RELEASE = 'M6.36'
+OPERATOR_COMMAND_LIFETIME_MS = 45000
+OPERATOR_CONFIRM_WINDOW_MS = 8000
+SHELLY_RESTART_CONFIRM_MS = 60000
+TAB5_RESTART_DELAY_MS = 1500
 
 # CPU A validates and adopts the v2 runtime package. CPU B carries only the
 # RTDB pointer and exact downloaded bytes; it never interprets package meaning.
@@ -71,6 +76,8 @@ MATERIAL_EXACT_CHANGE_PATHS = (
     'status.adc_available',
     'status.battery_available',
     'status.clock_synced',
+    'status.user_monitor_active',
+    'status.tab5_relay_restoration',
 )
 MATERIAL_CHANGE_LABELS = {
     'values.power': 'Shelly EM',
@@ -88,6 +95,8 @@ MATERIAL_CHANGE_LABELS = {
     'status.adc_available': 'pressure ADC',
     'status.battery_available': 'Tab5 battery',
     'status.clock_synced': 'Tab5 clock',
+    'status.user_monitor_active': 'Tab5 operator mode',
+    'status.tab5_relay_restoration': 'Tab5 relay evidence',
     'status.shelly_available': 'Shelly EM',
     'status.shelly1_available': 'Shelly 1',
 }
@@ -652,6 +661,150 @@ def read_shelly1(read_json=None):
     except Exception:
         components_data = None
     return normalize_shelly1_cycle(status_data, components_data)
+
+
+def shelly1_restart_request(request_get=None):
+    """Issue one supported reboot RPC without retrying an uncertain request."""
+    getter = request_get if callable(request_get) else requests.get
+    response = None
+    try:
+        response = getter(SHELLY_1_RESTART_URL, timeout=SHELLY_TIMEOUT_S)
+        status_code = getattr(response, 'status_code', None)
+        if not isinstance(status_code, int) or not 200 <= status_code < 300:
+            return 'failed', 'shelly-restart-http-error'
+        body = response.json()
+        if not isinstance(body, dict) or body.get('error') is not None:
+            return 'failed', 'shelly-restart-rpc-error'
+        return 'accepted', 'shelly-restart-acknowledged'
+    except Exception:
+        # A transport timeout can occur after the device accepted the reboot.
+        # Never turn that ambiguity into an automatic second reboot.
+        return 'unknown', 'shelly-restart-outcome-unknown'
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+
+def operator_command_execution_decision(command, session_id, utc_ms,
+                                        clock_synced, last_command_id=None):
+    """Enforce identity, session, expiry, and duplicate checks at execution."""
+    if not isinstance(command, dict):
+        return 'not-delivered', 'invalid-command'
+    if command.get('targetSessionId') != session_id:
+        return 'not-delivered', 'old-session'
+    if command.get('commandId') == last_command_id:
+        return 'not-delivered', 'duplicate-command'
+    if clock_synced is not True or not isinstance(utc_ms, int):
+        return 'not-delivered', 'clock-not-synchronized'
+    requested = command.get('requestedAtMs')
+    expires = command.get('expiresAtMs')
+    if (not isinstance(requested, int) or isinstance(requested, bool) or
+            not isinstance(expires, int) or isinstance(expires, bool) or
+            expires - requested != OPERATOR_COMMAND_LIFETIME_MS):
+        return 'not-delivered', 'invalid-expiry'
+    if utc_ms < requested - 5000:
+        return 'not-delivered', 'command-from-future'
+    if utc_ms > expires:
+        return 'not-delivered', 'command-expired'
+    return 'accepted', 'execution-boundary-accepted'
+
+
+def operator_result(command, session_id, outcome, detail_code,
+                    relay_restoration='not-applicable'):
+    """Build the closed mirrored result; CPU B supplies server receipt time."""
+    return {
+        'schemaVersion': 1,
+        'kind': 'operator-command-result',
+        'commandId': command.get('commandId'),
+        'commandSequence': command.get('commandSequence'),
+        'siteId': SITE_ID,
+        'deviceId': DEVICE_ID,
+        'targetSessionId': command.get('targetSessionId'),
+        'reportingSessionId': session_id,
+        'commandType': command.get('commandType'),
+        'outcome': outcome,
+        'detailCode': detail_code,
+        'reportedAtMs': 0,
+        'relayRestoration': relay_restoration,
+    }
+
+
+def operator_monitor_occurrence_field(resolved):
+    """Find the deliberate manual Monitor event without assuming its ID/name."""
+    if not isinstance(resolved, dict):
+        return None
+    mode_target = resolved.get('operatingModeTarget')
+    for event in resolved.get('events', []):
+        trigger = event.get('opening', {}).get('trigger', {})
+        assignments = event.get('onOpen', {}).get('assignments', [])
+        selects_monitor = any(
+            item.get('target') == mode_target and item.get('value') == 'Monitor' and
+            item.get('ownership') == 'whileOpen'
+            for item in assignments if isinstance(item, dict))
+        if (event.get('enabled') is True and event.get('eventClass') == 'monitor' and
+                trigger.get('type') == 'manual' and selects_monitor and
+                event.get('closing', {}).get('policy') == 'clearEvents'):
+            return trigger.get('occurrenceField')
+    return None
+
+
+def shelly_restart_confirmation(pending, observation_sequence, now_ticks_ms,
+                                shelly_available, reported_lock):
+    """Confirm only from a later fresh lock read; otherwise bound ambiguity."""
+    if not isinstance(pending, dict):
+        return None
+    if (observation_sequence > pending.get('acceptedSequence', observation_sequence) and
+            shelly_available is True):
+        if reported_lock == 0:
+            return 'confirmed-completed', 'fresh-islocked-zero'
+        if (isinstance(reported_lock, int) and not isinstance(reported_lock, bool) and
+                (reported_lock == -1 or reported_lock > 0)):
+            return 'failed', 'fresh-lockout-remains'
+        return 'unknown', 'fresh-lock-evidence-invalid'
+    started = pending.get('startedTicksMs')
+    if (isinstance(started, int) and isinstance(now_ticks_ms, int) and
+            time.ticks_diff(now_ticks_ms, started) >= SHELLY_RESTART_CONFIRM_MS):
+        return 'unknown', 'fresh-lock-evidence-timeout'
+    return None
+
+
+def _utc_tuple_epoch_ms(value):
+    """Convert SNTP UTC calendar fields without assuming MicroPython's epoch."""
+    if not isinstance(value, (tuple, list)) or len(value) < 6:
+        return None
+    year, month, day, hour, minute, second = value[:6]
+    if (not all(isinstance(item, int) for item in value[:6]) or
+            not 1970 <= year <= 2200 or not 1 <= month <= 12 or
+            not 1 <= day <= 31 or not 0 <= hour <= 23 or
+            not 0 <= minute <= 59 or not 0 <= second <= 60):
+        return None
+    def leap(candidate):
+        return candidate % 4 == 0 and (
+            candidate % 100 != 0 or candidate % 400 == 0)
+    month_days = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    if day > month_days[month - 1] + (1 if month == 2 and leap(year) else 0):
+        return None
+    days = 0
+    for candidate in range(1970, year):
+        days += 366 if leap(candidate) else 365
+    for candidate in range(1, month):
+        days += month_days[candidate - 1]
+        if candidate == 2 and leap(year):
+            days += 1
+    days += day - 1
+    return (((days * 24 + hour) * 60 + minute) * 60 + second) * 1000
+
+
+def utc_epoch_ms(clock_synced):
+    if clock_synced is not True:
+        return None
+    try:
+        return _utc_tuple_epoch_ms(time.localtime())
+    except Exception:
+        return None
 
 
 def format_observed_at(clock_is_synced):
@@ -3472,8 +3625,13 @@ def shelly_local_lock_status(shelly1_available, reported_lock=None):
     if not shelly1_available:
         return 'UNAVAILABLE'
     if isinstance(reported_lock, int) and not isinstance(reported_lock, bool):
-        return 'NORMAL' if reported_lock == 0 else 'LOCKED'
-    return 'NOT REPORTED'
+        if reported_lock == -1:
+            return 'FULL LOCKOUT'
+        if reported_lock == 0:
+            return 'NORMAL'
+        if reported_lock > 0:
+            return 'TEMP {}s'.format(reported_lock)
+    return 'UNKNOWN'
 
 
 def source_age_ms(status, last_ticks_key, stored_age_key, current_ticks_ms):
@@ -3718,24 +3876,30 @@ def build_system_hmi_model(observation, adopted_reference, rules_package,
 
 
 def build_events_hmi_model(observation):
-    """Show only the active V3 state presently available in CPU-A memory."""
+    """Show event, deliberate Monitor, restart, and Shelly lock evidence."""
     if not isinstance(observation, dict):
         observation = {}
     status = observation.get('status')
     status = status if isinstance(status, dict) else {}
     shelly1_available = status.get('shelly1_available') is True
+    values = observation.get('values')
+    values = values if isinstance(values, dict) else {}
     active = status.get('v3_active_event_ids')
     active = active if isinstance(active, list) else None
     return {
         'event_engine': status.get('rules_runtime_state', 'UNAVAILABLE'),
         'active_events': (', '.join(active) if active else
                           'NONE' if active is not None else 'UNAVAILABLE'),
-        'event_override': 'NOT AVAILABLE',
-        'system_override': 'NOT AVAILABLE',
+        'user_monitor': ('ACTIVE' if status.get('user_monitor_active') is True
+                         else 'NORMAL'),
+        'relay_restoration': status.get(
+            'tab5_relay_restoration', 'not-applicable').upper(),
         'shelly_lock': shelly_local_lock_status(
-            shelly1_available,
-            observation.get('values', {}).get('shelly1_lock')),
-        'shelly_override': 'NOT AVAILABLE',
+            shelly1_available, values.get('shelly1_lock')),
+        'shelly_lockout_count': (values.get('shelly1_lockout_count')
+                                 if shelly1_available else None),
+        'control_status': status.get('operator_control_status', 'READY'),
+        'staged_restart_adoption': status.get('staged_restart_adoption'),
     }
 
 
@@ -3755,8 +3919,52 @@ HMI_PAGE_SYSTEM = 'system'
 HMI_PAGE_EVENTS = 'events'
 NAV_Y, NAV_H = 630, 70
 NAV_NOW_X, NAV_SYSTEM_X, NAV_EVENTS_X, NAV_W = 35, 450, 865, 380
+CONTROL_Y, CONTROL_H, CONTROL_W = 405, 92, 360
+CONTROL_MONITOR_X, CONTROL_TAB5_X, CONTROL_SHELLY_X = 45, 460, 875
 _last_rendered_page = None
 _field_cache = {}
+operator_armed_action = None
+operator_armed_until_ms = None
+operator_local_pending_action = None
+operator_control_status = 'READY'
+shelly_restart_pending = None
+tab5_restart_due_ms = None
+
+
+def operator_control_at(x, y, page):
+    if page != HMI_PAGE_EVENTS or not (_is_number(x) and _is_number(y)):
+        return None
+    if not CONTROL_Y <= y <= CONTROL_Y + CONTROL_H:
+        return None
+    if CONTROL_MONITOR_X <= x <= CONTROL_MONITOR_X + CONTROL_W:
+        return 'enter-user-monitor'
+    if CONTROL_TAB5_X <= x <= CONTROL_TAB5_X + CONTROL_W:
+        return 'restart-tab5'
+    if CONTROL_SHELLY_X <= x <= CONTROL_SHELLY_X + CONTROL_W:
+        return 'restart-shelly1'
+    return None
+
+
+def arm_operator_control(action, now_ms, armed_action, armed_until_ms,
+                         busy=False):
+    """Require two distinct taps of one action inside a short window."""
+    if busy or action not in (
+            'enter-user-monitor', 'restart-tab5', 'restart-shelly1'):
+        return armed_action, armed_until_ms, None
+    if (armed_action == action and isinstance(armed_until_ms, int) and
+            time.ticks_diff(armed_until_ms, now_ms) >= 0):
+        return None, None, action
+    return action, time.ticks_add(now_ms, OPERATOR_CONFIRM_WINDOW_MS), None
+
+
+def operator_button_label(action):
+    labels = {
+        'enter-user-monitor': 'USER MONITOR',
+        'restart-tab5': 'RESTART TAB5',
+        'restart-shelly1': 'RESTART SHELLY 1',
+    }
+    label = labels.get(action, action)
+    return '{} - TAP AGAIN'.format(label) if operator_armed_action == action else label
 
 
 def navigation_page_at(x, y):
@@ -3980,28 +4188,40 @@ def render_events(model):
                 45, 180, 570, 42, M5.Lcd.FONTS.Montserrat24, YELLOW,
                 'events.active')
 
-    draw_label('EVENT OVERRIDE', 45, 265, M5.Lcd.FONTS.Montserrat18, CYAN)
-    _draw_field(model['event_override'], 45, 298, 570, 55,
-                M5.Lcd.FONTS.DejaVu40, YELLOW, 'events.event_override')
+    draw_label('USER MONITOR', 665, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
+    monitor_color = RED if model['user_monitor'] == 'ACTIVE' else GREEN
+    _draw_field('{}  RELAY {}'.format(
+        model['user_monitor'], model['relay_restoration']),
+        665, 128, 570, 55, M5.Lcd.FONTS.Montserrat24, monitor_color,
+        'events.monitor')
 
-    draw_label('SYSTEM OVERRIDE', 665, 95, M5.Lcd.FONTS.Montserrat18, CYAN)
-    _draw_field(model['system_override'], 665, 128, 570, 55,
-                M5.Lcd.FONTS.DejaVu40, YELLOW, 'events.system_override')
-
-    draw_label('SHELLY LOCAL LOCK', 665, 265,
+    draw_label('SHELLY LOCAL LOCK', 45, 265,
                M5.Lcd.FONTS.Montserrat18, CYAN)
-    lock_color = RED if model['shelly_lock'] == 'LOCKED' else YELLOW
-    _draw_field(model['shelly_lock'], 665, 298, 570, 55,
-                M5.Lcd.FONTS.DejaVu40, lock_color, 'events.shelly_lock')
-    _draw_field('REMOTE OVERRIDE: {}'.format(model['shelly_override']),
-                665, 370, 570, 42, M5.Lcd.FONTS.Montserrat24, YELLOW,
-                'events.shelly_override')
+    lock_color = (GREEN if model['shelly_lock'] == 'NORMAL' else RED
+                  if model['shelly_lock'] in ('FULL LOCKOUT', 'UNAVAILABLE', 'UNKNOWN')
+                  else YELLOW)
+    _draw_field('{}  LOCNTR {}'.format(
+        model['shelly_lock'],
+        model['shelly_lockout_count'] if isinstance(
+            model['shelly_lockout_count'], int) else '--'),
+        45, 298, 1190, 55, M5.Lcd.FONTS.DejaVu40, lock_color,
+        'events.shelly_lock')
 
-    _draw_field('V3 EVENTS ACTIVE; COMMANDS AND RETAINED EVENT BROWSER PENDING',
-                45, 480, 1190, 42, M5.Lcd.FONTS.Montserrat24, YELLOW,
-                'events.boundary')
-    _draw_field('HISTORY AND PARAMETERS ARE MANAGED ON THE WEB APP',
-                45, 575, 1190, 35, M5.Lcd.FONTS.Montserrat18, CYAN,
+    for action, x in (
+            ('enter-user-monitor', CONTROL_MONITOR_X),
+            ('restart-tab5', CONTROL_TAB5_X),
+            ('restart-shelly1', CONTROL_SHELLY_X)):
+        _draw_field(operator_button_label(action), x, CONTROL_Y,
+                    CONTROL_W, CONTROL_H, M5.Lcd.FONTS.Montserrat24,
+                    YELLOW, 'events.button.' + action)
+    _draw_field('STATUS: {}'.format(model['control_status']),
+                45, 515, 1190, 35, M5.Lcd.FONTS.Montserrat18, YELLOW,
+                'events.control_status')
+    adoption = model['staged_restart_adoption']
+    _draw_field(('RESTART WILL ADOPT STAGED {}'.format(adoption)
+                 if adoption else
+                 'RESTART CREATES A FRESH EVENT BOARD AND SESSION'),
+                45, 560, 1190, 35, M5.Lcd.FONTS.Montserrat18, CYAN,
                 'events.footer')
 
 
@@ -4079,18 +4299,39 @@ def check_navigation(was_pressed, current_page):
     was_pressed tracks whether the finger was inside either navigation button
     on the previous poll. A different target remains selectable if an entire
     release occurred between polls. Logging remains keyed on the finger edge."""
-    global _touch_was_down
+    global _touch_was_down, operator_armed_action, operator_armed_until_ms
+    global operator_local_pending_action, operator_control_status
     p = read_touch_point()
     if p is None:
         _touch_was_down = False
         return current_page, False
     tx, ty, x, y = p
+    fresh_touch = not _touch_was_down
     selected_page = navigation_page_at(x, y)
     inside = selected_page is not None
     if not _touch_was_down:
         log('touch screen=({},{}) page={}'.format(
             x, y, selected_page if selected_page is not None else 'none'))
     _touch_was_down = True
+    if fresh_touch and selected_page is None:
+        action = operator_control_at(x, y, current_page)
+        if action is not None:
+            busy = (operator_local_pending_action is not None or
+                    shelly_restart_pending is not None or
+                    tab5_restart_due_ms is not None)
+            (operator_armed_action, operator_armed_until_ms,
+             selected_action) = arm_operator_control(
+                action, time.ticks_ms(), operator_armed_action,
+                operator_armed_until_ms, busy)
+            if selected_action is not None:
+                operator_local_pending_action = selected_action
+                operator_control_status = 'LOCAL {} ACCEPTED'.format(
+                    selected_action.upper())
+                log('HMI operator action accepted after confirmation: {}'.format(
+                    selected_action))
+            else:
+                operator_control_status = 'TAP SAME CONTROL AGAIN WITHIN 8s'
+            return current_page, True
     if navigation_selection_allowed(
             was_pressed, current_page, selected_page):
         return selected_page, True
@@ -4099,15 +4340,24 @@ def check_navigation(was_pressed, current_page):
 
 def service_navigation():
     """Service touch independently of how much of the 1 s cycle remains."""
-    global hmi_page, navigation_pressed
+    global hmi_page, navigation_pressed, operator_armed_action
+    global operator_armed_until_ms, operator_control_status
     M5.update()
+    arm_expired = (operator_armed_action is not None and
+                   isinstance(operator_armed_until_ms, int) and
+                   time.ticks_diff(operator_armed_until_ms,
+                                   time.ticks_ms()) < 0)
+    if arm_expired:
+        operator_armed_action = None
+        operator_armed_until_ms = None
+        operator_control_status = 'READY'
     previous_page = hmi_page
     hmi_page, navigation_pressed = check_navigation(
         navigation_pressed, hmi_page)
     if hmi_page != previous_page:
         log('HMI page selected: {}'.format(hmi_page))
         return True
-    return False
+    return arm_expired
 
 
 # --- manually selected pressure qualification utility ---
@@ -4707,7 +4957,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.35: rules-driven observations and current event board; V3 authority')
+log('CPU A release M6.36: User Monitor and supported restart controls; V3 authority')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.
@@ -4788,6 +5038,10 @@ last_cycle_start_ms = None
 last_cycle_work_ms = None
 session_uptime_ms = 0
 heap_min_free_bytes = None
+last_operator_command_id = None
+online_operator_command = None
+monitor_result_command = None
+monitor_relay_restoration = 'not-applicable'
 
 log('Operational HMI initialized; V3 runs only when a valid startup package exists')
 render_hmi(hmi_page, {}, active_rules_reference, active_rules,
@@ -4795,6 +5049,10 @@ render_hmi(hmi_page, {}, active_rules_reference, active_rules,
 
 while True:
     now = time.ticks_ms()
+    if (isinstance(tab5_restart_due_ms, int) and
+            time.ticks_diff(now, tab5_restart_due_ms) >= 0):
+        log('TAB5 RESTART: machine.reset begins a new CPU A/CPU B session')
+        reset()
     cycle_started_ms = now
     cycle_interval_ms = (None if last_cycle_start_ms is None else
                          elapsed_ticks_ms(last_cycle_start_ms, now))
@@ -4812,6 +5070,7 @@ while True:
     was_connected = wifi_connected
     (wifi_connected, network_traffic_allowed, clock_synced,
      wifi_driver_status, wifi_ip, wifi_disconnect_events) = cloud.status_snapshot()
+    online_operator_command = cloud.take_operator_command()
     if wifi_connected and not was_connected:
         shelly_resume_confirmation_pending = True
         shelly1_resume_confirmation_pending = True
@@ -4966,6 +5225,108 @@ while True:
     add_transport_evidence(observation, transport_status, observation_ticks_ms)
     observation['status']['rules_runtime_state'] = rules_runtime_state
     observation['status']['rules_runtime_reason'] = rules_runtime_reason
+    operator_occurrences = None
+
+    # First finish any Shelly restart only from a later, fresh acquisition.
+    if shelly_restart_pending is not None:
+        fresh_lock = observation['values'].get('shelly1_lock')
+        confirmation = shelly_restart_confirmation(
+            shelly_restart_pending, observation_sequence,
+            observation_ticks_ms,
+            observation['status'].get('shelly1_available'), fresh_lock)
+        if confirmation is not None:
+            outcome, detail = confirmation
+            command = shelly_restart_pending.get('command')
+            if command is not None:
+                cloud.submit_operator_result(operator_result(
+                    command, device_session_id, outcome, detail))
+            operator_control_status = (
+                'SHELLY RESTART CONFIRMED: ISLOCKED 0'
+                if outcome == 'confirmed-completed' else
+                'SHELLY RESTART FAILED: LOCKOUT REMAINS'
+                if outcome == 'failed' else
+                'SHELLY RESTART UNKNOWN: NO VALID FRESH LOCK EVIDENCE')
+            shelly_restart_pending = None
+
+    selected_action = None
+    selected_command = None
+    if online_operator_command is not None:
+        # One online request wins this cycle; discard an unexecuted local tap
+        # rather than silently applying two operator actions back-to-back.
+        operator_local_pending_action = None
+        decision, detail = operator_command_execution_decision(
+            online_operator_command, device_session_id,
+            utc_epoch_ms(clock_synced), clock_synced,
+            last_operator_command_id)
+        last_operator_command_id = online_operator_command.get('commandId')
+        cloud.mark_operator_command_applied(
+            online_operator_command.get('commandId'),
+            online_operator_command.get('commandSequence'))
+        if decision != 'accepted':
+            cloud.submit_operator_result(operator_result(
+                online_operator_command, device_session_id,
+                'not-delivered', detail))
+            operator_control_status = 'ONLINE NOT DELIVERED: {}'.format(
+                detail.upper())
+        else:
+            selected_action = online_operator_command.get('commandType')
+            selected_command = online_operator_command
+    elif operator_local_pending_action is not None:
+        selected_action = operator_local_pending_action
+        operator_local_pending_action = None
+
+    if selected_action == 'enter-user-monitor':
+        occurrence_field = operator_monitor_occurrence_field(
+            rules_v3_runtime['resolved'] if rules_v3_runtime is not None else None)
+        if occurrence_field is None:
+            if selected_command is not None:
+                cloud.submit_operator_result(operator_result(
+                    selected_command, device_session_id, 'failed',
+                    'monitor-event-unavailable'))
+            operator_control_status = 'USER MONITOR FAILED: EVENT UNAVAILABLE'
+        else:
+            pump_target = rules_v3_runtime['resolved'].get('pumpTarget')
+            had_inhibit = _rules_v3_has_owner(
+                rules_v3_runtime['kernel'], pump_target)
+            relay_on = observation['values'].get('shelly1_rly0')
+            lock_value = observation['values'].get('shelly1_lock')
+            monitor_relay_restoration = (
+                'confirmed' if had_inhibit and relay_on is True and lock_value == 0
+                else 'unconfirmed' if had_inhibit else 'not-needed')
+            operator_occurrences = {occurrence_field: True}
+            monitor_result_command = selected_command
+            if selected_command is not None:
+                cloud.submit_operator_result(operator_result(
+                    selected_command, device_session_id, 'accepted',
+                    'monitor-request-accepted', monitor_relay_restoration))
+            operator_control_status = 'USER MONITOR ACCEPTED; RELAY {}'.format(
+                monitor_relay_restoration.upper())
+    elif selected_action == 'restart-tab5':
+        if selected_command is not None:
+            cloud.submit_operator_result(operator_result(
+                selected_command, device_session_id, 'accepted',
+                'tab5-restart-scheduled'))
+        operator_control_status = 'TAB5 RESTART ACCEPTED; NEW SESSION PENDING'
+        tab5_restart_due_ms = time.ticks_add(
+            observation_ticks_ms, TAB5_RESTART_DELAY_MS)
+    elif selected_action == 'restart-shelly1':
+        if observation['status'].get('shelly1_available') is not True:
+            outcome, detail = 'failed', 'shelly-unavailable-before-request'
+        else:
+            outcome, detail = shelly1_restart_request()
+        if outcome == 'accepted':
+            shelly_restart_pending = {
+                'command': selected_command,
+                'startedTicksMs': observation_ticks_ms,
+                'acceptedSequence': observation_sequence,
+            }
+            operator_control_status = 'SHELLY RESTART ACCEPTED; CLEAR UNCONFIRMED'
+        else:
+            operator_control_status = 'SHELLY RESTART {}: {}'.format(
+                outcome.upper(), detail.upper())
+        if selected_command is not None:
+            cloud.submit_operator_result(operator_result(
+                selected_command, device_session_id, outcome, detail))
     durable_fields = None
     durable_reasons = []
     v3_processing_ms = None
@@ -4976,6 +5337,7 @@ while True:
         try:
             v3_cycle = run_rules_v3_cycle(
                 rules_v3_runtime, observation, observation_ticks_ms,
+                occurrences=operator_occurrences,
                 cycle_sequence=observation_sequence,
                 observed_at=observation.get('observedAt'),
                 opening_uptime_ms=session_uptime_ms)
@@ -5025,6 +5387,25 @@ while True:
         if mode_now != rules_v3_last_mode:
             log('V3 MODE: {} -> {}'.format(rules_v3_last_mode, mode_now))
             rules_v3_last_mode = mode_now
+        if operator_occurrences is not None and mode_now == 'Monitor':
+            operator_control_status = 'USER MONITOR ACTIVE; RELAY {}'.format(
+                monitor_relay_restoration.upper())
+            if monitor_result_command is not None:
+                cloud.submit_operator_result(operator_result(
+                    monitor_result_command, device_session_id,
+                    'confirmed-completed', 'monitor-active',
+                    monitor_relay_restoration))
+        if (mode_now == 'Monitor' and
+                monitor_relay_restoration == 'unconfirmed' and
+                observation['status'].get('shelly1_available') is True and
+                observation['values'].get('shelly1_lock') == 0 and
+                observation['values'].get('shelly1_rly0') is True):
+            monitor_relay_restoration = 'confirmed'
+            operator_control_status = 'USER MONITOR ACTIVE; RELAY CONFIRMED'
+            if monitor_result_command is not None:
+                cloud.submit_operator_result(operator_result(
+                    monitor_result_command, device_session_id,
+                    'confirmed-completed', 'monitor-active', 'confirmed'))
         relay_diagnostic = rules_v3_relay_diagnostic(rules_v3_runtime, observation, v3_actions)
         if relay_diagnostic != rules_v3_last_relay_diagnostic:
             log('V3 RELAY EVIDENCE: sequence={} release_pending={} available={} observed_on={} lock={} selected={}'.format(
@@ -5047,6 +5428,20 @@ while True:
                 log('V3 ACTION DISPATCH: {}={} -> {} sequence={} elapsed_ms={}'.format(
                     signature[0], signature[1], dispatch['outcome'], observation_sequence,
                     time.ticks_diff(time.ticks_ms(), dispatch_started)))
+    monitor_active = (rules_v3_runtime is not None and
+                      rules_v3_effective_mode(
+                          rules_v3_runtime['resolved'],
+                          rules_v3_runtime['kernel']) == 'Monitor')
+    observation['status']['user_monitor_active'] = monitor_active
+    observation['status']['tab5_relay_restoration'] = (
+        monitor_relay_restoration if monitor_active else 'not-applicable')
+    observation['status']['operator_control_status'] = operator_control_status
+    if (isinstance(rules_v3_staged_reference, dict) and
+            (not isinstance(rules_v3_running_reference, dict) or
+             rules_v3_staged_reference.get('contentHash') !=
+             rules_v3_running_reference.get('contentHash'))):
+        observation['status']['staged_restart_adoption'] = (
+            rules_v3_staged_reference.get('releaseId'))
     last_observation = observation
     append_event_history(event_history, observation)
     cloud.submit_observation(observation)

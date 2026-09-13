@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://well-pump-control.local/contracts/operator-command-result-v1.schema.json",
+  "title": "Operator command device outcome",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "commandId", "commandSequence", "siteId", "deviceId", "targetSessionId", "reportingSessionId", "commandType", "outcome", "detailCode", "reportedAtMs", "relayRestoration"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "operator-command-result" },
+    "commandId": { "type": "string", "pattern": "^op_[A-Za-z0-9_-]{8,128}$" },
+    "commandSequence": { "type": "integer", "minimum": 1 },
+    "siteId": { "const": "well-main" },
+    "deviceId": { "const": "tab5-well-main" },
+    "targetSessionId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "reportingSessionId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,64}$" },
+    "commandType": { "type": "string", "enum": ["enter-user-monitor", "restart-tab5", "restart-shelly1"] },
+    "outcome": { "type": "string", "enum": ["not-delivered", "accepted", "confirmed-completed", "failed", "unknown"] },
+    "detailCode": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
+    "reportedAtMs": { "type": "integer", "minimum": 0 },
+    "relayRestoration": { "type": "string", "enum": ["not-applicable", "not-needed", "unconfirmed", "confirmed"] }
+  }
+}

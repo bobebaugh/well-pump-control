@@ -281,7 +281,7 @@ class CloudTransportTests(unittest.TestCase):
         self.assertTrue(self.cloud._rules_download_may_follow_rtdb(None))
         self.assertTrue(self.cloud._rules_download_may_follow_rtdb("current-observation"))
         self.assertFalse(self.cloud._rules_download_may_follow_rtdb("rules-metadata"))
-        self.assertFalse(self.cloud._rules_download_may_follow_rtdb("commands"))
+        self.assertFalse(self.cloud._rules_download_may_follow_rtdb("operator-command"))
 
     def test_rules_pointer_summary_reports_field_names_not_values(self):
         pointer = {"siteId": "well-main", "schemaVersion": 1}
@@ -387,85 +387,83 @@ class CloudTransportTests(unittest.TestCase):
         with self.assertRaises(self.cloud.TransportError):
             self.cloud._copy_current_observation({"schemaVersion": 2}, "boot_12345678")
 
-    def test_commands_are_sequence_aware_and_stale_commands_do_not_repeat(self):
-        def command(sequence, **changes):
+    def test_operator_command_is_closed_session_targeted_and_not_requeued(self):
+        def command(sequence=12, **changes):
             value = {
                 "schemaVersion": 1,
-                "commandId": "20260824173458-command-web_2kP9mQ7z-{:010d}".format(sequence),
+                "kind": "operator-command",
+                "commandId": "op_1234567890abcdef",
                 "commandSequence": sequence,
+                "clientRequestId": "browser_12345678",
                 "siteId": "well-main",
                 "targetDeviceId": "tab5-well-main",
-                "commandType": "close-event",
-                "requestedAt": "2026-08-24T20:00:00Z",
-                "requestedBy": {"type": "user", "id": "example-user"},
-                "status": "pending",
-                "payload": {"future": "preserved"},
+                "targetSessionId": self.cloud.device_session_id(),
+                "commandType": "restart-tab5",
+                "requestedAtMs": 1800000000000,
+                "expiresAtMs": 1800000045000,
+                "requestedBy": {"type": "user", "id": "authenticated-owner"},
+                "payload": {},
             }
             value.update(changes)
             return value
 
-        result = self.cloud._filter_new_commands({
-            "newer": command(14),
-            "stale": command(11),
-            "next": command(12),
-            "unsupported": command(13, schemaVersion=2),
-            "other": command(15, targetDeviceId="other-device"),
-        }, 11)
-        self.assertEqual([item["commandSequence"] for item in result], [12, 14])
-        self.assertEqual(result[0]["payload"], {"future": "preserved"})
-        self.assertEqual(self.cloud._filter_new_commands(result, 14), [])
+        original_id = self.cloud._last_queued_operator_command_id
+        original_pending = self.cloud._pending_operator_command
+        try:
+            self.cloud._last_queued_operator_command_id = None
+            self.cloud._pending_operator_command = None
+            self.assertTrue(self.cloud._queue_operator_command(command()))
+            self.assertFalse(self.cloud._queue_operator_command(command()))
+            self.assertEqual(self.cloud.take_operator_command()["commandSequence"], 12)
+            self.assertIsNone(self.cloud.take_operator_command())
+        finally:
+            self.cloud._last_queued_operator_command_id = original_id
+            self.cloud._pending_operator_command = original_pending
 
     def test_malformed_command_extra_fields_are_rejected(self):
         command = {
             "schemaVersion": 1,
-            "commandId": "20260824173458-command-web_2kP9mQ7z-0000000012",
+            "kind": "operator-command",
+            "commandId": "op_1234567890abcdef",
             "commandSequence": 12,
+            "clientRequestId": "browser_12345678",
             "siteId": "well-main",
             "targetDeviceId": "tab5-well-main",
-            "commandType": "close-event",
-            "requestedAt": "2026-08-24T20:00:00Z",
-            "requestedBy": {"type": "user", "id": "example-user"},
-            "status": "pending",
+            "targetSessionId": self.cloud.device_session_id(),
+            "commandType": "restart-shelly1",
+            "requestedAtMs": 1800000000000,
+            "expiresAtMs": 1800000045000,
+            "requestedBy": {"type": "user", "id": "authenticated-owner"},
             "payload": {},
             "unexpected": True,
         }
-        self.assertEqual(self.cloud._filter_new_commands({"bad": command}, 0), [])
+        self.assertIsNone(self.cloud._validate_operator_command(command))
         del command["unexpected"]
         for changes in (
             {"requestedBy": {"type": "user", "id": "example-user", "role": "admin"}},
             {"requestedBy": {"type": "user", "id": "x" * 129}},
-            {"requestedAt": "not-a-date"},
+            {"expiresAtMs": 1800000045001},
             {"commandId": "command-12"},
             {"commandSequence": 0},
+            {"commandType": "clear-events"},
         ):
             malformed = dict(command)
             malformed.update(changes)
-            self.assertEqual(
-                self.cloud._filter_new_commands({"bad": malformed}, 0), [])
+            self.assertIsNone(self.cloud._validate_operator_command(malformed))
 
-    def test_queue_full_command_is_redelivered_after_capacity_returns(self):
-        original_queue = self.cloud._pending_commands
-        original_delivered = self.cloud._last_delivered_command_sequence
+    def test_operator_result_coalesces_newer_evidence(self):
+        original = self.cloud._pending_operator_result
         try:
-            self.cloud._pending_commands = []
-            self.cloud._last_delivered_command_sequence = 0
-            commands = []
-            for sequence in range(1, self.cloud.COMMAND_QUEUE_DEPTH + 2):
-                commands.append({
-                    "schemaVersion": 1,
-                    "commandId": "command-{}".format(sequence),
-                    "commandSequence": sequence,
-                })
-            self.cloud._queue_commands(commands)
-            self.assertEqual(len(self.cloud._pending_commands), self.cloud.COMMAND_QUEUE_DEPTH)
-            self.assertEqual(self.cloud._last_delivered_command_sequence, self.cloud.COMMAND_QUEUE_DEPTH)
-            self.cloud.take_command()
-            self.cloud._queue_commands(commands)
-            self.assertEqual(self.cloud._pending_commands[-1]["commandSequence"],
-                             self.cloud.COMMAND_QUEUE_DEPTH + 1)
+            self.cloud._pending_operator_result = None
+            accepted = {"commandId": "op_1234567890abcdef", "outcome": "accepted"}
+            confirmed = {"commandId": "op_1234567890abcdef", "outcome": "confirmed-completed"}
+            self.assertTrue(self.cloud.submit_operator_result(accepted))
+            self.assertTrue(self.cloud.submit_operator_result(confirmed))
+            self.assertIs(self.cloud._take_operator_result(), confirmed)
+            self.assertTrue(self.cloud._ack_operator_result(confirmed))
+            self.assertIsNone(self.cloud._take_operator_result())
         finally:
-            self.cloud._pending_commands = original_queue
-            self.cloud._last_delivered_command_sequence = original_delivered
+            self.cloud._pending_operator_result = original
 
     def test_custom_token_exchange_and_refresh_keep_only_temporary_credentials(self):
         self.requests.queue({
@@ -596,17 +594,17 @@ class CloudTransportTests(unittest.TestCase):
             "rtdbUrl": "https://well-pump-control-default-rtdb.firebaseio.com",
             "expiresAtTicks": 1000000,
         }
-        schedule["coordinationStage"] = "commands"
+        schedule["coordinationStage"] = "operator-command"
         original_get = self.cloud._rtdb_get
         original_put = self.cloud._rtdb_put
         try:
             self.cloud._rtdb_get = lambda _auth, path: {"path": path}
-            self.assertIsNone(self.cloud._run_rules_v3_staging_step(schedule, "commands"))
-            self.assertEqual(schedule["coordinationStage"], "commands")
+            self.assertIsNone(self.cloud._run_rules_v3_staging_step(schedule, "operator-command"))
+            self.assertEqual(schedule["coordinationStage"], "operator-command")
             self.assertEqual(self.cloud._run_rules_v3_staging_step(schedule, None), "rules-v3-pointer")
             self.assertEqual(self.cloud.take_rules_v3_pointer(), {
                 "path": "v1/sites/well-main/rules/v3/current"})
-            self.assertEqual(schedule["coordinationStage"], "commands")
+            self.assertEqual(schedule["coordinationStage"], "operator-command")
             captured = []
             self.cloud._rtdb_put = lambda _auth, path, value: captured.append((path, value))
             self.assertTrue(self.cloud.set_rules_v3_state({
@@ -789,7 +787,7 @@ class CloudTransportTests(unittest.TestCase):
                 clock[0] += 900
                 if path.endswith("globalEnable"):
                     return False
-                return {} if path.endswith("commands") else None
+                return {} if path.endswith("operatorControl/command") else None
 
             self.cloud._rtdb_put = slow_put
             self.cloud._rtdb_get = slow_get
@@ -808,7 +806,7 @@ class CloudTransportTests(unittest.TestCase):
         self.assertEqual(order[0::2], ["legacy"] * 24)
         self.assertLessEqual(actions.index("global-enable"), 0)
         self.assertLessEqual(actions.index("rules-metadata"), 1)
-        self.assertLessEqual(actions.index("commands"), 2)
+        self.assertLessEqual(actions.index("operator-command"), 2)
         self.assertLessEqual(actions.index("presence"), 4)
         self.assertIn("current-observation", actions[5:])
         self.assertGreater(actions.count("current-observation"), 1)
