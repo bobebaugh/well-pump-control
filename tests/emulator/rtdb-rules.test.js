@@ -23,6 +23,10 @@ let publisherDatabase;
 let v3PublisherDatabase;
 let eventBoardWriterDatabase;
 let wrongEventBoardWriterDatabase;
+let operatorDatabase;
+let wrongPurposeOperatorDatabase;
+let wrongDeviceOperatorDatabase;
+let unclaimedOperatorDatabase;
 
 const productionOperatorCommand = buildOperatorCommand({
   action: "restart-shelly1",
@@ -138,6 +142,16 @@ before(async () => {
   wrongEventBoardWriterDatabase = environment.authenticatedContext("netlify-event-board-writer", {
     siteId: "well-main", deviceId: "other-device", purpose: "event-board-mirror"
   }).database();
+  operatorDatabase = environment.authenticatedContext("netlify-operator-control", {
+    siteId: "well-main", deviceId: "tab5-well-main", purpose: "operator-control"
+  }).database();
+  wrongPurposeOperatorDatabase = environment.authenticatedContext("netlify-operator-control", {
+    siteId: "well-main", deviceId: "tab5-well-main", purpose: "rules-publication"
+  }).database();
+  wrongDeviceOperatorDatabase = environment.authenticatedContext("netlify-operator-control", {
+    siteId: "well-main", deviceId: "other-device", purpose: "operator-control"
+  }).database();
+  unclaimedOperatorDatabase = environment.authenticatedContext("netlify-operator-control").database();
   await environment.withSecurityRulesDisabled(async context => {
     const admin = context.database();
     await set(ref(admin, `${DEVICE}/operatorControl/command`),
@@ -351,4 +365,132 @@ test("malformed presence and sync state are denied", async () => {
     syncState({ lastAppliedCommandSequence: -1 }),
     syncState({ lastSyncAtMs: "not-a-timestamp" })
   ]) await assertFails(set(ref(deviceDatabase, `${DEVICE}/syncState`), value));
+});
+
+// The operator-control service reaches RTDB as a purpose-scoped Firebase Auth
+// identity under these rules, not through an Admin SDK privilege bypass, so its
+// access has to be proven by the emulator rather than assumed.
+function operatorCommand(changes = {}) {
+  return { ...productionOperatorCommand, ...changes };
+}
+
+test("operator identity reads exactly the status paths the endpoint needs", async () => {
+  for (const path of [
+    `${DEVICE}/operatorControl`,
+    `${DEVICE}/operatorControl/command`,
+    `${DEVICE}/presence`,
+    `${DEVICE}/rulesV3State`,
+    `${DEVICE}/currentObservation`
+  ]) {
+    await assertSucceeds(get(ref(operatorDatabase, path)));
+  }
+});
+
+test("operator identity writes a production-built command-v2 record", async () => {
+  const command = buildOperatorCommand({
+    action: "enter-user-monitor", clientRequestId: "browser_abcdefgh"
+  }, {
+    commandId: "op_abcdef1234567890", commandSequence: 21,
+    targetSessionId: "boot_12345678", requestedAtMs: 1800000100000
+  });
+  await assertSucceeds(set(ref(operatorDatabase, `${DEVICE}/operatorControl/command`), command));
+  await environment.withSecurityRulesDisabled(async context => {
+    const stored = await get(ref(context.database(), `${DEVICE}/operatorControl/command`));
+    assert.deepEqual(stored.val(), command);
+  });
+  await assertSucceeds(get(ref(deviceDatabase, `${DEVICE}/operatorControl/command`)));
+  // Restore the shared fixture the round-trip test depends on.
+  await environment.withSecurityRulesDisabled(async context => {
+    await set(ref(context.database(), `${DEVICE}/operatorControl/command`), productionOperatorCommand);
+  });
+});
+
+test("a wrong or missing operator claim is denied on every granted path", async () => {
+  const paths = [
+    `${DEVICE}/operatorControl`, `${DEVICE}/presence`,
+    `${DEVICE}/rulesV3State`, `${DEVICE}/currentObservation`
+  ];
+  for (const database of [
+    wrongPurposeOperatorDatabase, wrongDeviceOperatorDatabase,
+    unclaimedOperatorDatabase, anonymousDatabase
+  ]) {
+    for (const path of paths) await assertFails(get(ref(database, path)));
+    await assertFails(set(ref(database, `${DEVICE}/operatorControl/command`), operatorCommand()));
+  }
+});
+
+test("operator identity cannot write malformed commands", async () => {
+  for (const change of [
+    { schemaVersion: 1 },
+    { kind: "operator-request" },
+    { commandType: "clear-events" },
+    { commandId: "not-an-op-id" },
+    { commandSequence: 0 },
+    { targetDeviceId: "other-device" },
+    { siteId: "other-site" },
+    { expiresAtMs: productionOperatorCommand.requestedAtMs },
+    { payload: { kind: "arguments" } },
+    { requestedBy: { type: "service", id: "x" } },
+    { unexpected: true }
+  ]) {
+    await assertFails(set(ref(operatorDatabase, `${DEVICE}/operatorControl/command`), operatorCommand(change)));
+  }
+  const { commandId, ...missingCommandId } = productionOperatorCommand;
+  await assertFails(set(ref(operatorDatabase, `${DEVICE}/operatorControl/command`), missingCommandId));
+});
+
+test("operator identity cannot write device-owned or unrelated paths", async () => {
+  await assertFails(set(ref(operatorDatabase, `${DEVICE}/operatorControl/result`), operatorResult()));
+  await assertFails(set(ref(operatorDatabase, `${DEVICE}/operatorControl/sequence`), 99));
+  await assertFails(set(ref(operatorDatabase, `${DEVICE}/presence`), presence()));
+  await assertFails(set(ref(operatorDatabase, `${DEVICE}/currentObservation`), currentObservation()));
+  await assertFails(set(ref(operatorDatabase, `${DEVICE}/rulesV3State`), { schemaVersion: 2 }));
+  await assertFails(set(ref(operatorDatabase, `${SITE}/control/globalEnable`), true));
+  await assertFails(set(ref(operatorDatabase, `${SITE}/rules/current`), { packageVersion: 2 }));
+  await assertFails(get(ref(operatorDatabase, `${DEVICE}/syncState`)));
+  await assertFails(get(ref(operatorDatabase, `${SITE}/devices/other-device/operatorControl`)));
+});
+
+test("an ETag conflict does not overwrite the winning command", async () => {
+  const path = `${DEVICE}/operatorControl/command`;
+  const winner = buildOperatorCommand({
+    action: "restart-tab5", clientRequestId: "browser_winner01"
+  }, {
+    commandId: "op_winner1234567890", commandSequence: 31,
+    targetSessionId: "boot_12345678", requestedAtMs: 1800000200000
+  });
+  const loser = buildOperatorCommand({
+    action: "restart-shelly1", clientRequestId: "browser_loser001"
+  }, {
+    commandId: "op_loser12345678900", commandSequence: 31,
+    targetSessionId: "boot_12345678", requestedAtMs: 1800000200001
+  });
+  // ETag compare-and-set is REST-only, so this exercises the conflict semantics
+  // the store depends on over the emulator's REST endpoint. The namespace comes
+  // from the configured database rather than a guessed convention.
+  const { host, port } = emulatorAddress();
+  const configuredUrl = operatorDatabase?.app?.options?.databaseURL;
+  const namespace = configuredUrl
+    ? new URL(configuredUrl).searchParams.get("ns") || PROJECT_ID
+    : PROJECT_ID;
+  const url = `http://${host}:${port}/${path}.json?ns=${namespace}`;
+  const read = await fetch(url, { headers: { "X-Firebase-ETag": "true" } });
+  const etag = read.headers.get("etag");
+  assert.ok(etag, "the emulator must return an ETag for compare-and-set");
+  const first = await fetch(url, {
+    method: "PUT", headers: { "Content-Type": "application/json", "If-Match": etag },
+    body: JSON.stringify(winner)
+  });
+  assert.equal(first.status, 200);
+  // The second writer still holds the stale ETag and must be refused outright.
+  const second = await fetch(url, {
+    method: "PUT", headers: { "Content-Type": "application/json", "If-Match": etag },
+    body: JSON.stringify(loser)
+  });
+  assert.equal(second.status, 412);
+  await environment.withSecurityRulesDisabled(async context => {
+    const stored = await get(ref(context.database(), path));
+    assert.equal(stored.val().commandId, winner.commandId);
+    await set(ref(context.database(), path), productionOperatorCommand);
+  });
 });

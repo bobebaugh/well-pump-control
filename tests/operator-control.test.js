@@ -355,7 +355,8 @@ test("a hung backend is aborted well inside the Netlify 30s limit", async () => 
     });
   });
   const store = createOperatorControlStore({
-    env: storeEnv, getPilotAuth: stubAuth, fetch: hangingFetch, now: () => now
+    env: storeEnv, getPilotAuth: stubAuth, fetch: hangingFetch, now: () => now,
+    requestTimeoutMs: 40
   });
   const started = Date.now();
   await assert.rejects(store.status(), error => {
@@ -364,4 +365,123 @@ test("a hung backend is aborted well inside the Netlify 30s limit", async () => 
     return true;
   });
   assert.ok(Date.now() - started < 30000, "must resolve before the platform timeout");
+});
+
+function tokenCountingRest(values, tokenBody) {
+  const inner = rtdbRest(values);
+  let exchanges = 0;
+  const fetchImpl = async (url, options = {}) => {
+    if (url.startsWith("https://identitytoolkit.googleapis.com/")) {
+      exchanges += 1;
+      return { ok: true, status: 200, headers: new Map(), json: async () => tokenBody };
+    }
+    return inner.fetchImpl(url, options);
+  };
+  return { fetchImpl, exchanges: () => exchanges };
+}
+
+test("the operator token honors expiresIn and renews before it expires", async () => {
+  const values = new Map([["presence", presence]]);
+  const { fetchImpl, exchanges } = tokenCountingRest(values, { idToken: "id-token", expiresIn: "120" });
+  let clock = 0;
+  const store = createOperatorControlStore({
+    env: storeEnv, getPilotAuth: stubAuth, fetch: fetchImpl,
+    now: () => now, monotonic: () => clock
+  });
+  await store.status();
+  assert.equal(exchanges(), 1);
+  clock = 59_000;
+  await store.status();
+  assert.equal(exchanges(), 1, "a live token must be reused");
+  clock = 61_000;
+  await store.status();
+  assert.equal(exchanges(), 2, "the token must renew ahead of its own expiry");
+});
+
+test("an authentication rejection clears the cached token so the next request recovers", async () => {
+  const values = new Map([["presence", presence]]);
+  const base = tokenCountingRest(values, { idToken: "id-token", expiresIn: "3600" });
+  let deny = true;
+  const fetchImpl = async (url, options = {}) => {
+    if (!url.startsWith("https://identitytoolkit.googleapis.com/") && deny) {
+      return { ok: false, status: 401, headers: { get: () => null }, json: async () => ({}) };
+    }
+    return base.fetchImpl(url, options);
+  };
+  const store = createOperatorControlStore({
+    env: storeEnv, getPilotAuth: stubAuth, fetch: fetchImpl, now: () => now
+  });
+  await assert.rejects(store.status(), error => {
+    assert.equal(error.code, "status_read_http_401");
+    return true;
+  });
+  assert.equal(base.exchanges(), 1);
+  deny = false;
+  await store.status();
+  assert.equal(base.exchanges(), 2, "a denied token must not be served from cache again");
+});
+
+// A body that never settles is the case the previous timer missed: headers had
+// already arrived, so the timeout had been cleared.
+function stallingBody(values, stallOn) {
+  const inner = rtdbRest(values);
+  return async (url, options = {}) => {
+    const response = await inner.fetchImpl(url, options);
+    if (!stallOn(url, options)) return response;
+    return {
+      ...response,
+      json: () => new Promise((_resolve, reject) => {
+        options.signal?.addEventListener("abort", () => {
+          const error = new Error("aborted"); error.name = "AbortError"; reject(error);
+        });
+      })
+    };
+  };
+}
+
+test("a stalled response body is bounded and reported as a read failure", async () => {
+  const values = new Map([["presence", presence]]);
+  const store = createOperatorControlStore({
+    env: storeEnv, getPilotAuth: stubAuth, now: () => now, requestTimeoutMs: 40,
+    fetch: stallingBody(values, url => url.includes("/presence.json"))
+  });
+  const started = Date.now();
+  await assert.rejects(store.status(), error => {
+    assert.equal(error.operatorControlStage, "status-read");
+    assert.match(error.code, /_timeout$/);
+    return true;
+  });
+  assert.ok(Date.now() - started < 5000, "a stalled body must not hang the operation");
+});
+
+test("a stalled write body keeps the definitive status instead of becoming unknown", async () => {
+  const values = new Map([["presence", presence]]);
+  const store = createOperatorControlStore({
+    env: storeEnv, getPilotAuth: stubAuth, now: () => now,
+    nonce: () => "1234567890abcdef", requestTimeoutMs: 40,
+    fetch: stallingBody(values, (_url, options) => options.method === "PUT")
+  });
+  // RTDB answered with headers, so the write applied. A slow body must not
+  // downgrade that to an indeterminate outcome.
+  const issued = await store.issue(request);
+  assert.equal(issued.issued, true);
+  assert.equal(issued.snapshot.command.commandSequence, 1);
+});
+
+test("the whole endpoint operation stays inside its budget", async () => {
+  const never = (_url, options = {}) => new Promise((_resolve, reject) => {
+    options.signal?.addEventListener("abort", () => {
+      const error = new Error("aborted"); error.name = "AbortError"; reject(error);
+    });
+  });
+  const store = createOperatorControlStore({
+    env: storeEnv, getPilotAuth: stubAuth, fetch: never, now: () => now,
+    requestTimeoutMs: 5000, totalBudgetMs: 60
+  });
+  const started = Date.now();
+  await assert.rejects(store.status(), error => {
+    assert.match(error.code, /_timeout$/);
+    return true;
+  });
+  assert.ok(Date.now() - started < 5000, "the shared budget must cap the operation");
 });

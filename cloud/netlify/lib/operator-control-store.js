@@ -16,9 +16,15 @@ const OPERATOR_CLAIMS = {
   purpose: "operator-control"
 };
 // Netlify terminates a function at 30s. Every backend call is individually
-// aborted well inside that, so an authentication or connectivity failure
-// returns a reportable outcome instead of an empty 502.
+// aborted well inside that, and the whole endpoint operation shares a budget,
+// so an authentication or connectivity failure returns a reportable outcome
+// instead of an empty 502.
 const REQUEST_TIMEOUT_MS = 6000;
+const TOTAL_BUDGET_MS = 20000;
+// Renew before the exchange's own expiry rather than caching for the life of
+// the container.
+const TOKEN_RENEWAL_MARGIN_MS = 60000;
+const DEFAULT_TOKEN_LIFETIME_MS = 3600000;
 const TERMINAL_OUTCOMES = ["not-delivered", "confirmed-completed", "failed", "unknown"];
 
 class OperatorControlTransportError extends Error {
@@ -37,18 +43,42 @@ class OperatorControlConfigurationError extends Error {
   constructor(message) { super(message); this.name = "ConfigurationError"; }
 }
 
-async function boundedFetch(fetchImpl, url, options, stage, indeterminateOnFailure) {
+// The timeout covers the complete operation, including body consumption. A
+// response whose headers arrive and whose body then stalls is still bounded.
+async function boundedJson(fetchImpl, url, options, stage, settings) {
+  const { indeterminateOnFailure = false, requireBody = true, remainingMs, timeoutMs } = settings;
+  const budget = Math.min(timeoutMs, remainingMs());
+  if (budget <= 0) {
+    throw new OperatorControlTransportError(`${stage}_timeout`, stage, false);
+  }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), budget);
   try {
-    return await fetchImpl(url, { ...options, signal: controller.signal });
-  } catch (error) {
-    const aborted = error?.name === "AbortError";
-    throw new OperatorControlTransportError(
-      aborted ? `${stage}_timeout` : `${stage}_unreachable`,
-      stage,
-      indeterminateOnFailure
-    );
+    let response;
+    try {
+      response = await fetchImpl(url, { ...options, signal: controller.signal });
+    } catch (error) {
+      const aborted = error?.name === "AbortError";
+      throw new OperatorControlTransportError(
+        aborted ? `${stage}_timeout` : `${stage}_unreachable`, stage, indeterminateOnFailure);
+    }
+    // Headers arrived, so the status is authoritative from here on. A stalled
+    // body can never turn a definitive write rejection into an unknown outcome.
+    let body = null;
+    try {
+      body = await response.json();
+    } catch (error) {
+      if (error?.name === "AbortError" && requireBody) {
+        throw new OperatorControlTransportError(`${stage}_timeout`, stage, false);
+      }
+      body = null;
+    }
+    return {
+      ok: response.ok,
+      status: response.status,
+      etag: response.headers.get("etag"),
+      body
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -61,7 +91,28 @@ function createOperatorControlStore(dependencies = {}) {
   const fetchImpl = dependencies.fetch || globalThis.fetch;
   const now = dependencies.now || (() => Date.now());
   const nonce = dependencies.nonce || (() => randomBytes(12).toString("hex"));
-  let idTokenPromise;
+  const requestTimeoutMs = dependencies.requestTimeoutMs || REQUEST_TIMEOUT_MS;
+  const totalBudgetMs = dependencies.totalBudgetMs || TOTAL_BUDGET_MS;
+  // Elapsed time is real time, independent of the injected command clock.
+  const elapsed = dependencies.monotonic || (() => Date.now());
+  let cachedToken = null;
+  let exchangeInFlight = null;
+
+  function newBudget() {
+    const endsAt = elapsed() + totalBudgetMs;
+    return () => endsAt - elapsed();
+  }
+
+  function invalidateToken() {
+    cachedToken = null;
+    exchangeInFlight = null;
+  }
+
+  // An explicit authentication rejection must not be served from cache on the
+  // next request, or the function stays broken until the container recycles.
+  function failIfDenied(result, stage) {
+    if (result.status === 401 || result.status === 403) invalidateToken();
+  }
 
   // Resolved lazily so a missing variable is a reported configuration failure
   // rather than a module that cannot load.
@@ -76,15 +127,16 @@ function createOperatorControlStore(dependencies = {}) {
   // use: a purpose-scoped custom token traded for an ID token, then RTDB REST.
   // The device path is reached under published security rules, not through an
   // Admin SDK privilege bypass.
-  async function operatorToken(webApiKey) {
-    if (!idTokenPromise) {
-      idTokenPromise = (async () => {
+  async function operatorToken(webApiKey, remainingMs) {
+    if (cachedToken && elapsed() < cachedToken.renewAtMs) return cachedToken.idToken;
+    if (!exchangeInFlight) {
+      exchangeInFlight = (async () => {
         const { auth, projectId } = authProvider();
         if (projectId !== "well-pump-control") {
           throw new OperatorControlConfigurationError("Firebase Auth project is not approved");
         }
         const customToken = await auth.createCustomToken(OPERATOR_UID, OPERATOR_CLAIMS);
-        const response = await boundedFetch(
+        const result = await boundedJson(
           fetchImpl,
           `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(webApiKey)}`,
           {
@@ -93,41 +145,50 @@ function createOperatorControlStore(dependencies = {}) {
             body: JSON.stringify({ token: customToken, returnSecureToken: true })
           },
           "token-exchange",
-          false
+          { remainingMs, timeoutMs: requestTimeoutMs }
         );
-        const body = await response.json().catch(() => null);
-        if (!response.ok || typeof body?.idToken !== "string") {
+        if (!result.ok || typeof result.body?.idToken !== "string") {
           throw new OperatorControlTransportError("operator_token_exchange_failed", "token-exchange");
         }
-        return body.idToken;
-      })().catch(error => { idTokenPromise = undefined; throw error; });
+        // expiresIn is seconds as a string. Renew ahead of it so a request
+        // never carries a token that expires mid-operation.
+        const seconds = Number(result.body.expiresIn);
+        const lifetimeMs = Number.isFinite(seconds) && seconds > 0
+          ? seconds * 1000 : DEFAULT_TOKEN_LIFETIME_MS;
+        cachedToken = {
+          idToken: result.body.idToken,
+          renewAtMs: elapsed() + Math.max(lifetimeMs - TOKEN_RENEWAL_MARGIN_MS, Math.floor(lifetimeMs / 2))
+        };
+        return cachedToken.idToken;
+      })().finally(() => { exchangeInFlight = null; });
     }
-    return idTokenPromise;
+    return exchangeInFlight;
   }
 
   function childUrl(rtdbUrl, token, child) {
     return `${rtdbUrl}/${DEVICE_PATH}/${child}.json?auth=${encodeURIComponent(token)}`;
   }
 
-  async function readChild(rtdbUrl, token, child) {
-    const response = await boundedFetch(
-      fetchImpl, childUrl(rtdbUrl, token, child), { method: "GET" }, "status-read", false);
-    const value = await response.json().catch(() => null);
-    if (!response.ok) {
+  async function readChild(rtdbUrl, token, child, remainingMs) {
+    const result = await boundedJson(
+      fetchImpl, childUrl(rtdbUrl, token, child), { method: "GET" }, "status-read",
+      { remainingMs, timeoutMs: requestTimeoutMs });
+    if (!result.ok) {
+      failIfDenied(result, "status-read");
       throw new OperatorControlTransportError(
-        `status_read_http_${response.status}`, "status-read");
+        `status_read_http_${result.status}`, "status-read");
     }
-    return value;
+    return result.body;
   }
 
-  async function readSnapshot() {
+  async function readSnapshot(remainingMs) {
     const { rtdbUrl, webApiKey } = configuration();
-    const token = await operatorToken(webApiKey);
+    const token = await operatorToken(webApiKey, remainingMs);
     const [control, presence, rulesV3State, currentObservation] = await Promise.all([
-      readChild(rtdbUrl, token, "operatorControl"),
-      readChild(rtdbUrl, token, "presence"),
-      readChild(rtdbUrl, token, "rulesV3State"),
-      readChild(rtdbUrl, token, "currentObservation")
+      readChild(rtdbUrl, token, "operatorControl", remainingMs),
+      readChild(rtdbUrl, token, "presence", remainingMs),
+      readChild(rtdbUrl, token, "rulesV3State", remainingMs),
+      readChild(rtdbUrl, token, "currentObservation", remainingMs)
     ]);
     const controlValue = control && typeof control === "object" ? control : {};
     return {
@@ -141,26 +202,29 @@ function createOperatorControlStore(dependencies = {}) {
   }
 
   async function issue(request) {
+    const remainingMs = newBudget();
     const requestedAtMs = now();
-    const initial = await readSnapshot();
+    const initial = await readSnapshot(remainingMs);
     if (!freshPresence(initial.presence, requestedAtMs)) {
       return { issued: false, code: "device-presence-not-fresh", snapshot: initial };
     }
     const { rtdbUrl, webApiKey } = configuration();
-    const token = await operatorToken(webApiKey);
+    const token = await operatorToken(webApiKey, remainingMs);
     const url = childUrl(rtdbUrl, token, "operatorControl/command");
 
     // Compare-and-set on the command node alone. The result node stays
     // device-owned, and the ETag makes a concurrent issue fail rather than
     // silently reuse a command sequence.
-    const currentResponse = await boundedFetch(
-      fetchImpl, url, { method: "GET", headers: { "X-Firebase-ETag": "true" } }, "command-read", false);
-    const current = await currentResponse.json().catch(() => null);
-    if (!currentResponse.ok) {
+    const currentResult = await boundedJson(
+      fetchImpl, url, { method: "GET", headers: { "X-Firebase-ETag": "true" } },
+      "command-read", { remainingMs, timeoutMs: requestTimeoutMs });
+    const current = currentResult.body;
+    if (!currentResult.ok) {
+      failIfDenied(currentResult, "command-read");
       throw new OperatorControlTransportError(
-        `command_read_http_${currentResponse.status}`, "command-read");
+        `command_read_http_${currentResult.status}`, "command-read");
     }
-    const etag = currentResponse.headers.get("etag");
+    const etag = currentResult.etag;
     if (!etag) throw new OperatorControlTransportError("command_etag_missing", "command-read");
 
     if (current && current.clientRequestId === request.clientRequestId) {
@@ -184,16 +248,23 @@ function createOperatorControlStore(dependencies = {}) {
       targetSessionId: initial.presence.sessionId,
       requestedAtMs
     });
-    const write = await boundedFetch(fetchImpl, url, {
+    // requireBody is false: once RTDB answers, its status decides the outcome,
+    // so a slow body cannot downgrade a definitive result to unknown. Only a
+    // write that never returned headers is indeterminate, and it is never
+    // replayed automatically.
+    const write = await boundedJson(fetchImpl, url, {
       method: "PUT",
       headers: { "Content-Type": "application/json", "If-Match": etag },
       body: JSON.stringify(command)
-    }, "command-write", true);
-    await write.json().catch(() => null);
+    }, "command-write", {
+      remainingMs, timeoutMs: requestTimeoutMs,
+      indeterminateOnFailure: true, requireBody: false
+    });
     if (write.status === 412) {
       return { issued: false, code: "command-write-conflict", snapshot: initial };
     }
     if (!write.ok) {
+      failIfDenied(write, "command-write");
       throw new OperatorControlTransportError(
         `command_write_http_${write.status}`, "command-write");
     }
@@ -206,7 +277,7 @@ function createOperatorControlStore(dependencies = {}) {
 
   return {
     issue,
-    status: async () => deriveOperatorStatus(await readSnapshot(), now())
+    status: async () => deriveOperatorStatus(await readSnapshot(newBudget()), now())
   };
 }
 

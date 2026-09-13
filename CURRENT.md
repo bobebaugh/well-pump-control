@@ -25,6 +25,15 @@ unchanged. An aborted write is reported as indeterminate and never as delivered;
 write rejected with an HTTP status did not apply. No code path now depends on
 service-account RTDB authorization; `getPilotDatabase` has no remaining callers.
 
+Three follow-up fixes complete that transport. The ID token now honors the exchange's
+`expiresIn` and renews ahead of it instead of caching for the life of the container, and
+an explicit 401/403 clears the cached token so the next request recovers rather than
+staying broken until the container recycles. The request timeout now covers body
+consumption, not just headers: a stalled body on a status read is a bounded read
+failure, while a write whose headers already arrived keeps its definitive status and is
+never downgraded to unknown. All calls in one endpoint operation share a 20 s budget
+inside Netlify's 30 s limit. No command write is replayed automatically.
+
 `firebase/rtdb.rules.json` now carries the matching grant: `netlify-operator-control`
 reads `currentObservation`, `presence`, `rulesV3State` and `operatorControl`, and writes
 `operatorControl/command` under a `.validate` enforcing the closed command-v2 record.
@@ -97,15 +106,25 @@ screenshots represent different occurrences, not a verified matching pair.
 - Focused record-browser, UI and operator-control regressions passed 24/24. They
   include actual Admin SDK rejection of the old empty document-ID boundary and the
   installed-SDK reproduction/repair of the RTDB initialization failure.
+- Operator-control follow-up: full host suite 167/167. Added regressions cover token
+  renewal ahead of `expiresIn`, cache invalidation after a 401, a stalled response body
+  bounded as a read failure, a stalled write body retaining its definitive status, and
+  the shared operation budget.
 - Operator-control repair: full host suite 162/162. New regressions cover the
   purpose-scoped identity and claims, REST idempotency/overlap/sequence across expiry,
   an aborted write reported as indeterminate versus an HTTP-rejected write that did
   not apply, abort well inside the 30 s limit, and the configuration/denied/upstream
   split. These use an in-memory RTDB REST double, not live Firebase.
-- No emulator evidence was produced for the new identity. The emulator starts here
-  (OpenJDK 21.0.10, valid v4.11.2 jar, listening on 127.0.0.1:9000) but loading
-  security rules into it is blocked in this environment. The rules gap is established
-  by reading the published rules file, not by emulation.
+- Six emulator tests were added for the operator identity: the required status reads,
+  a production-built command-v2 write read back through device permissions, denial for
+  wrong purpose / wrong device / missing claims / anonymous, eleven malformed-command
+  rejections, denial on device-owned `result`, `sequence`, `presence`,
+  `currentObservation`, `rulesV3State`, site control and rules, and an ETag conflict
+  that leaves the winning command in place. The Tab5 validator round-trip is retained.
+- **These emulator tests have not been executed.** The emulator starts in this
+  environment (OpenJDK 21.0.10, valid v4.11.2 jar, listening on 127.0.0.1:9000) but
+  loading the rules file into it is blocked here, reproducibly. They are syntax-checked
+  only and must pass in GitHub Actions before the identity is considered proven.
 - The device-status follow-up added one focused regression that reproduces the
   production `Can't determine Firebase Database URL.` failure against the installed
   SDK and passes only with the supported call; the full host run passed 159/159.
