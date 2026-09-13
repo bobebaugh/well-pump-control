@@ -136,6 +136,10 @@ async function checkOperatorStatus({ promptForKey = false } = {}) {
       operatorSummary.textContent = "Control service configuration is unavailable; controls cannot be used.";
       operatorEvidence.textContent = "No command was issued or retried.";
       operatorUnlock.textContent = "Retry control status";
+    } else if (error.body?.code === "control_denied") {
+      operatorSummary.textContent = "Owner key accepted; the control service is not authorized to read the device path.";
+      operatorEvidence.textContent = "No command was issued or retried. This is a device-path authorization state, not a key rejection.";
+      operatorUnlock.textContent = "Retry control status";
     } else {
       operatorSummary.textContent = "Owner key accepted; current control status is unavailable.";
       operatorEvidence.textContent = "Control status unavailable; no command was retried.";

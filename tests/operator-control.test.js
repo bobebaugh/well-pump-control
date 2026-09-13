@@ -11,7 +11,7 @@ const {
   validateOperatorRequest
 } = require("../cloud/netlify/lib/operator-control-contract");
 const { _createHandler } = require("../cloud/netlify/functions/operator-control");
-const { createOperatorControlStore } = require("../cloud/netlify/lib/operator-control-store");
+const { OPERATOR_UID, createOperatorControlStore } = require("../cloud/netlify/lib/operator-control-store");
 const { _databaseForUrl } = require("../cloud/netlify/lib/firebase");
 
 const now = 1_800_000_000_000;
@@ -177,29 +177,33 @@ test("operator status initializes the installed Admin SDK with the approved expl
   }
 });
 
-test("operator status failure logs the safe failing stage, SDK code, and message", async () => {
-  const sdkError = Object.assign(new Error("Can't determine Firebase Database URL."), { code: "database/invalid-argument" });
-  const handler = _createHandler({
-    getPilotDatabase: () => { throw sdkError; },
-    env: { PILOT_INGEST_TOKEN: "owner-key" }
-  });
-  const logged = [];
-  const original = console.error;
-  console.error = (...args) => logged.push(args);
-  try {
-    const result = await handler({ httpMethod: "GET", headers: { "X-Pilot-Key": "owner-key" } });
+test("status failure reports a bounded stage, code, and denial category", async () => {
+  const cases = [
+    [() => { const e = new Error("boom"); e.name = "ConfigurationError"; throw e; },
+      "configuration_missing", "configuration"],
+    [() => { throw Object.assign(new Error("nope"), { code: "status_read_http_401", operatorControlStage: "status-read" }); },
+      "control_denied", "denied"],
+    [() => { throw Object.assign(new Error("slow"), { code: "status-read_timeout", operatorControlStage: "status-read" }); },
+      "control_unavailable", "upstream"]
+  ];
+  for (const [status, expectedCode, expectedCategory] of cases) {
+    const handler = _createHandler({
+      store: { status, issue: async () => ({}) },
+      env: { PILOT_INGEST_TOKEN: "owner-key" }
+    });
+    const logged = [];
+    const original = console.error;
+    console.error = (...args) => logged.push(args);
+    let result;
+    try {
+      result = await handler({ httpMethod: "GET", headers: { "X-Pilot-Key": "owner-key" } });
+    } finally { console.error = original; }
     assert.equal(result.statusCode, 503);
-    assert.equal(JSON.parse(result.body).code, "control_unavailable");
-  } finally {
-    console.error = original;
+    assert.equal(JSON.parse(result.body).code, expectedCode);
+    assert.equal(logged[0][0], "Operator control failed");
+    assert.equal(logged[0][1].category, expectedCategory);
+    assert.doesNotMatch(result.body, /owner-key/);
   }
-  assert.equal(logged[0][0], "Operator control failed");
-  assert.deepEqual(logged[0][1], {
-    category: "upstream",
-    stage: "database-initialization",
-    code: "database/invalid-argument",
-    message: "Can't determine Firebase Database URL."
-  });
 });
 
 test("operator function accepts one issued record and returns its evidence", async () => {
@@ -216,31 +220,80 @@ test("operator function accepts one issued record and returns its evidence", asy
   assert.equal(JSON.parse(result.body).control.outcome, "not-delivered");
 });
 
-test("single-slot store is idempotent, blocks overlap, and preserves sequence across expiry", async () => {
-  const values = new Map([
-    ["v1/sites/well-main/devices/tab5-well-main/presence", presence]
-  ]);
-  const snapshot = value => ({ val: () => value });
-  const database = {
-    ref(path) {
+// Minimal RTDB REST double: ETag compare-and-set on the exact paths and verbs
+// the store uses, so the test exercises the real transport rather than an
+// Admin SDK shape the production path no longer has.
+function rtdbRest(values) {
+  const base = "https://well-pump-control-default-rtdb.firebaseio.com/v1/sites/well-main/devices/tab5-well-main/";
+  let revision = 0;
+  const etags = new Map();
+  const tagFor = path => { if (!etags.has(path)) etags.set(path, `etag-${++revision}`); return etags.get(path); };
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    if (url.startsWith("https://identitytoolkit.googleapis.com/")) {
+      calls.push("token-exchange");
+      return { ok: true, status: 200, headers: new Map(), json: async () => ({ idToken: "id-token" }) };
+    }
+    assert.ok(url.startsWith(base), `unexpected url ${url}`);
+    assert.match(url, /[?&]auth=id-token$/);
+    const path = url.slice(base.length, url.indexOf(".json"));
+    calls.push(`${options.method} ${path}`);
+    if (options.method === "GET") {
       return {
-        child(name) { return database.ref(`${path}/${name}`); },
-        async once() { return snapshot(values.get(path) ?? null); },
-        async transaction(callback) {
-          const next = callback(values.get(path) ?? null);
-          if (next === undefined) return { committed: false, snapshot: snapshot(values.get(path) ?? null) };
-          values.set(path, next);
-          return { committed: true, snapshot: snapshot(next) };
-        }
+        ok: true, status: 200,
+        headers: { get: name => (name === "etag" ? tagFor(path) : null) },
+        json: async () => values.get(path) ?? null
       };
     }
+    if (options.method === "PUT") {
+      if (options.headers["If-Match"] !== tagFor(path)) {
+        return { ok: false, status: 412, headers: { get: () => null }, json: async () => ({}) };
+      }
+      values.set(path, JSON.parse(options.body));
+      etags.set(path, `etag-${++revision}`);
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => JSON.parse(options.body) };
+    }
+    throw new Error(`unexpected method ${options.method}`);
   };
+  return { fetchImpl, calls };
+}
+
+const storeEnv = {
+  FIREBASE_WEB_API_KEY: "web-key",
+  FIREBASE_RTDB_URL: "https://well-pump-control-default-rtdb.firebaseio.com"
+};
+const stubAuth = () => ({
+  auth: { createCustomToken: async () => "custom-token" },
+  projectId: "well-pump-control"
+});
+
+test("store reaches RTDB as the purpose-scoped operator identity over REST", async () => {
+  const claims = [];
+  const values = new Map([["presence", presence]]);
+  const { fetchImpl } = rtdbRest(values);
+  const store = createOperatorControlStore({
+    env: storeEnv,
+    getPilotAuth: () => ({
+      auth: { createCustomToken: async (uid, extra) => { claims.push([uid, extra]); return "custom-token"; } },
+      projectId: "well-pump-control"
+    }),
+    fetch: fetchImpl, now: () => now, nonce: () => "1234567890abcdef"
+  });
+  await store.issue(request);
+  assert.deepEqual(claims[0], [OPERATOR_UID, {
+    siteId: "well-main", deviceId: "tab5-well-main", purpose: "operator-control"
+  }]);
+  assert.equal(OPERATOR_UID, "netlify-operator-control");
+});
+
+test("single-slot store is idempotent, blocks overlap, and preserves sequence across expiry", async () => {
+  const values = new Map([["presence", presence]]);
+  const { fetchImpl } = rtdbRest(values);
   let clock = now;
   let nonce = 0;
   const store = createOperatorControlStore({
-    getPilotDatabase: () => ({ database, projectId: "well-pump-control" }),
-    now: () => clock,
-    nonce: () => `1234567890abcde${++nonce}`
+    env: storeEnv, getPilotAuth: stubAuth, fetch: fetchImpl,
+    now: () => clock, nonce: () => `1234567890abcde${++nonce}`
   });
   const first = await store.issue(request);
   assert.equal(first.issued, true);
@@ -252,10 +305,63 @@ test("single-slot store is idempotent, blocks overlap, and preserves sequence ac
   assert.equal(busy.issued, false);
   assert.equal(busy.code, "command-already-active");
   clock += COMMAND_LIFETIME_MS + 1;
-  values.set("v1/sites/well-main/devices/tab5-well-main/presence", {
-    sessionId: presence.sessionId, lastSeenAtMs: clock
-  });
+  values.set("presence", { sessionId: presence.sessionId, lastSeenAtMs: clock });
   const second = await store.issue({ action: "restart-tab5", clientRequestId: "browser_87654321" });
   assert.equal(second.issued, true);
   assert.equal(second.snapshot.command.commandSequence, 2);
+});
+
+test("the command write never claims delivery it cannot evidence", async () => {
+  const values = new Map([["presence", presence]]);
+  const { fetchImpl } = rtdbRest(values);
+  // An aborted PUT is indeterminate: the request may have reached RTDB.
+  const abortingFetch = async (url, options = {}) => {
+    if (options.method === "PUT") {
+      const error = new Error("aborted"); error.name = "AbortError"; throw error;
+    }
+    return fetchImpl(url, options);
+  };
+  const store = createOperatorControlStore({
+    env: storeEnv, getPilotAuth: stubAuth, fetch: abortingFetch,
+    now: () => now, nonce: () => "1234567890abcdef"
+  });
+  await assert.rejects(store.issue(request), error => {
+    assert.equal(error.operatorControlStage, "command-write");
+    assert.equal(error.commandMayHaveBeenWritten, true);
+    return true;
+  });
+  // A rejected write carries a status, so it definitively did not apply.
+  const rejectingFetch = async (url, options = {}) => {
+    if (options.method === "PUT") {
+      return { ok: false, status: 401, headers: { get: () => null }, json: async () => ({}) };
+    }
+    return fetchImpl(url, options);
+  };
+  const denied = createOperatorControlStore({
+    env: storeEnv, getPilotAuth: stubAuth, fetch: rejectingFetch,
+    now: () => now, nonce: () => "1234567890abcdef"
+  });
+  await assert.rejects(denied.issue(request), error => {
+    assert.equal(error.code, "command_write_http_401");
+    assert.equal(error.commandMayHaveBeenWritten, false);
+    return true;
+  });
+});
+
+test("a hung backend is aborted well inside the Netlify 30s limit", async () => {
+  const hangingFetch = (url, options = {}) => new Promise((_resolve, reject) => {
+    options.signal?.addEventListener("abort", () => {
+      const error = new Error("aborted"); error.name = "AbortError"; reject(error);
+    });
+  });
+  const store = createOperatorControlStore({
+    env: storeEnv, getPilotAuth: stubAuth, fetch: hangingFetch, now: () => now
+  });
+  const started = Date.now();
+  await assert.rejects(store.status(), error => {
+    assert.equal(error.operatorControlStage, "token-exchange");
+    assert.match(error.code, /_timeout$/);
+    return true;
+  });
+  assert.ok(Date.now() - started < 30000, "must resolve before the platform timeout");
 });

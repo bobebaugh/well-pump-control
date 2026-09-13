@@ -70,14 +70,23 @@ function createHandler(dependencies = {}) {
       if (error instanceof OperatorControlError) {
         return response(400, { status: "error", code: error.code, field: error.field });
       }
-      const configuration = error instanceof ConfigurationError;
+      const configuration = error instanceof ConfigurationError ||
+        error?.name === "ConfigurationError";
+      // A 401/403 from the device path means the operator identity is not
+      // authorized by the published RTDB rules. That is a distinct, actionable
+      // state and must not read as a generic outage.
+      const denied = !configuration && /_http_40[13]$/.test(String(error?.code || ""));
       console.error("Operator control failed", {
-        category: configuration ? "configuration" : "upstream",
+        category: configuration ? "configuration" : denied ? "denied" : "upstream",
         stage: diagnosticText(error?.operatorControlStage, "request"),
         code: diagnosticText(error?.code || error?.name, "unknown"),
-        message: diagnosticText(error?.message, "No error message")
+        message: diagnosticText(error?.message, "No error message"),
+        commandMayHaveBeenWritten: error?.commandMayHaveBeenWritten === true
       });
-      return response(503, { status: "error", code: configuration ? "configuration_missing" : "control_unavailable" });
+      return response(503, {
+        status: "error",
+        code: configuration ? "configuration_missing" : denied ? "control_denied" : "control_unavailable"
+      });
     }
   };
 }

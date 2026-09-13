@@ -1,8 +1,36 @@
 # Current status — Pilot line
 
-## Now — Pilot owner-observed browser and control-status repair awaiting deployment
+## Now — operator control moved onto the proven RTDB identity; rules grant outstanding
 
-The Pilot repair fixes event links by using the Firestore-valid partial boundary
+The deployed 502 is not the earlier SDK-argument defect. Operator control was the only
+Pilot→RTDB path with no rules-authorized identity: in the published rules
+`operatorControl/command` is `".write": false` for everyone, and `presence`,
+`currentObservation` and `operatorControl/result` carry no `.read` at all. It worked
+around that by using the Admin SDK, whose service-account credential is not authorized
+for this RTDB instance ("Provided authentication credentials for the app named
+[DEFAULT] are invalid"). The SDK's database client retries that failure on a persistent
+connection instead of erroring, so every invocation ran to Netlify's 30 s wall and
+returned an empty 502. The emulator suite never caught it because every command write
+in it runs under `withSecurityRulesDisabled`.
+
+Operator control now uses the same exchange the rules publisher and event-board mirror
+use: a purpose-scoped custom token (`netlify-operator-control`, claims siteId/deviceId/
+`purpose: operator-control`) traded for an ID token, then RTDB REST. Every call is
+individually aborted at 6 s, so authentication or connectivity failures return a
+reportable outcome well inside the platform limit. The command write is an ETag
+compare-and-set on `operatorControl/command` alone, so `result` stays device-owned and
+a concurrent issue conflicts rather than reusing a sequence. Expiry, exact-session
+targeting, monotonic sequence, duplicate rejection and no-automatic-retry are
+unchanged. An aborted write is reported as indeterminate and never as delivered; a
+write rejected with an HTTP status did not apply. No code path now depends on
+service-account RTDB authorization; `getPilotDatabase` has no remaining callers.
+
+**This repair cannot function until the owner publishes an RTDB rules grant for
+`netlify-operator-control`.** Until then the function fails fast with the new
+`control_denied` state instead of hanging. The exact grant is recorded in the handoff;
+no rules file change was made in this unit.
+
+The earlier browser and status repairs stand unchanged. The Pilot repair fixes event links by using the Firestore-valid partial boundary
 `startAt(cycle)` while retaining document-ID tie ordering for stable paging and the
 three preceding durable records. Actual Firebase Admin SDK validation now guards
 that boundary; focused fixtures cover the owner's cycle-600 entry, earlier/later
@@ -63,6 +91,15 @@ screenshots represent different occurrences, not a verified matching pair.
 - Focused record-browser, UI and operator-control regressions passed 24/24. They
   include actual Admin SDK rejection of the old empty document-ID boundary and the
   installed-SDK reproduction/repair of the RTDB initialization failure.
+- Operator-control repair: full host suite 162/162. New regressions cover the
+  purpose-scoped identity and claims, REST idempotency/overlap/sequence across expiry,
+  an aborted write reported as indeterminate versus an HTTP-rejected write that did
+  not apply, abort well inside the 30 s limit, and the configuration/denied/upstream
+  split. These use an in-memory RTDB REST double, not live Firebase.
+- No emulator evidence was produced for the new identity. The emulator starts here
+  (OpenJDK 21.0.10, valid v4.11.2 jar, listening on 127.0.0.1:9000) but loading
+  security rules into it is blocked in this environment. The rules gap is established
+  by reading the published rules file, not by emulation.
 - The device-status follow-up added one focused regression that reproduces the
   production `Can't determine Firebase Database URL.` failure against the installed
   SDK and passes only with the supported call; the full host run passed 159/159.
