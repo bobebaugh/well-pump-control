@@ -9,9 +9,10 @@ overlay on a well that worked without it. Every line added is a line that can
 fail in the garage. Where a choice exists between reusing something proven and
 building something better, this design reuses.
 
-Three changes, `A`, `B`, `C`. All in `tab5/pilot.py` and `shelly1/anti-chatter.js`
-except one editor control. **No new field type, no counter, no schema version
-bump, no rules-package migration.**
+Four changes. `D` is a deletion and lands first; `A`, `B` and `C` are the
+behaviour. All in `tab5/pilot.py` and `shelly1/anti-chatter.js` except one
+editor control. **No new field type, no counter, no schema version bump, no
+rules-package migration.**
 
 ---
 
@@ -127,11 +128,39 @@ for each such target:
 Roughly ten lines, purely additive. All pump and `releasePending` machinery is
 untouched, so nothing existing changes behaviour.
 
-This is §2's compare-and-correct reconciler, and it arrives free: collapse
-already allows one write per target per cycle, and `issue_rules_v3_action`
-already returns `observed-desired-state` without calling the device when the
-value already matches. **Steady state costs zero writes.** A Shelly reboot that
-zeroes `Tab5IsLocked` is repaired on the next cycle, which is proposal test 7.
+#### The I/O contract this must obey — owner-specified, normative
+
+**One Shelly read per cycle. One write, only when the value is wrong. The write
+happens at the conclusion of event processing, and its decision comes from that
+same cycle's read.**
+
+Every clause is already satisfied by where this sits, and each is a constraint
+on the implementation rather than a hope:
+
+- **No read is added.** The reconcile compares against
+  `observation['values']['shelly1_tab5lock']`, captured by the cycle's existing
+  acquisition. It must never call the Shelly to find out what it wrote.
+- **The write is last.** Actions are emitted after the event loop, then
+  collapsed by `rules_v3_collapse_actions` and issued by
+  `dispatch_rules_v3_actions`, which already runs at the end of the cycle. One
+  write per target per cycle is the existing collapse guarantee, not a new one.
+- **Only on disagreement.** `issue_rules_v3_action` (1296) already returns
+  `observed-desired-state` without touching the device when the observed value
+  equals the desired one. Steady state costs zero writes, in either state.
+- **From the loop read, so a stale write is impossible.** If the acquisition was
+  rejected this cycle, `shelly1_available` is false and nothing is issued at
+  all.
+
+A Shelly reboot that zeroes `Tab5IsLocked` is therefore repaired on the next
+cycle with exactly one write, which is proposal test 7.
+
+**Separately: the acquisition itself is still two RPCs.** `read_shelly1` (653)
+calls `Shelly.GetStatus` then `Shelly.GetComponents`, measured at 708 ms
+together. Proposal §6.1 covers collapsing them into one `Shelly.GetComponents`
+with a `keys` filter — `dynamic_only=true` is what currently excludes
+`switch:0`, which is why two calls were needed. That consolidation is a
+prerequisite for "one read per cycle" and should land with this work, not
+after it.
 
 ### Authoring shape
 
@@ -198,9 +227,33 @@ clears itself when telemetry returns; User Monitor is the same thing, locked.
 In `advance_rules_v3_kernel`'s event loop, when the effective mode is Monitor,
 `continue` past any event whose `eventClass` is not `monitor`.
 
-Monitor-class events **must** keep evaluating, or a System Monitor could never
-close and would be terminal too. That single exception is what makes the whole
-thing work.
+Monitor-class events **must** keep evaluating, for two reasons. A System Monitor
+could otherwise never close and would be terminal too. And monitor-class events
+have a use that has nothing to do with mode, described next.
+
+### C1a. Monitor class is not the same as engaging Monitor
+
+Engaging Monitor requires **owning the operating-mode target** — an
+`OperatingMode = Monitor, while open` assignment. `rules_v3_effective_mode`
+(3379) already reads exactly that, and `_v3_assignment` (2493) already restricts
+that assignment to monitor-class events.
+
+A monitor-class event with **no assignments at all** is valid today and engages
+nothing. That is the cheap logging flag: a condition set marked as an event
+purely so it is highlighted on the board and in the durable log, costing no
+control behaviour and no new machinery.
+
+Two consequences worth stating, because they are easy to get backwards:
+
+- Adding a logging-only monitor event must never suspend the controller. It
+  does not, because it owns nothing.
+- Because C1 exempts monitor-class events from the freeze, **logging flags keep
+  working while Monitor is engaged.** During a suspension the board still marks
+  the condition sets you asked it to mark, which is precisely when that is worth
+  having.
+
+So the class carries two unrelated privileges: exemption from the freeze, and
+eligibility to engage it. Only the assignment does the engaging.
 
 ### C2. Release the inhibit
 
@@ -252,6 +305,54 @@ Protection continues at the layers below: Shelly chatter and short-cycle, the
 - A schema version bump. Nothing in the authoring contract changes.
 - A boot-without-rules escape hatch. Worth doing; not this change.
 
+Change D below is in scope, and is the largest single item by line count.
+
+---
+
+## 5a. Change D — delete the superseded engines
+
+`tab5/pilot.py` is 5528 lines. A reachability walk from module scope finds
+**47 top-level functions, 852 lines, that the running application never
+reaches.** Every one of them is referenced by a test, which is why they have
+survived: the tests are the only callers, so nothing looked unused.
+
+That is the worst state for old code to be in. It reads as maintained, it is
+covered, and it is wrong to trust — three of these functions are earlier
+versions of code the loop still runs, and a reader cannot tell which is live
+without the reachability walk.
+
+| Group | Functions | What replaced it |
+| --- | --- | --- |
+| **V2 rules runtime** | `advance_runtime_event`, `new_runtime_event_state`, `_runtime_qualified`, `evaluate_runtime_events`, `runtime_condition_value`, `runtime_stop_only_action`, `issue_runtime_stop`, `clear_runtime_event_board`, `evaluate_runtime_calculations`, `runtime_direct_field_values`, `runtime_logging_change_details` | the V3 kernel |
+| **V2 delivery and validation** | `load_runtime_package`, `adopt_runtime_release`, `validate_runtime_release`, `_runtime_package_valid`, `_runtime_field_valid`, `_valid_runtime_release_id`, `_valid_integral_nonnegative`, `validate_runtime_pointer`, `_check_runtime_pointer`, `runtime_pointer_rejection_reason`, `runtime_pointer_key_summary`, and the `RULES_RUNTIME_FILE` / `RULES_RUNTIME_TEMP_FILE` constants | the V3 staged-release path |
+| **V1 event engine** | `advance_rule_event`, `new_rule_event_state`, `_event_rule_latched`, `_valid_event_rule_timing`, `event_history_values`, `build_rules_audit_record` | superseded twice over |
+| **Superseded durable selection** | `build_durable_observation`, `durable_observation_reason`, `material_change_details`, `_material_change_detail`, `_numeric_material_change`, `_observation_path_value`, `_record_timestamp_prefix` | `build_durable_observation_v2`, `durable_field_states`, `durable_trigger_reasons` |
+| **Superseded Shelly availability confirmation** | `new_shelly_availability_confirmation`, `shelly_availability_change_pending`, `acknowledge_shelly_availability_change` | `$availability` in the V3 acquisition |
+| **Superseded ADC microvolt path** | `read_ads1110_microvolts`, `_read_ads1110_microvolts_once`, `trimmed_mean_microvolts`, `summarize_adc_samples`, `estimated_flow_gpm` | `read_ads1110_filtered_raw_count`; calibration moved from microvolts to raw counts |
+| **Orphans** | `_finite_number`, `_v3_scalar`, `_wait_until`, `rules_v3_field_values` | — |
+
+`rules_v3_field_values` is the odd one: it is V3, not old, and still unreachable.
+Worth a second look before deleting in case it was written for something not yet
+wired up.
+
+**Tests go with the code.** `tests/test_tab5_observation_selection.py` (908
+lines) is almost entirely V2 coverage; `tests/test_tab5_event_engine.py` (157
+lines) is entirely V1. Both are candidates for deletion outright. The V2
+references inside `test_tab5_v3_integration.py`, `test_tab5_v3_semantic_kernel.py`,
+`test_tab5_hmi.py` and `test_tab5_pressure_flow.py` are narrower and need
+trimming rather than removal.
+
+**Method, so this is verifiable and not a judgement call.** The reachability
+walk is a dozen lines of `ast`; it should be committed as
+`tests/test_tab5_no_dead_code.py` and asserted to return empty. Then the
+deletion is checkable, and the condition cannot silently return.
+
+**Sequence.** D lands *before* A, B and C. Deleting first means the three
+behaviour changes are made against a smaller file, and no reviewer wastes time
+reading a V2 evaluator to decide whether A8 affects it. It is also the only
+change here with no behavioural risk: unreachable code cannot alter behaviour,
+and the walk proves unreachability rather than asserting it.
+
 ---
 
 ## 6. Test plan
@@ -283,6 +384,12 @@ Host suites, no hardware, no emulator.
 16. `M001` never closes; only a restart clears it.
 17. The event board keeps showing events opened before Monitor engaged.
 
+**Change D**
+18. The reachability walk returns empty, committed as a test so the condition
+    cannot silently return.
+19. The full host suite passes with the deleted tests removed, and no remaining
+    test imports a deleted name.
+
 **Both branches promoted together.** Change A spans `tab5/pilot.py`,
 `shelly1/anti-chatter.js` and the Pilot editor, so `tab5-working` and
 `pilot-working` must move as a pair.
@@ -307,3 +414,9 @@ Host suites, no hardware, no emulator.
 5. **Boolean versus number.** A boolean flag is minimal. A number would leave
    room for a future hold count without another contract change. Worth the extra
    now, or add it when needed?
+6. **Deletion scope.** Is 852 lines in one commit acceptable, or should D split
+   by group so a bisect can land on one engine? My preference is one commit,
+   because the groups are not independent — the V2 evaluator and its validation
+   path only become unreachable together.
+7. **`rules_v3_field_values`.** Unreachable but current. Delete, or was it
+   written for something still pending?
