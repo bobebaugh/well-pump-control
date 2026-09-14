@@ -21,11 +21,43 @@ function analysisLimits() {
     "Qualification counts and minimumSeconds are not modelled. An event that qualifies slowly is treated the same as one that qualifies at once.",
     "Numeric reasoning covers lt/lte/gt/gte/eq/neq/between on one field. Contradictions spanning two fields are not detected.",
     "Calculated field expressions are not evaluated. Their outputs are treated as unconstrained values of their declared type.",
+    "Devices are grouped into two failure domains, local and network. Anything with a routable address is treated as sharing one radio, access point and router with everything else remote, including the cloud.",
     "Absence of findings is not proof. It means nothing matched these checks."
   ];
 }
 
-function analysisClone(value) { return JSON.parse(JSON.stringify(value)); }
+// Device failures are not independent. Everything Tab5 reaches over the network
+// hangs off one radio, one access point and one router, so the realistic failure
+// is not "the EM died" but "the network went", which takes every remote device,
+// the cloud, and with the cloud every online recovery control, at the same
+// instant. Devices are grouped accordingly: "local" is inside the Tab5 case,
+// everything with a routable address is one shared domain.
+function analysisDomainOf(device) {
+  const address = typeof device.address === "string" ? device.address.trim().toLowerCase() : "";
+  return (!address || address === "local" || address === "localhost") ? "local" : "network";
+}
+
+function analysisFailureDomains(pkg) {
+  const domains = { local: [], network: [] };
+  for (const device of pkg.devices || []) {
+    if (device.enabled !== true) continue;
+    domains[analysisDomainOf(device)].push(device.label || device.id);
+  }
+  return domains;
+}
+
+function analysisReferencedFields(pkg) {
+  const used = new Set();
+  const walk = value => {
+    if (!value || typeof value !== "object") return;
+    if (typeof value.field === "string") used.add(value.field);
+    if (typeof value.target === "string") used.add(value.target);
+    for (const child of Object.values(value)) walk(child);
+  };
+  walk(pkg.events || []);
+  walk(pkg.calculatedFields || []);
+  return used;
+}
 
 function analysisFieldIndex(pkg) {
   const fields = new Map();
@@ -36,6 +68,7 @@ function analysisFieldIndex(pkg) {
       fields.set(field.systemName, {
         systemName: field.systemName, type: field.type, enumValues: field.enumValues || null,
         origin: "device", deviceId: device.id, deviceLabel: device.label || device.id,
+        domain: analysisDomainOf(device),
         deviceEnabled: device.enabled === true, isAvailability: field.object === "$availability",
         availabilityField: availability ? availability.systemName : null,
         writable: field.access === "readWrite",
@@ -153,8 +186,8 @@ function analysisEscape(event, fields) {
   for (const name of names) {
     const field = fields.get(name);
     if (!field || field.origin !== "device") continue;
-    if (field.isAvailability) blocking.push({ name, deviceLabel: field.deviceLabel, explicit: true });
-    else blocking.push({ name, deviceLabel: field.deviceLabel, explicit: false });
+    blocking.push({ name, deviceLabel: field.deviceLabel, domain: field.domain,
+      explicit: field.isAvailability === true });
   }
   return {
     kind: "condition",
@@ -298,6 +331,17 @@ function analyzeAuthoringPackage(input) {
         findings.push(analysisFinding(level, "analysis_inhibit_evidence_loss", path,
           `${label} holds ${ANALYSIS_PUMP_TARGET} off and can only close by reading ${measured.map(item => item.name).join(", ")} from ${measured[0].deviceLabel}. If ${measured[0].deviceLabel} goes offline while this event is open, those clauses cannot be evaluated, the closing condition never qualifies, and the pump stays off until the device returns or Tab5 restarts. The evidence that would release the inhibit is the same evidence that vanished.${latent}`));
       }
+      // The systemic case. If the target lives on the far side of the same
+      // network as the evidence, one failure removes both the grounds to
+      // release and the ability to act, and takes the cloud with it, so every
+      // online recovery control is gone at the same moment.
+      const targetField = fields.get(ANALYSIS_PUMP_TARGET);
+      const sameDomain = targetField && targetField.domain === "network" &&
+        blocking.some(item => item.domain === "network");
+      if (sameDomain) {
+        findings.push(analysisFinding(level, "analysis_inhibit_frozen_by_domain", path,
+          `${label} holds ${ANALYSIS_PUMP_TARGET} on ${targetField.deviceLabel} and closes on evidence from ${measured.length ? measured[0].deviceLabel : blocking[0].deviceLabel}. Both are reached over the network, so one Wi-Fi, access point or router failure removes the evidence and Tab5's ability to write the relay at the same instant. The relay then stays wherever it happened to be: off if the inhibit had landed, on if it had not. The outcome is decided by timing, not by the rule. That failure also takes the cloud, so Monitor, Restart Tab5 and Restart Shelly 1 are unavailable exactly when they are needed.${latent}`));
+      }
       if (explicit.length && measured.length) {
         findings.push(analysisFinding("warning", "analysis_inert_availability_clause", path,
           `${label} also tests ${explicit.map(item => item.name).join(", ")} in its closing condition, which has no effect. ${measured[0].name} is evaluated first and is absent whenever ${explicit[0].deviceLabel} is unavailable, so the condition is already undecided before the availability clause is reached. Spelling the guard out does not change the behaviour of the rule.`));
@@ -321,6 +365,25 @@ function analyzeAuthoringPackage(input) {
     }
   }
 
+  // Package-level. These are properties of the whole design, not of any one
+  // event, and are the ones a per-event reading cannot see.
+  const domains = analysisFailureDomains(pkg);
+  if (domains.network.length > 1) {
+    findings.push(analysisFinding("warning", "analysis_shared_failure_domain", "devices",
+      `${domains.network.length} enabled devices are reached over the network: ${domains.network.join(", ")}. They do not fail independently. One radio, access point or router failure removes all of them, and the cloud with them, in the same instant. Any rule written as though one device can fail on its own is being analysed against a failure that is less likely than the one that actually happens.`));
+  }
+  const referenced = analysisReferencedFields(pkg);
+  const unusedHealth = [];
+  for (const [name, field] of fields) {
+    if (field.origin !== "device" || field.domain !== "local") continue;
+    if (referenced.has(name)) continue;
+    if (/wifi|cloud|available|connected|clock/i.test(name)) unusedHealth.push(name);
+  }
+  if (unusedHealth.length) {
+    findings.push(analysisFinding("warning", "analysis_unused_health_signal", "devices",
+      `${unusedHealth.join(", ")} are declared and logged but no event reads them. These are the signals that would let a rule notice the systemic failure — the network or the cloud going away — rather than inferring it one device at a time. Nothing in this package reacts to losing them.`));
+  }
+
   const pumpHolds = holds.filter(hold => hold.target === ANALYSIS_PUMP_TARGET && hold.enabled);
   if (!pumpHolds.length) {
     findings.push(analysisFinding("info", "analysis_no_pump_inhibit", "events",
@@ -333,5 +396,5 @@ function analyzeAuthoringPackage(input) {
 }
 
 if (typeof module === "object" && module.exports) {
-  module.exports = { analyzeAuthoringPackage, analysisUnsatisfiable, analysisFieldIndex, analysisLimits, ANALYSIS_PUMP_TARGET };
+  module.exports = { analyzeAuthoringPackage, analysisUnsatisfiable, analysisFieldIndex, analysisFailureDomains, analysisReferencedFields, analysisLimits, ANALYSIS_PUMP_TARGET };
 }

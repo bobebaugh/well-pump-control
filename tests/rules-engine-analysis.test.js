@@ -7,7 +7,7 @@ const test = require("node:test");
 
 const root = path.join(__dirname, "..");
 const analysis = require(path.join(root, "web", "rules-engine-analysis.js"));
-const { analyzeAuthoringPackage, analysisUnsatisfiable, analysisFieldIndex } = analysis;
+const { analyzeAuthoringPackage, analysisUnsatisfiable, analysisFieldIndex, analysisFailureDomains } = analysis;
 
 const backup = JSON.parse(fs.readFileSync(
   path.join(root, "tests", "fixtures", "rules-authoring-backup-2026-09-14.json"), "utf8"));
@@ -182,4 +182,48 @@ test("analysis states its own limits rather than implying proof", () => {
   const { limits } = analyzeAuthoringPackage(backup);
   assert.ok(limits.length >= 4);
   assert.ok(limits.some(text => /not proof/i.test(text)));
+});
+
+test("devices reached over the network are one failure domain, not several", () => {
+  const { local, network } = analysisFailureDomains(backup.authoringPackage);
+  assert.deepEqual(network, ["Shelly EM", "Shelly 1 Gen4"]);
+  assert.deepEqual(local, ["Tab5"]);
+  const result = analyzeAuthoringPackage(backup);
+  const shared = find(result, "analysis_shared_failure_domain");
+  assert.ok(shared);
+  assert.match(shared.message, /do not fail independently/);
+});
+
+test("an inhibit is reported frozen when its target and its evidence share a domain", () => {
+  const result = analyzeAuthoringPackage(backup);
+  const finding = find(result, "analysis_inhibit_frozen_by_domain");
+  assert.ok(finding, "PumpEnable is on Shelly 1 and E007 closes on evidence from the EM");
+  assert.equal(finding.level, "error");
+  assert.match(finding.message, /stays wherever it happened to be/);
+  assert.match(finding.message, /decided by timing/);
+  // The cloud goes with the network, so the online recovery controls go too.
+  assert.match(finding.message, /Restart Shelly 1 are unavailable/);
+});
+
+test("moving the relay off the network clears the frozen-inhibit finding", () => {
+  const pkg = JSON.parse(JSON.stringify(backup));
+  pkg.authoringPackage.devices.find(item => item.id === "shelly-1-main").address = "local";
+  const result = analyzeAuthoringPackage(pkg);
+  assert.equal(find(result, "analysis_inhibit_frozen_by_domain"), undefined);
+  // Losing the evidence still holds the inhibit; only the frozen-write case goes.
+  assert.ok(find(result, "analysis_inhibit_evidence_loss"));
+});
+
+test("declared health signals that no rule reads are reported", () => {
+  const result = analyzeAuthoringPackage(backup);
+  const finding = find(result, "analysis_unused_health_signal");
+  assert.ok(finding);
+  for (const name of ["WiFiConnected", "CloudAvailable"]) assert.match(finding.message, new RegExp(name));
+  // Shelly1Available is read by S020, so it must not be listed.
+  assert.doesNotMatch(finding.message, /Shelly1Available/);
+});
+
+test("the limits name the failure-domain assumption rather than hiding it", () => {
+  const { limits } = analyzeAuthoringPackage(backup);
+  assert.ok(limits.some(text => /failure domains/i.test(text) && /routable address/i.test(text)));
 });
