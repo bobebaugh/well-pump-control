@@ -80,10 +80,20 @@ every second     IsLocked > 0            → decrement; at 0, RLY0 closes
                  clean for TimeToReset…  → loCntr = 0
 ```
 
-RLY0 is driven from `IsLocked` on every tick rather than from the event that set
-it, so the relay and the published state can never disagree. A side effect worth
-knowing: correcting `IsLocked` by hand in the Shelly UI is therefore also a working
-clear path.
+**This script may only ever open RLY0.** Tab5 also writes `switch:0`, to apply its
+own inhibits, so anything here that asserted the relay closed would undo them —
+once a second, for as long as Tab5 kept trying. The only close it performs is
+releasing a hold it placed itself, tracked internally rather than inferred from
+`IsLocked`.
+
+Concretely: while unlocked it issues no relay call at all, whatever state the relay
+is in, because that state is Tab5's business. While locked it re-asserts open if it
+finds the relay closed, which is within its authority and cannot conflict — Tab5
+refuses to close RLY0 while `IsLocked` is non-zero. Steady state costs zero
+`Switch.Set` calls; each transition costs exactly one.
+
+Correcting `IsLocked` by hand in the Shelly UI still clears a lock, because the
+release is driven by the script's own hold rather than by an event edge.
 
 This is **reactive, not pre-emptive**. The first short cycle reaches the pump;
 everything after it is blocked, because `InitLockTime` is far longer than any

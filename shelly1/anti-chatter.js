@@ -46,6 +46,7 @@ let lockoutResetTime = Script.getVcHandle("lockoutResetTime");
 let PERMANENT = -1;
 let lockValue = 0;           // authoritative lock state; mirrored to IsLocked
 let strikeValue = 0;         // authoritative strike count; mirrored to loCntr
+let relayHeldByScript = false; // true only while this script is holding RLY0 open
 let runStartMs = null;       // set on a rising SW edge, null when not running
 let lastInfractionMs = null; // drives the loCntr decay window
 
@@ -103,15 +104,23 @@ function setStrikes(value) {
   writeNumber(lockoutCount, value);
 }
 
-// The relay is driven from the lock value rather than from the event that set it,
-// so the two can never disagree.
-function applyRelay() {
-  let shouldClose = lockState() === 0;
+// This script may only ever OPEN the relay. Tab5 opens RLY0 for its own inhibits,
+// and anything here that asserts it closed would undo them - once a second, for as
+// long as Tab5 kept trying. So the only close performed is the release of a hold
+// this script placed itself, tracked by relayHeldByScript.
+function relayIsClosed() {
   let status = Shelly.getComponentStatus("switch:0");
-  let isClosed = status !== null && status !== undefined && status.output === true;
-  if (isClosed !== shouldClose) {
-    Shelly.call("Switch.Set", { id: 0, on: shouldClose });
-  }
+  return status !== null && status !== undefined && status.output === true;
+}
+
+function openRelay() {
+  relayHeldByScript = true;
+  if (relayIsClosed()) Shelly.call("Switch.Set", { id: 0, on: false });
+}
+
+function releaseRelay() {
+  relayHeldByScript = false;
+  Shelly.call("Switch.Set", { id: 0, on: true });
 }
 
 function recordInfraction() {
@@ -127,7 +136,7 @@ function recordInfraction() {
     setLock(hold);
     print("[anti-chatter] strike " + count + "; RLY0 open for " + hold + "s");
   }
-  applyRelay();
+  openRelay();
 }
 
 function pumpStarted() {
@@ -160,6 +169,14 @@ function tick() {
     setLock(PERMANENT);  // a permanent lock is sticky; normalize any other negative
   }
 
+  // Relay action is driven by this script's own hold, never by the lock value
+  // alone. When unlocked it does nothing at all, leaving RLY0 to Tab5.
+  if (lockValue === 0) {
+    if (relayHeldByScript) releaseRelay();
+  } else if (relayIsClosed()) {
+    openRelay();  // re-assert only while locked, where this script has authority
+  }
+
   if (lockValue === 0 && strikes() > 0 && lastInfractionMs !== null) {
     let window = readNumber(lockoutResetTime, 3600, 60, 86400) * 1000;
     if (Date.now() - lastInfractionMs >= window) {
@@ -168,8 +185,6 @@ function tick() {
       print("[anti-chatter] clean period elapsed; loCntr reset");
     }
   }
-
-  applyRelay();
 }
 
 Shelly.addStatusHandler(function (event) {
@@ -191,7 +206,6 @@ if (!hasHandle(isLocked) || !hasHandle(lockoutCount)) {
 // unlocked state with the relay closed and no run in progress.
 setLock(0);
 setStrikes(0);
-applyRelay();
 
 let initial = Shelly.getComponentStatus("input:0");
 if (initial !== null && initial !== undefined && initial.state === true) {
