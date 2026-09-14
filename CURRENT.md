@@ -83,16 +83,12 @@ presence-checks every requested key and consults no count. And
 corroborating the acknowledgement the dispatcher requires from the sibling
 `Boolean.Set`.
 
-One design decision is open and is not implemented. The Shelly script seeds
-`Tab5IsLocked` false at startup so Tab5 must positively reassert an outstanding
-inhibition. That cannot detect an absent Tab5: Tab5 writes only on a mismatch, so a
-healthy Tab5 owing no inhibition is silent and looks exactly like a dead one. When
-the initialization delay ends the relay closes in both cases. That is the permissive
-posture already agreed, but the owner has raised whether water should flow at all
-when Tab5 is DOA or off the network. Making the seed a real liveness test needs a
-signal present when nothing is wrong - a periodic write or a `last_update_ts`
-heartbeat - and both add a recurring write to a steady state that is deliberately
-silent.
+Tab5 liveness is settled as out of scope for the Shelly script. The seed makes Tab5
+assert an outstanding inhibition rather than inherit a stale true; it cannot detect
+an absent Tab5, and nothing is built on the idea that it can. A dead Tab5 leaves the
+installation better protected than a standard well rather than worse, so the relay
+closing when the initialization delay ends is the right outcome. Supervising CPU B
+and Pilot is future Tab5 work.
 
 A device prerequisite is also outstanding: `switch:0` must be changed to
 `initial_state: "off"` before the new script is installed. The owner capture shows

@@ -22,8 +22,13 @@ function setting(name) {
 }
 const INIT_DELAY = setting("InitDelay");
 const INIT_LOCK_TIME = setting("InitLockTime");
+const RESET_WINDOW = setting("TimeToResetLOcntr");
 
-function startScript(options = {}) {
+function startScriptFrom(source, options = {}) {
+  return startScript(options, source);
+}
+
+function startScript(options = {}, source = SOURCE) {
   const declared = options.declared ?? Object.keys(META.vc);
   const clock = { now: 1_000_000 };
   const calls = [];
@@ -66,12 +71,17 @@ function startScript(options = {}) {
     },
   };
   vm.createContext(sandbox);
-  vm.runInContext(SOURCE, sandbox, { filename: "anti-chatter.js" });
+  vm.runInContext(source, sandbox, { filename: "anti-chatter.js" });
 
   const api = {
     calls, prints, values, relay, clock,
     tick: () => tick(),
     advance: ms => { clock.now += ms; },
+    // The script counts seconds from its own tick, so elapsed time only passes
+    // when the timer actually fires. Drive it the way the device does.
+    runFor: seconds => {
+      for (let i = 0; i < seconds; i += 1) { clock.now += 1000; tick(); }
+    },
     // The contactor follows RLY0: SW can only be high while the relay is closed.
     edge: state => {
       input.state = state;
@@ -98,7 +108,7 @@ function startNormal(options = {}) {
 // A pump run: relay closed, SW rises, time passes, SW falls.
 function runPump(s, seconds, betweenStartAndStop) {
   s.edge(true);
-  s.advance(seconds * 1000);
+  s.runFor(seconds);
   if (betweenStartAndStop) betweenStartAndStop();
   s.edge(false);
 }
@@ -201,7 +211,7 @@ test("intent withdrawn before the falling edge is processed still suppresses the
   // The latch has to outlive the intent that caused it.
   const s = startNormal();
   s.edge(true);
-  s.advance(20_000);
+  s.runFor(20);
   s.setTab5(true);
   s.tick();                 // script opens RLY0 for Tab5
   s.setTab5(false);         // Tab5 withdraws before the contactor edge lands
@@ -308,4 +318,43 @@ test("anti-cycle tuning remains editable as constants at the beginning of the sc
   for (const removed of ["minRuntime", "initLockTime", "maxLockoutCount", "lockoutResetTime"]) {
     assert.equal(META.vc[removed], undefined, `${removed} must not consume a component slot`);
   }
+});
+
+test("a wall-clock step does not affect a run measurement", () => {
+  // The device steps its clock when SNTP lands, which is shortly after boot -
+  // exactly when this script starts. Run length is counted from the tick instead.
+  for (const step of [120_000, -120_000]) {
+    const s = startNormal();
+    s.edge(true);
+    s.runFor(20);
+    s.advance(step);          // clock jumps, no time actually passes
+    s.edge(false);
+    assert.equal(s.strikes(), 1, `short cycle still scored across a ${step}ms step`);
+  }
+});
+
+test("a wall-clock step does not forgive accumulated strikes", () => {
+  const s = startNormal();
+  runPump(s, 20);
+  assert.equal(s.strikes(), 1);
+  s.values.isLocked = 0;                       // lock cleared by hand
+  s.advance(RESET_WINDOW * 1000 + 1000);       // clock jumps past the decay window
+  s.tick();
+  assert.equal(s.strikes(), 1, "the window is real elapsed time, not clock arithmetic");
+  s.runFor(RESET_WINDOW);
+  assert.equal(s.strikes(), 0, "and it does decay once that time actually passes");
+});
+
+test("hand-edited settings are clamped to usable ranges", () => {
+  // The virtual components enforced these in the UI; plain constants do not.
+  const over = name => {
+    const patched = SOURCE.replace(new RegExp(`let ${name} = \\d+;`), `let ${name} = 0;`);
+    return patched;
+  };
+  // MinRuntime 0 would make "ranS < MinRuntime" unsatisfiable: nothing could score.
+  const s = startScriptFrom(over("MinRuntime"));
+  for (let i = 0; i < INIT_DELAY; i += 1) { s.advance(1000); s.tick(); }
+  s.edge(true);
+  s.edge(false);
+  assert.equal(s.strikes(), 1, "MinRuntime clamped up, so detection still works");
 });

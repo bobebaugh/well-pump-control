@@ -69,10 +69,16 @@ let lockValue = 0;           // authoritative lock state; mirrored to IsLocked
 let strikeValue = 0;         // authoritative strike count; mirrored to loCntr
 let relayOpenByScript = false;  // true while this script is holding RLY0 open
 let relayOpenForTab5 = false;  // true when that hold is applying Tab5's inhibition
-let runStartMs = null;       // set on a rising SW edge, null when not running
-let lastInfractionMs = null; // drives the loCntr decay window
-let initSecondsRemaining = InitDelay;
+let runStartS = null;        // uptimeS at the rising SW edge, null when not running
+let lastInfractionS = null;  // drives the loCntr decay window
+let initSecondsRemaining = 0;
 let initializationComplete = false;
+// Monotonic seconds counted by the tick itself. Date.now() is wall clock, and the
+// device steps it when SNTP lands shortly after boot - exactly when this script is
+// starting. A step in either direction corrupted a run measurement and could
+// silently forgive accumulated strikes. One-second resolution is all MinRuntime
+// and TimeToResetLOcntr ever needed.
+let uptimeS = 0;
 
 // getVcHandle yields undefined, not null, for a component that was never
 // declared, so check for both and for a usable object.
@@ -87,6 +93,14 @@ function clamp(value, low, high) {
   if (value < low) return low;
   if (value > high) return high;
   return value;
+}
+
+// The virtual components used to enforce these ranges in the Shelly UI. Plain
+// constants do not, so a typo could silently disable protection - MaxLOcntr above
+// 3 never reaches the strikeout, MinRuntime of 0 detects nothing. Clamp once.
+function clampSetting(value, low, high, fallback) {
+  let checked = clamp(value, low, high);
+  return checked === null ? fallback : checked;
 }
 
 function writeNumber(handle, value) {
@@ -169,7 +183,7 @@ function recordInfraction() {
   let count = strikes() + 1;
   if (count > 3) count = 3;
   setStrikes(count);
-  lastInfractionMs = Date.now();
+  lastInfractionS = uptimeS;
   if (count >= MaxLOcntr) {
     setLock(PERMANENT);
     print("[anti-chatter] STRIKEOUT: loCntr=" + count + "; RLY0 open until reboot");
@@ -185,16 +199,14 @@ function pumpStarted() {
   // contactor cannot be energized. Any edge seen in that state is not a pump
   // start, so it must not begin a run.
   if (lockState() !== 0 || tab5Intent()) return;
-  runStartMs = Date.now();
+  runStartS = uptimeS;
 }
 
 function pumpStopped() {
-  if (runStartMs === null) return;
-  let ranMs = Date.now() - runStartMs;
-  runStartMs = null;
-  if (ranMs < 0) return;  // clock moved; discard rather than invent an infraction
+  if (runStartS === null) return;
+  let ranS = uptimeS - runStartS;
+  runStartS = null;
   if (lockState() !== 0) return;
-  let ranS = Math.floor(ranMs / 1000);
   if (relayOpenForTab5) {
     // This script opened RLY0 to apply Tab5's inhibition, so the pump was
     // commanded to stop. A commanded stop is not chatter and must not score a
@@ -212,6 +224,8 @@ function pumpStopped() {
 }
 
 function tick() {
+  uptimeS += 1;
+
   if (!initializationComplete) {
     holdRelayOpenDuringInitialization();
     initSecondsRemaining -= 1;
@@ -233,11 +247,10 @@ function tick() {
   // no relay call at all, whichever way the policy resolves.
   applyRelayPolicy();
 
-  if (lockValue === 0 && strikes() > 0 && lastInfractionMs !== null) {
-    let window = TimeToResetLOcntr * 1000;
-    if (Date.now() - lastInfractionMs >= window) {
+  if (lockValue === 0 && strikes() > 0 && lastInfractionS !== null) {
+    if (uptimeS - lastInfractionS >= TimeToResetLOcntr) {
       setStrikes(0);
-      lastInfractionMs = null;
+      lastInfractionS = null;
       print("[anti-chatter] clean period elapsed; loCntr reset");
     }
   }
@@ -271,6 +284,13 @@ if (!hasHandle(tab5IsLocked)) {
 // Start from an open relay and a clean local state. Tab5 has InitDelay seconds to
 // replace the false seed with a true hard lock before normal processing may close
 // RLY0. After initialization this script only reads Tab5IsLocked.
+MinRuntime = clampSetting(MinRuntime, 1, 600, 60);
+InitLockTime = clampSetting(InitLockTime, 1, 86400, 90);
+MaxLOcntr = clampSetting(MaxLOcntr, 1, 3, 3);
+TimeToResetLOcntr = clampSetting(TimeToResetLOcntr, 60, 86400, 3600);
+InitDelay = clampSetting(InitDelay, 1, 60, 5);
+initSecondsRemaining = InitDelay;
+
 setLock(0);
 setStrikes(0);
 holdRelayOpenDuringInitialization();

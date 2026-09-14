@@ -114,13 +114,19 @@ From the Shelly's side a flag still false when the window ends means either "Tab
 is alive and owes no inhibition" or "Tab5 is dead, or off the network". Those are
 indistinguishable, and the relay closes in both cases.
 
-That is the permissive posture stated in §1, and it is deliberate: Tab5 is not an
-immediate protection path, and a well that refuses to run is its own hazard. It is
-recorded because the seed reads like a liveness test and is not one. Making it one
-needs a signal that exists when nothing is wrong — a periodic write, or the
-component's `last_update_ts` read as a heartbeat — and either adds a recurring write
-to a steady state that is deliberately silent. **Open owner decision; not
-implemented.**
+**Keeping Tab5 alive is out of scope for this script, and the permissive posture is
+correct.** The problem that created this project is short cycling, and the Shelly
+plus this script answers it on their own. Tab5 adds durable logging first and other
+protection classes second. A standard well has a pressure switch and nothing else,
+so a dead Tab5 leaves the installation better protected than standard, not worse —
+the short-cycle algorithm, the pressure switch, the on-delay, the max-runtime limit
+and the HAND bypass are all still there. Blocking water to signal that an optional
+component is missing would be the worse failure. Tab5 has battery backup, and
+supervising its own CPU B and Pilot processes is future Tab5 work, not the Shelly's.
+
+The seed is therefore kept for what it does do — forcing Tab5 to assert an
+outstanding inhibition rather than inherit a stale true — and nothing depends on it
+proving Tab5 is alive.
 
 Preserve the existing short-cycle algorithm. `MinRuntime`, `InitLockTime`,
 `MaxLOcntr`, `TimeToResetLOcntr`, and `InitDelay` are constants at the beginning of
