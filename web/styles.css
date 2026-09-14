@@ -443,3 +443,25 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(67,168,255,.
 .analysis-limits summary { cursor: pointer; }
 .analysis-limits ul { margin: 8px 0 0; padding-left: 18px; }
 .analysis-limits li { margin: 4px 0; }
+
+.sim-block { margin: 4px 0 18px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); }
+.sim-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px 16px; margin: 10px 0; }
+.sim-controls label, .sim-scrub { display: grid; gap: 4px; font-size: .68rem; color: var(--muted); }
+.sim-controls output, .sim-scrub output { color: var(--text); font-weight: 600; }
+.sim-toggles { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 12px; font-size: .68rem; color: var(--muted); }
+.sim-toggles label { display: flex; align-items: center; gap: 6px; }
+.sim-verdict { padding: 11px 13px; border-radius: 9px; font-size: .78rem; font-weight: 600; border: 1px solid var(--line); }
+.sim-verdict.ok { color: var(--green); border-color: rgba(60,180,120,.45); }
+.sim-verdict.stopped { color: var(--red); border-color: rgba(220,90,90,.45); }
+.sim-timeline { display: flex; flex-wrap: wrap; gap: 2px; margin: 12px 0 4px; }
+.sim-cell { min-width: 22px; padding: 3px 0; text-align: center; border-radius: 3px; font-size: .58rem; color: #08111c; background: var(--green); }
+.sim-cell.stopped { background: var(--red); color: #fff; }
+.sim-cell.mute { outline: 1px dashed var(--amber); outline-offset: -1px; }
+.sim-scrub { margin: 10px 0; max-width: 320px; }
+.sim-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.sim-flag { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); font-size: .6rem; color: var(--muted); }
+.sim-flag.on { color: var(--text); border-color: rgba(67,168,255,.6); background: rgba(67,168,255,.12); }
+.sim-state { display: grid; grid-template-columns: minmax(130px, .5fr) 1.6fr; gap: 4px 14px; margin: 0; font-size: .68rem; }
+.sim-state dt { color: var(--muted); }
+.sim-state dd { margin: 0; color: var(--text); }
+.sim-notes { margin: 10px 0 0; padding-left: 18px; font-size: .66rem; color: var(--amber); }

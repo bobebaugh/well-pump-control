@@ -7,6 +7,7 @@
   <title>Rules Engine — Well Pump Pilot</title>
   <link rel="stylesheet" href="/styles.css?v=20260911-config">
   <script src="/rules-engine-analysis.js?v=20260914-analysis" defer></script>
+  <script src="/rules-engine-simulator.js?v=20260914-analysis" defer></script>
   <script src="/rules-engine.js?v=20260914-analysis" defer></script>
 </head>
 <body>
@@ -109,6 +110,28 @@
     <section id="analysis-panel" class="panel validation-panel" hidden>
       <div class="panel-heading"><div><p class="kicker">CONSEQUENCE ANALYSIS</p><h2 id="analysis-title">Analysis findings</h2></div></div>
       <p class="analysis-intro">Validation asks whether Tab5 will accept this package. This asks what happens if it runs it — which events can hold the pump off, and how each one lets go.</p>
+
+      <div class="sim-block">
+        <p class="kicker">SCENARIO — WHAT FAILS, AND WHEN</p>
+        <div class="sim-controls">
+          <label>What fails<select id="sim-disruption"></select></label>
+          <label>At cycle <output id="sim-at-value">10</output><input id="sim-at" type="range" min="1" max="30" value="10"></label>
+          <label>Run for <output id="sim-cycles-value">30</output> cycles<input id="sim-cycles" type="range" min="4" max="60" value="30"></label>
+          <label>Supply volts <output id="sim-volts-value">245</output><input id="sim-volts" type="range" min="200" max="290" value="245"></label>
+          <label>Shelly lock <output id="sim-lock-value">0</output><input id="sim-lock" type="range" min="-1" max="120" value="0"></label>
+        </div>
+        <div class="sim-toggles">
+          <label><input id="sim-power" type="checkbox" checked> Utility power on</label>
+          <label><input id="sim-pressure" type="checkbox" checked> Pressure switch calling</label>
+          <label><input id="sim-hand" type="checkbox"> HAND selected</label>
+          <label><input id="sim-freeze" type="checkbox"> Monitor stops event processing (proposed, not built)</label>
+        </div>
+        <div id="sim-verdict" class="sim-verdict">Load a package to simulate.</div>
+        <div id="sim-timeline" class="sim-timeline" aria-label="Pump state per cycle"></div>
+        <label class="sim-scrub">Inspect cycle <output id="sim-inspect-value">1</output><input id="sim-inspect" type="range" min="1" max="30" value="1"></label>
+        <div id="sim-detail" class="sim-detail"></div>
+      </div>
+
       <div id="analysis-findings"></div>
       <div id="analysis-holds"></div>
       <details class="analysis-limits"><summary>What this does not check</summary><ul id="analysis-limits"></ul></details>
