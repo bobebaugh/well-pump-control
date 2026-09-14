@@ -90,11 +90,11 @@ installation better protected than a standard well rather than worse, so the rel
 closing when the initialization delay ends is the right outcome. Supervising CPU B
 and Pilot is future Tab5 work.
 
-A device prerequisite is also outstanding: `switch:0` must be changed to
-`initial_state: "off"` before the new script is installed. The owner capture shows
-`"on"`, which closes the relay at boot before any script runs; until it is changed
-the 3-second on-delay in front of RLY0 is the only thing preventing a pump start in
-that gap.
+The device prerequisites are met. The owner set `switch:0` to power-on off on
+2026-09-14, so the relay now starts open and the script's initialization delay
+holds it there; input mode Switch and output type Detached were already correct.
+That makes enable-on-boot load-bearing rather than tidy: with the relay starting
+open, a script that fails to start means no water until someone uses HAND.
 
 Acceptance evidence still to be captured, none of it fabricated here: a reply showing
 `Tab5IsLocked` as a `boolean:<id>` component with `config.name` and a Boolean

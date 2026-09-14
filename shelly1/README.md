@@ -107,6 +107,22 @@ everything after it is blocked, because `InitLockTime` is far longer than any
 enforced idle would have been. Adding an unconditional idle after every stop would
 buy nothing and would delay legitimate heavy demand.
 
+### The fault this was written against
+
+Owner diagnosis, 2026-09-14: the pressure tank bladder had moved across the outlet.
+Any demand over about 3 GPM collapsed the pressure manifold, which called the
+pressure switch ON; the pump started, its own output immediately restored manifold
+pressure, the switch was satisfied, and the pump stopped. Demand was still there, so
+it collapsed again. Rinse and repeat.
+
+Two things follow. The cycle is driven by the pump's own output, so each run is a
+few seconds — nowhere near the roughly 95 seconds a real 40→60 PSI fill took in
+`docs/pressure-calibration/`. `MinRuntime = 60` sits in a very wide gap between the
+two, which is why it discriminates cleanly rather than by fine tuning.
+
+And the fault is mechanical. This script is protection against recurrence and a way
+to see it happen in the log; it is not the repair.
+
 ### HAND mode
 
 HAND hard-wires the G/B− loop, so SW sits high continuously and never produces a
@@ -159,20 +175,20 @@ Not set by the script — configure these on the Shelly before installing:
 - `switch:0` power-on default **off**, so RLY0 starts open. The script preserves
   that state through its five-second initialization delay.
 
-  **The device is not set this way yet.** An owner capture on 2026-09-14 reported
-  `initial_state: "on"`, which closes the relay at boot before any script runs.
-  Change it before installing this script:
+  **Set on the device 2026-09-14** (owner, Shelly UI: *Action on power on* →
+  *Turn OFF*). An earlier capture that day reported `initial_state: "on"`, which
+  closed the relay at boot before any script could run. Equivalent by RPC:
 
   ```
   http://192.168.50.201/rpc/Switch.SetConfig?id=0&config={"initial_state":"off"}
   ```
-
-  Until it is changed, the 3-second on-delay in front of RLY0 is the only thing
-  preventing a pump start in the gap between boot and script start. That is a
-  dependency, not a design.
 - `input:0` in a mode that reports a level in `status.state`, since edges are taken
   from the status handler.
-- The script set to **run on startup**.
+- The script set to **run on startup**. This is now load-bearing, not tidiness.
+  With the power-on default off, the relay stays open until this script closes it,
+  so a script that does not start means no water — from a syntax error, a failed
+  save, a deleted script, or the enable-on-boot flag being off. HAND is the
+  bypass, and the reason it must stay labelled at the panel.
 
 ### The `@meta` line
 
