@@ -2,17 +2,29 @@
 
 // Executable subset reviewed against Tab5 M6.33 (6d4b54cc), not a new runtime.
 const { FUNCTION_CATALOG } = require('./rules-engine-defaults');
+
+// The one physical object carrying Tab5's inhibition.
+const INHIBITION_OBJECT = 'UDF(Tab5IsLocked)';
 function runtimeSupport(draft, runtime) {
   const errors = [], warnings = [];
   const issue = (path, message) => errors.push({ path, code: 'tab5_unsupported', message });
   const fields = new Map();
   for (const device of draft.devices) for (const field of device.fields) fields.set(field.systemName, field);
   for (const field of draft.systemFields) fields.set(field.systemName, field);
-  const relayFields = draft.devices.flatMap((d,i)=>d.fields.map((f,j)=>({d,f,path:`devices[${i}].fields[${j}]`}))).filter(x=>x.f.access==='readWrite');
-  for(const {f,path} of relayFields) {
-    if(f.systemName!=='PumpEnable') issue(`${path}.systemName`, 'The current Tab5 relay ownership logic requires the system name PumpEnable.');
-    const lock=draft.devices.some(d=>d.driver==='shelly-gen4-switch' && d.fields.some(f=>f.object==='UDF(IsLocked)' && f.systemName==='IsLocked'));
-    if(!lock) issue(path, 'Relay restoration requires the IsLocked integer field mapped to UDF(IsLocked).');
+  // Tab5 executes exactly one device write, on the inhibition Boolean. The target
+  // is identified by its device binding, never by its editable system name, so an
+  // owner may rename it and an alias cannot create a second writer.
+  const writableFields = draft.devices.flatMap((d,i)=>d.fields.map((f,j)=>({d,f,path:`devices[${i}].fields[${j}]`}))).filter(x=>x.f.access==='readWrite');
+  const inhibitionFields = writableFields.filter(x=>x.f.object===INHIBITION_OBJECT);
+  for(const {d,f,path} of writableFields) {
+    if(f.object!==INHIBITION_OBJECT) issue(`${path}.object`, `Tab5 writes only ${INHIBITION_OBJECT}. ${f.object} is observed, not written: the Shelly script owns the relay.`);
+    else if(d.driver!=='shelly-gen4-switch') issue(`${path}.object`, `${INHIBITION_OBJECT} belongs to the Shelly Gen4 switch driver.`);
+  }
+  if(inhibitionFields.length>1) issue(inhibitionFields[1].path, `Only one field may write ${INHIBITION_OBJECT}; an alias would create a second writer for one physical component.`);
+  const inhibitionTarget = inhibitionFields.length===1 ? inhibitionFields[0].f.systemName : null;
+  if(inhibitionFields.length) {
+    const lock=draft.devices.some(d=>d.driver==='shelly-gen4-switch' && d.fields.some(f=>f.object==='UDF(IsLocked)'));
+    if(!lock) issue(inhibitionFields[0].path, 'Reporting the Shelly lock requires the IsLocked integer field mapped to UDF(IsLocked).');
   }
   const tab5 = draft.devices.filter(d => d.driver === 'tab5-runtime').flatMap(d => d.fields);
   for (const [i, calculation] of draft.calculatedFields.entries()) {
@@ -60,6 +72,11 @@ function runtimeSupport(draft, runtime) {
         const target = fields.get(a.target);
         if (target?.runtimeRole === 'operatingMode') {
           if (event.eventClass !== 'monitor' || a.value !== 'Monitor' || a.ownership !== 'whileOpen' || phase !== 'onOpen') issue(p, 'Operating mode may only be held at Monitor by a Monitor event on opening. Normal returns when the final owner closes.');
+        } else if (a.target === inhibitionTarget) {
+          // Release is a consequence of ownership and mode, never an authored
+          // value, so only a held opening request is legal here.
+          if (phase !== 'onOpen' || a.value !== true || a.ownership !== 'whileOpen') issue(p, `${a.target} may only be requested by a held opening assignment set to true. It is released when the last owner closes, or while Monitor is engaged.`);
+          if (event.eventClass === 'monitor') issue(p, 'Monitor events may assign only the operating-mode field.');
         } else if (event.eventClass === 'monitor') issue(p, 'Monitor events may assign only the operating-mode field.');
         if (target?.type === 'integer' && !Number.isInteger(a.value)) issue(`${p}.value`, 'An integer assignment requires a whole number.');
       };

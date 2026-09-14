@@ -20,8 +20,11 @@ test("V3 defaults preserve installed V2 definitions and define the four reviewed
   assert.deepEqual(draft.events.map(event => event.id), ["E007", "M001", "H001", "E002"]);
   const highVoltage = draft.events.find(event => event.id === "E007");
   assert.equal(highVoltage.enabled, true);
-  assert.deepEqual(highVoltage.opening.trigger.condition, { mode: "all", clauses: [{ field: "SupplyVoltage", operator: "gt", value: 265 }, { field: "ShellyEMAvailable", operator: "eq", value: true }], observationCount: 2, minimumSeconds: 0 });
-  assert.deepEqual(highVoltage.closing.condition, { mode: "all", clauses: [{ field: "SupplyVoltage", operator: "lt", value: 265 }, { field: "ShellyEMAvailable", operator: "eq", value: true }], observationCount: 30, minimumSeconds: 0 });
+  assert.deepEqual(highVoltage.opening.trigger.condition, { mode: "all", clauses: [{ field: "SupplyVoltage", operator: "gt", value: 266 }, { field: "ShellyEMAvailable", operator: "eq", value: true }], observationCount: 2, minimumSeconds: 0 });
+  // Three-valued any: with the source gone the voltage clause is unknown and the
+  // availability clause decides, so the event can still clear.
+  assert.deepEqual(highVoltage.closing.condition, { mode: "any", clauses: [{ field: "SupplyVoltage", operator: "lte", value: 266 }, { field: "ShellyEMAvailable", operator: "eq", value: false }], observationCount: 10, minimumSeconds: 0 });
+  assert.deepEqual(highVoltage.onOpen.assignments, [{ target: "Tab5IsLocked", value: true, ownership: "whileOpen" }]);
   assert.equal(draft.events.find(event => event.id === "E002").enabled, false);
   assert.deepEqual(draft.events.find(event => event.id === "E002").opening.trigger.condition.clauses, [
     { field: "ContactorFlag", operator: "eq", value: true },
@@ -31,7 +34,13 @@ test("V3 defaults preserve installed V2 definitions and define the four reviewed
     { field: "Shelly1Available", operator: "eq", value: true }
   ]);
   assert.deepEqual(draft.systemFields.map(field => field.systemName), ["OperatingMode", "OperatorMonitorRequest", "ShellyEMUnavailable"]);
-  assert.equal(draft.events.find(event => event.id === "H001").opening.trigger.occurrenceField, "ShellyEMUnavailable");
+  // H001 opens on a condition the device can evaluate; internal occurrences are
+  // declared but never generated on the device.
+  const sourceInvalid = draft.events.find(event => event.id === "H001");
+  assert.equal(sourceInvalid.opening.trigger.type, "condition");
+  assert.deepEqual(sourceInvalid.opening.trigger.condition.clauses, [
+    { field: "ShellyEMAvailable", operator: "eq", value: false }
+  ]);
   assert.equal(draft.events.find(event => event.id === "H001").closing.condition.clauses[0].field, "ShellyEMAvailable");
 });
 
@@ -65,7 +74,8 @@ test("V3 contract rejects invalid system sources, typed assignments, lifecycle p
   assert.ok(codes(validateAndCompileV3(badPolicy)).includes("latched_close_policy"));
 
   const ownership = defaults();
-  ownership.events.find(event => event.id === "E002").onOpen.assignments[0].value = true;
+  // E007 holds the inhibition true; a second owner asking for false conflicts.
+  ownership.events.find(event => event.id === "E002").onOpen.assignments[0].value = false;
   assert.ok(codes(validateAndCompileV3(ownership)).includes("ownership_value_conflict"));
 
   const monitor = defaults();

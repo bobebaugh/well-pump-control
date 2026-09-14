@@ -28,7 +28,10 @@ test("an availability guard in a closing condition is reported as inert", () => 
   const result = analyzeAuthoringPackage(backup);
   const finding = find(result, "analysis_inert_availability_clause");
   assert.ok(finding, "ShellyEMAvailable cannot rescue a close that also reads SupplyVoltage");
-  assert.match(finding.message, /has no effect/);
+  // An "all" condition needs every clause true, and the measured clause can never
+  // be true while its device is gone, so the guard cannot rescue the close.
+  assert.match(finding.message, /cannot rescue it/);
+  assert.match(finding.message, /"any" condition/);
   // Removing the guard must not make the finding go away: it is the measured
   // field that freezes the condition, not the guard.
   const stripped = JSON.parse(JSON.stringify(backup));

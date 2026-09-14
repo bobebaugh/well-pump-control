@@ -13,7 +13,26 @@
 // no claim about values it has not seen. What it cannot do is explore timing
 // and interleaving; see analysisLimits() for the honest list.
 
-const ANALYSIS_PUMP_TARGET = "PumpEnable";
+// Tab5's inhibition is applied through this object; the Shelly script owns the
+// relay. Resolved by binding so a renamed system name is still recognised, and an
+// alias cannot hide a second writer from the analysis.
+const ANALYSIS_INHIBITION_OBJECT = "UDF(Tab5IsLocked)";
+const ANALYSIS_PUMP_TARGET = "Tab5IsLocked";
+
+function analysisInhibitionTarget(pkg) {
+  const devices = Array.isArray(pkg.devices) ? pkg.devices : [];
+  let firstWritable = null;
+  for (const device of devices) {
+    for (const field of device.fields || []) {
+      if (field.access !== "readWrite") continue;
+      if (field.object === ANALYSIS_INHIBITION_OBJECT) return field.systemName;
+      if (!firstWritable) firstWritable = field.systemName;
+    }
+  }
+  // A package predating the inhibition binding still deserves analysis, so fall
+  // back to whatever device field it does write.
+  return firstWritable || ANALYSIS_PUMP_TARGET;
+}
 
 function analysisLimits() {
   return [
@@ -72,6 +91,7 @@ function analysisFieldIndex(pkg) {
         deviceEnabled: device.enabled === true, isAvailability: field.object === "$availability",
         availabilityField: availability ? availability.systemName : null,
         writable: field.access === "readWrite",
+        isInhibition: field.object === ANALYSIS_INHIBITION_OBJECT,
         normalValue: field.write ? field.write.normalValue : undefined
       });
     }
@@ -167,6 +187,15 @@ function analysisAssignments(event, phase) {
 
 // Every way an event can stop holding what it holds. This is the "how do I get
 // water back" question, answered per event rather than per package.
+// An availability flag reads false while its device is unavailable, so a clause
+// asking for exactly that is decidable at the moment the measurements vanish.
+function analysisTrueWhenUnavailable(clause) {
+  if (!clause) return false;
+  if (clause.operator === "eq") return clause.value === false;
+  if (clause.operator === "neq") return clause.value === true;
+  return false;
+}
+
 function analysisEscape(event, fields) {
   const closing = event.closing || {};
   if (closing.policy === "immediate") {
@@ -182,15 +211,20 @@ function analysisEscape(event, fields) {
     return { kind: "unknown", text: `Unrecognised closing policy "${closing.policy}".` };
   }
   const names = analysisConditionFields(closing.condition);
+  const clauses = Array.isArray(closing.condition && closing.condition.clauses)
+    ? closing.condition.clauses : [];
+  const mode = (closing.condition && closing.condition.mode) || "all";
   const blocking = [];
-  for (const name of names) {
+  for (const clause of clauses) {
+    const name = clause && clause.field;
     const field = fields.get(name);
     if (!field || field.origin !== "device") continue;
     blocking.push({ name, deviceLabel: field.deviceLabel, domain: field.domain,
-      explicit: field.isAvailability === true });
+      explicit: field.isAvailability === true, clause });
   }
   return {
     kind: "condition",
+    mode,
     text: `Closes when ${names.join(", ") || "its closing condition"} qualifies.`,
     blocking
   };
@@ -207,6 +241,7 @@ function analyzeAuthoringPackage(input) {
     return { findings: [analysisFinding("error", "analysis_no_package", "", "No package to analyse.")], holds: [], limits: analysisLimits() };
   }
   const fields = analysisFieldIndex(pkg);
+  const inhibitTarget = analysisInhibitionTarget(pkg);
   const events = Array.isArray(pkg.events) ? pkg.events : [];
   const holds = [];
 
@@ -307,7 +342,7 @@ function analyzeAuthoringPackage(input) {
     }
 
     const pumpHolds = holds.filter(hold => hold.eventId === (event.id || event.systemName) &&
-      hold.target === ANALYSIS_PUMP_TARGET);
+      hold.target === inhibitTarget);
     if (pumpHolds.length) {
       // A disabled rule carries the same defect; it is simply not armed. Report
       // it a level down rather than not at all, so enabling it is not a surprise.
@@ -316,35 +351,38 @@ function analyzeAuthoringPackage(input) {
       const escape = analysisEscape(event, fields);
       if (escape.kind === "restart") {
         findings.push(analysisFinding(level, "analysis_inhibit_until_restart", path,
-          `${label} holds ${ANALYSIS_PUMP_TARGET} off and closes only on Clear Events, which is not implemented. Once this opens there is no water until Tab5 is restarted.${latent}`));
+          `${label} holds ${inhibitTarget} and closes only on Clear Events, which is not implemented. Once this opens there is no water until Tab5 is restarted.${latent}`));
       }
       // A measured device field is absent from the snapshot when its device is
-      // rejected, and rules_v3_condition_value returns None for the whole
-      // condition on the first absent field, in "any" mode as well as "all".
-      // So one measurement in a closing condition is enough to freeze the
-      // event open for as long as that device is gone. An availability flag is
-      // always True or False and never causes this.
+      // rejected. Conditions are three-valued across clauses, so what that costs
+      // depends on the mode. In "all", every clause must be true to close, and an
+      // absent measurement can never be true: the event stays open. In "any", one
+      // definitely-true clause closes it, and an availability flag is always True
+      // or False - so a clause satisfied BY the device being unavailable is a real
+      // escape from exactly the failure that removed the measurement.
       const blocking = escape.blocking || [];
       const measured = blocking.filter(item => !item.explicit);
       const explicit = blocking.filter(item => item.explicit);
-      if (measured.length) {
+      const escapesOnLoss = escape.mode === "any" &&
+        explicit.some(item => analysisTrueWhenUnavailable(item.clause));
+      if (measured.length && !escapesOnLoss) {
         findings.push(analysisFinding(level, "analysis_inhibit_evidence_loss", path,
-          `${label} holds ${ANALYSIS_PUMP_TARGET} off and can only close by reading ${measured.map(item => item.name).join(", ")} from ${measured[0].deviceLabel}. If ${measured[0].deviceLabel} goes offline while this event is open, those clauses cannot be evaluated, the closing condition never qualifies, and the pump stays off until the device returns or Tab5 restarts. The evidence that would release the inhibit is the same evidence that vanished.${latent}`));
+          `${label} holds ${inhibitTarget} and can only close by reading ${measured.map(item => item.name).join(", ")} from ${measured[0].deviceLabel}. If ${measured[0].deviceLabel} goes offline while this event is open, those clauses cannot be evaluated, the closing condition never qualifies, and the pump stays off until the device returns or Tab5 restarts. The evidence that would release the inhibit is the same evidence that vanished.${latent}`));
       }
       // The systemic case. If the target lives on the far side of the same
       // network as the evidence, one failure removes both the grounds to
       // release and the ability to act, and takes the cloud with it, so every
       // online recovery control is gone at the same moment.
-      const targetField = fields.get(ANALYSIS_PUMP_TARGET);
+      const targetField = fields.get(inhibitTarget);
       const sameDomain = targetField && targetField.domain === "network" &&
         blocking.some(item => item.domain === "network");
       if (sameDomain) {
         findings.push(analysisFinding(level, "analysis_inhibit_frozen_by_domain", path,
-          `${label} holds ${ANALYSIS_PUMP_TARGET} on ${targetField.deviceLabel} and closes on evidence from ${measured.length ? measured[0].deviceLabel : blocking[0].deviceLabel}. Both are reached over the network, so one Wi-Fi, access point or router failure removes the evidence and Tab5's ability to write the relay at the same instant. The relay then stays wherever it happened to be: off if the inhibit had landed, on if it had not. The outcome is decided by timing, not by the rule. That failure also takes the cloud, so Monitor, Restart Tab5 and Restart Shelly 1 are unavailable exactly when they are needed.${latent}`));
+          `${label} holds ${inhibitTarget} on ${targetField.deviceLabel} and closes on evidence from ${measured.length ? measured[0].deviceLabel : blocking[0].deviceLabel}. Both are reached over the network, so one Wi-Fi, access point or router failure removes the evidence and Tab5's ability to write its inhibition at the same instant. The flag then stays wherever it happened to be, and the Shelly script holds the relay accordingly: open if the inhibit had landed, closed if it had not. The outcome is decided by timing, not by the rule. That failure also takes the cloud, so Monitor, Restart Tab5 and Restart Shelly 1 are unavailable exactly when they are needed.${latent}`));
       }
-      if (explicit.length && measured.length) {
+      if (explicit.length && measured.length && !escapesOnLoss) {
         findings.push(analysisFinding("warning", "analysis_inert_availability_clause", path,
-          `${label} also tests ${explicit.map(item => item.name).join(", ")} in its closing condition, which has no effect. ${measured[0].name} is evaluated first and is absent whenever ${explicit[0].deviceLabel} is unavailable, so the condition is already undecided before the availability clause is reached. Spelling the guard out does not change the behaviour of the rule.`));
+          `${label} also tests ${explicit.map(item => item.name).join(", ")} in its closing condition, which cannot rescue it. Every clause of an "all" condition must be true to close, and ${measured[0].name} is absent whenever ${explicit[0].deviceLabel} is unavailable, so the condition can never be true while that device is gone. An "any" condition with a clause satisfied by the device being unavailable would close instead.`));
       }
     }
 
@@ -384,10 +422,10 @@ function analyzeAuthoringPackage(input) {
       `${unusedHealth.join(", ")} are declared and logged but no event reads them. These are the signals that would let a rule notice the systemic failure — the network or the cloud going away — rather than inferring it one device at a time. Nothing in this package reacts to losing them.`));
   }
 
-  const pumpHolds = holds.filter(hold => hold.target === ANALYSIS_PUMP_TARGET && hold.enabled);
+  const pumpHolds = holds.filter(hold => hold.target === inhibitTarget && hold.enabled);
   if (!pumpHolds.length) {
     findings.push(analysisFinding("info", "analysis_no_pump_inhibit", "events",
-      `No enabled event can hold ${ANALYSIS_PUMP_TARGET} off. Tab5 contributes no inhibit in this package; the Shelly script and the original automation are the only protection running.`));
+      `No enabled event can hold ${inhibitTarget}. Tab5 contributes no inhibit in this package; the Shelly script and the original automation are the only protection running.`));
   }
 
   const order = { error: 0, warning: 1, info: 2 };
@@ -396,5 +434,5 @@ function analyzeAuthoringPackage(input) {
 }
 
 if (typeof module === "object" && module.exports) {
-  module.exports = { analyzeAuthoringPackage, analysisUnsatisfiable, analysisFieldIndex, analysisFailureDomains, analysisReferencedFields, analysisLimits, ANALYSIS_PUMP_TARGET };
+  module.exports = { analyzeAuthoringPackage, analysisUnsatisfiable, analysisFieldIndex, analysisFailureDomains, analysisReferencedFields, analysisLimits, ANALYSIS_PUMP_TARGET, ANALYSIS_INHIBITION_OBJECT, analysisInhibitionTarget };
 }

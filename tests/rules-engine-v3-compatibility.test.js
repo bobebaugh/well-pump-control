@@ -34,13 +34,18 @@ test('online compatibility agrees with the pinned real Tab5 resolver on represen
    const authoring=validateAndCompileV3(draft,{authoringOnly:true});
    if(authoring.valid) candidates.push({name,expected,package:{...authoring.runtimePackage,releaseId:'20260911000000-event-v3-v1',packageVersion:1}});
  }
- const run=spawnSync('python3',[require('node:path').join(__dirname,'fixtures/tab5-v3-resolver-m633.py')],{input:JSON.stringify(candidates.map(c=>c.package)),encoding:'utf8'});
+ const run=spawnSync('python3',[require('node:path').join(__dirname,'fixtures/tab5-v3-resolver-m638.py')],{input:JSON.stringify(candidates.map(c=>c.package)),encoding:'utf8'});
  assert.equal(run.status,0,run.stderr);
  const outcomes=JSON.parse(run.stdout);
  candidates.forEach((c,i)=>assert.equal(outcomes[i],c.expected,`Tab5: ${c.name}`));
 });
 test('known invalid driver/write bindings are rejected online',()=>{
- for(const mutate of [d=>d.devices[0].driver='unknown',d=>d.devices[1].fields.find(f=>f.access==='readWrite').write.method='Switch.Toggle',d=>d.devices[1].fields.find(f=>f.access==='readWrite').write.normalValue=false]) {
+ for(const mutate of [d=>d.devices[0].driver='unknown',
+   d=>d.devices[1].fields.find(f=>f.access==='readWrite').write.method='Switch.Toggle',
+   d=>d.devices[1].fields.find(f=>f.access==='readWrite').write.method='Switch.Set',
+   d=>d.devices[1].fields.find(f=>f.access==='readWrite').write.normalValue=true,
+   d=>d.devices[1].fields.find(f=>f.access==='readWrite').write.parameters={id:0,valueParameter:'value'},
+   d=>{const relay=d.devices[1].fields.find(f=>f.object==='RLY(0)');relay.access='readWrite';relay.write={method:'Switch.Set',parameters:{id:0,valueParameter:'on'},normalValue:true};}]) {
    const d=defaults();mutate(d);assert.equal(validateAndCompileV3(d).valid,false);
  }
 });

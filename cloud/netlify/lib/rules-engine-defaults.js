@@ -37,8 +37,10 @@ const DRIVER_BINDINGS = {
   },
   "shelly-gen4-switch": {
     "SW(0)": { type: "boolean", unit: null, access: "read" },
-    "RLY(0)": { type: "boolean", unit: null, access: "readWrite", write: { method: "Switch.Set", parameters: { id: 0, valueParameter: "on" }, normalValue: true } },
+    // RLY(0) is observed, never written: the Shelly script is its sole writer.
+    "RLY(0)": { type: "boolean", unit: null, access: "read" },
     "UDF(IsLocked)": { type: "integer", unit: "s", access: "read" },
+    "UDF(Tab5IsLocked)": { type: "boolean", unit: null, access: "readWrite", write: { method: "Boolean.Set", parameters: { valueParameter: "value" }, normalValue: false } },
     "$availability": { type: "boolean", unit: null, access: "read" }
   },
   "tab5-runtime": {
@@ -74,9 +76,10 @@ const DEFAULT_DRAFT = {
     {
       id: "shelly-1-main", label: "Shelly 1 Gen4", driver: "shelly-gen4-switch", address: "192.168.50.201", enabled: true,
       fields: [
-        { systemName: "PumpEnable", label: "Pump enable", object: "RLY(0)", type: "boolean", unit: null, access: "readWrite", logging: changeLog, write: { method: "Switch.Set", parameters: { id: 0, valueParameter: "on" }, normalValue: true } },
+        { systemName: "PumpEnable", label: "Pump relay state", object: "RLY(0)", type: "boolean", unit: null, access: "read", logging: changeLog },
         { systemName: "ContactorFlag", label: "Contactor flag", object: "SW(0)", type: "boolean", unit: null, access: "read", logging: changeLog },
         { systemName: "IsLocked", label: "Shelly script lock remaining", object: "UDF(IsLocked)", type: "integer", unit: "s", access: "read", logging: deltaLog(10) },
+        { systemName: "Tab5IsLocked", label: "Tab5 inhibition", object: "UDF(Tab5IsLocked)", type: "boolean", unit: null, access: "readWrite", logging: changeLog, write: { method: "Boolean.Set", parameters: { valueParameter: "value" }, normalValue: false } },
         { systemName: "Shelly1Available", label: "Shelly 1 available", object: "$availability", type: "boolean", unit: null, access: "read", logging: changeLog }
       ]
     },
@@ -129,12 +132,12 @@ const DEFAULT_DRAFT = {
     {
       id: "EV-HIGH-VOLTAGE", systemName: "UtilityVoltageHigh", displayName: "Utility voltage high", enabled: false, severity: "Red", latched: false,
       open: { mode: "all", clauses: [{ field: "SupplyVoltage", operator: "gte", value: 300 }, { field: "ShellyEMAvailable", operator: "eq", value: true }], observationCount: 3, minimumSeconds: 0 }, close: { basis: "custom", mode: "all", clauses: [{ field: "SupplyVoltage", operator: "lt", value: 265 }, { field: "ShellyEMAvailable", operator: "eq", value: true }], observationCount: 30, minimumSeconds: 0 },
-      summary: { durationOutput: null, aggregates: [] }, actions: [{ target: "PumpEnable", value: false }], web: { notifyOnOpen: true, notifyOnClose: true, openMessage: "Well pump disabled after repeated high-voltage observations.", closeMessage: "Well pump high-voltage event cleared after sustained good voltage." }
+      summary: { durationOutput: null, aggregates: [] }, actions: [{ target: "Tab5IsLocked", value: true }], web: { notifyOnOpen: true, notifyOnClose: true, openMessage: "Well pump disabled after repeated high-voltage observations.", closeMessage: "Well pump high-voltage event cleared after sustained good voltage." }
     },
     {
       id: "EV-LONG-RUNTIME", systemName: "LongPumpRuntime", displayName: "Long pump runtime", enabled: false, severity: "Red", latched: true,
       open: { mode: "all", clauses: [{ field: "PumpWatts", operator: "gte", value: 1000 }], observationCount: 1, minimumSeconds: 360 }, close: { basis: "openingFalse", observationCount: 1, minimumSeconds: 0 },
-      summary: { durationOutput: null, aggregates: [] }, actions: [{ target: "PumpEnable", value: false }], web: { notifyOnOpen: true, notifyOnClose: true, openMessage: "Well pump exceeded the configured runtime and was disabled.", closeMessage: "Long-runtime event cleared by the user after pump demand ended." }
+      summary: { durationOutput: null, aggregates: [] }, actions: [{ target: "Tab5IsLocked", value: true }], web: { notifyOnOpen: true, notifyOnClose: true, openMessage: "Well pump exceeded the configured runtime and was disabled.", closeMessage: "Long-runtime event cleared by the user after pump demand ended." }
     },
     {
       id: "EV-SHELLY-TIMED", systemName: "ShellyTimedLock", displayName: "Shelly timed lock", enabled: false, severity: "Red", latched: false,

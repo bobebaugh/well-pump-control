@@ -18,12 +18,14 @@ test("default authoring model compiles into a bounded Tab5-facing package", () =
   assert.equal(result.runtimePackage.eventLifecycle.systemOverride.continuesLogging, true);
   assert.equal(result.runtimePackage.observationLogging.recordShape, "all_named_fields");
   assert.equal(result.runtimePackage.observationLogging.comparisonBaseline, "last_queued_durable_snapshot");
-  assert.equal(result.runtimePackage.devices[1].fields.find(field => field.systemName === "PumpEnable").write.normalValue, true);
+  assert.equal(result.runtimePackage.devices[1].fields.find(field => field.systemName === "Tab5IsLocked").write.normalValue, false);
+  assert.equal(result.runtimePackage.devices[1].fields.find(field => field.systemName === "PumpEnable").write, undefined);
   const order = result.runtimePackage.calculations.map(calculation => calculation.id);
   assert.ok(order.indexOf("calc-pressure") < order.indexOf("calc-tank"));
   assert.equal(result.runtimePackage.calculations.filter(calculation => calculation.kind === "function").length, 1);
   assert.equal(result.runtimePackage.calculations.find(calculation => calculation.id === "calc-pressure").expression, "(PressureADCCounts - 3732.02) / 211.492");
   assert.equal(result.runtimePackage.devices[1].fields.find(field => field.systemName === "PumpEnable").object, "RLY(0)");
+  assert.equal(result.runtimePackage.devices[1].fields.find(field => field.systemName === "Tab5IsLocked").object, "UDF(Tab5IsLocked)");
   assert.equal(result.runtimePackage.devices[1].fields.find(field => field.systemName === "ContactorFlag").object, "SW(0)");
   assert.equal(result.runtimePackage.events[0].close.basis, "openingFalse");
   assert.equal(result.runtimePackage.events[0].summary.aggregates.length, 4);
@@ -118,9 +120,9 @@ test("device system names are the external identity and cannot be reused", () =>
 
 test("writable fields require a complete device command and normal value", () => {
   const draft = defaults();
-  const pumpEnable = draft.devices[1].fields[0];
-  pumpEnable.write.parameters = "not json";
-  pumpEnable.write.normalValue = "ON";
+  const inhibition = draft.devices[1].fields.find(field => field.access === "readWrite");
+  inhibition.write.parameters = "not json";
+  inhibition.write.normalValue = "ON";
   const result = validateAndCompile(draft);
   assert.equal(result.valid, false);
   assert.ok(result.errors.some(error => error.code === "invalid_write_parameters"));
@@ -129,9 +131,9 @@ test("writable fields require a complete device command and normal value", () =>
 
 test("verification rejects bindings the Tab5 runtime has not implemented", () => {
   const draft = defaults();
-  const pumpEnable = draft.devices[1].fields[0];
-  pumpEnable.object = "SW(0)";
-  pumpEnable.write = { method: "Switch.Set", parameters: { id: 1, valueParameter: "on" }, normalValue: true };
+  const inhibition = draft.devices[1].fields.find(field => field.access === "readWrite");
+  inhibition.object = "SW(0)";
+  inhibition.write = { method: "Switch.Set", parameters: { id: 1, valueParameter: "on" }, normalValue: true };
   draft.devices[2].fields[0].object = "values.adc_microvolts";
   const result = validateAndCompile(draft);
   assert.equal(result.valid, false);

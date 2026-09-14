@@ -26,3 +26,7 @@ firmware/tab5/main/secrets.local.h
 .vscode/settings.json
 .DS_Store
 Thumbs.db
+
+# Python bytecode from running the Tab5 host suites in this checkout.
+__pycache__/
+*.pyc

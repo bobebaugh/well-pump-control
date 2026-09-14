@@ -1,6 +1,36 @@
 # Current status — Pilot line
 
-## Now — operator control moved onto the proven RTDB identity; rules grant outstanding
+## Now — M6.38 Tab5IsLocked authoring and support unit awaiting owner review
+
+The Pilot half of the coordinated inhibition unit is implemented on
+`pilot-working` but is not deployed, and no rules package has been published or
+delivered. Tab5 no longer writes RLY0: it publishes its inhibition as the
+`Tab5IsLocked` Boolean, and the Shelly script becomes the relay's sole writer.
+
+The binding catalog makes `RLY(0)` read-only telemetry and adds
+`UDF(Tab5IsLocked)` as the one writable object, with a `Boolean.Set` shape whose
+parameters are `{valueParameter:"value"}` and whose normal value is `false`. Write
+shapes are discriminated by method and stay closed, so an id is neither optional
+for a method that needs one nor accepted for one that does not. The runtime-support
+gate now resolves the write target by its device binding instead of requiring the
+system name `PumpEnable`, refuses any other writable object, refuses a second
+writer for the same component, and accepts only a held opening assignment set to
+true — release is a consequence of ownership and mode, never an authored value.
+
+Shipped authoring defaults change with it. H001 opens on `ShellyEMAvailable == false`
+rather than an internal occurrence the device never generates. E007 opens above 266
+and closes on `any [SupplyVoltage <= 266, ShellyEMAvailable == false]` at the
+authored ten reads, which is what lets it clear when the electrical source is the
+thing that vanished. E007 and E002 assign `Tab5IsLocked = true`.
+
+The static analysis follows the same binding, and has been taught the three-valued
+closing semantics: an `any` condition with a clause satisfied by the device being
+unavailable is a real escape from the failure that removed the measurement, so the
+revised package no longer raises the stranded-inhibit error the legacy one does.
+The pinned Tab5 resolver fixture was regenerated from `tab5-working` so the online
+and device validators are compared against the build that will actually run.
+
+## Previously — operator control moved onto the proven RTDB identity; rules grant outstanding
 
 The deployed 502 is not the earlier SDK-argument defect. Operator control was the only
 Pilot→RTDB path with no rules-authorized identity: in the published rules
@@ -101,6 +131,25 @@ confirm observation-v2 fields, coalesced reasons, explicit unavailable pressure
 values, and stored event-open/event-close records. The displayed open and close
 screenshots represent different occurrences, not a verified matching pair.
 
+## Verification — M6.38
+
+- 224 Pilot host tests pass, including 11 new inhibition regressions: the shipped
+  defaults author exactly one device write; `RLY(0)` cannot be made writable again;
+  the inhibition write shape is exact in all four wrong pairings; every illegal
+  assignment form is rejected in both phases and inside guarded groups while the
+  legal form still passes in a guarded group; an alias is refused; a renamed target
+  is still recognised by binding; H001's condition trigger; the revised closing
+  condition clears the evidence-loss finding that the legacy package still raises;
+  and the analyzer still catches a package with no escape.
+- `tests/rules-engine-v3-compatibility.test.js` runs the regenerated
+  `tests/fixtures/tab5-v3-resolver-m638.py`, an AST dependency slice of
+  `tab5/pilot.py` at the tab5-working commit, so online validation is compared
+  against the real device resolver rather than a description of it.
+- `contracts/examples/v3/rules-runtime-package.json` was regenerated from the
+  revised defaults and is byte-compared by the determinism test.
+- No package was published or delivered, no Firebase or RTDB change was made, and
+  no deployment was performed by this unit.
+
 ## Verification
 
 - Focused record-browser, UI and operator-control regressions passed 24/24. They
@@ -189,6 +238,15 @@ screenshots represent different occurrences, not a verified matching pair.
 - Extended outage, saturated FIFO, full-device heap and maximum practical board
   checks remain outstanding. Encoded FIFO byte cap is provisional at 393,216.
 - No live Firebase audit or hardware action was performed by this closeout.
+
+## Next — M6.38
+
+Owner review of the coordinated source and test sequence across both lines, then
+the cutover in §8 of `docs/minimal-tab5lock-and-monitor-design.md`. Deploy the
+compatible Pilot authoring and validation changes before publishing the revised
+package; publication, delivery, adoption and branch promotion remain separate
+owner actions. The revised package must not be published until the matching Tab5
+files are installed, because the two are deliberately mutually incompatible.
 
 ## Next
 

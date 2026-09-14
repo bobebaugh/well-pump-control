@@ -21,10 +21,28 @@ never required for immediate protection.
 Unavailable or incomplete evidence remains unavailable. It is never converted into
 a safe value or an unlocked control state.
 
+One deliberate, owner-selected exception is scoped to Tab5's own inhibition intent:
+a missing or unusable `Tab5IsLocked` component removes Tab5's contribution rather
+than holding the relay open, and the flag defaults false on a Shelly reboot until
+Tab5 reasserts an outstanding inhibit. This is fail-permissive for Tab5's intent
+only. It never clears, overrides or substitutes for the Shelly's own `IsLocked`
+protection, which continues to hold RLY0 open on its own authority, and it never
+converts unavailable measurement evidence into a value.
+
 V3 is the target and is progressively replacing V2. Once V3 owns event evaluation
 and device writes, the normal loop must not execute V2 events or silently fall back
-to V2 authority. Script-supplied Shelly lock evidence is required before any V3
-re-enable write; absence or invalidity cannot authorize that write.
+to V2 authority.
+
+The Shelly 1 script is the sole writer of RLY0. Tab5 publishes its inhibition as
+the `Tab5IsLocked` Boolean and writes nothing else on that device. The script
+closes RLY0 exactly when `IsLocked == 0 AND Tab5IsLocked == false` and opens it
+otherwise, acting only when the observed output differs. Withdrawing Tab5's flag
+states only that Tab5 is done inhibiting; it is not gated on the Shelly lock,
+because a nonzero or unavailable lock still holds the relay open on the script's
+own authority. Fresh, valid `islocked = 0` evidence remains required where it
+still governs a claim about physical state: confirming a Shelly restart, and
+confirming relay restoration after a User Monitor request. A commanded stop that
+applies Tab5's inhibition is not a short cycle and scores no strike.
 
 ## Shared records
 
@@ -36,6 +54,22 @@ history from accepted boards. Event browsing and summaries remain later work.
 
 Existing versioned record meanings do not change silently. An incompatible record
 gets a new version.
+
+The runtime package schema stays at version 3 for the inhibition write, with
+method-discriminated write shapes and strict runtime-support gates rather than a
+version bump. The gates make old and new control packages mutually incompatible:
+a build rejects any package whose declared device objects or write shapes it
+cannot execute, so the previous build refuses the revised package and this build
+refuses a package that writes RLY0. That mutual rejection is the interlock the
+coordinated cutover and both rollback paths depend on.
+
+Tab5 writes exactly one device field: the `Tab5IsLocked` Boolean on the Shelly 1,
+through `Boolean.Set` on an id discovered by name. RLY(0) is observed, never
+written; the Shelly script is the relay's sole writer. Authoring, the compiler,
+the runtime-support gate and the static analysis all resolve that target by its
+device binding rather than by its editable system name, so renaming it is safe and
+an alias cannot create a second writer. Its only legal rule assignment is a held
+opening request set to true; release is a consequence of ownership and mode.
 
 The operator-control transport is a single replaceable RTDB slot, not a durable
 queue. Command v2 carries a non-empty no-arguments payload marker so the complete
@@ -97,10 +131,18 @@ Pilot validates current and prospective publication state before any V3 delivery
 pointer or state write. Legacy publication state is not silently upgraded during
 delivery; the owner must publish again under the current schema.
 
-The Shelly 1 read record joins two sequential RPC responses from one acquisition
-cycle. It is intentionally not described as a simultaneous hardware snapshot.
-Dynamic script number components are discovered by name; Tab5 reads but never
-resets or manipulates them.
+The Shelly 1 read record comes from one filtered `Shelly.GetComponents` request
+naming every component the cycle needs. Discovery by name is a bounded exception
+on the first cycle and after the mapping is contradicted, not a retry inside every
+cycle. Acceptance requires every requested component to be present and verified;
+a short page is never read as valid absence, and no acceptance rule depends on
+`total`, whose meaning under a keys filter is not yet established by a captured
+response. Dynamic components are discovered by name and their ids are never
+authored; Tab5 reads the script's numbers and never resets or manipulates them,
+and writes only its own `Tab5IsLocked` Boolean.
+
+One response reduces latency but is still not a guaranteed simultaneous hardware
+snapshot; read-to-write races remain possible and later cycles reconcile them.
 
 ## Work and acceptance
 
@@ -140,15 +182,30 @@ Closing policies are independent owner choices, not automatically the inverse of
 opening conditions. S010 is an informational alarm for relay ON while locked and
 remains open until relay ON with lock zero. It never takes relay ownership.
 
-Normal and Monitor are the two kernel modes. User Monitor is a deliberate temporary
-investigation bypass entered through the package's manual Monitor occurrence. It
-continues observation, calculations, event evaluation, logging, and ownership
-bookkeeping while suppressing physical application of Tab5 inhibits. Entry does
-not wait for the triggering condition to recover, does not close the inhibiting
-event, and attempts release only through the normal owner-release path. Fresh,
-valid `islocked = 0` evidence remains mandatory before a relay-close request; an
-accepted Monitor request does not prove RLY0 moved. User Monitor lasts until an
-actual Tab5 restart. There is no Monitor OFF or Clear Events control in this unit.
+Normal and Monitor are the two kernel modes, and both User Monitor and System
+Monitor reach Monitor by owning the same operating-mode target. Monitor continues
+observation, calculations, logging and ownership bookkeeping while releasing
+Tab5's physical inhibition.
+
+In Monitor, non-monitor events are not evaluated at all: their active state,
+instance, owners and qualification counts are carried untouched, neither advanced
+nor reset. A condition arising during Monitor cannot open one, and one open on
+entry is neither closed nor erased. Monitor-class events continue to run, so
+System Monitor can exit and logging-only monitor events keep highlighting
+conditions. Two cycle decisions remove event-order dependence: the mode carried
+into the cycle selects what is evaluated, and the mode after evaluation selects
+the final flag value. Monitor opening on a cycle releases at that cycle's
+dispatch; on exit, retained ownership can reassert in the exit cycle before
+non-monitor evaluation resumes on the next.
+
+User Monitor is entered through the package's manual Monitor occurrence. Entry
+does not wait for the triggering condition to recover and does not close the
+inhibiting event. Because System Monitor holds the same mode target, a user
+command's completion is tied to the user's own Monitor event instance rather than
+to effective mode, and relay restoration is reported only for that request and
+only from fresh physical evidence. An accepted Monitor request does not prove
+RLY0 moved. User Monitor lasts until an actual Tab5 restart. There is no Monitor
+OFF or Clear Events control in this unit.
 
 Tab5 restart uses the supported whole-device reset, so CPU A and CPU B begin a new
 session and V3 starts with a fresh event/owner/calculation board. Conditions may

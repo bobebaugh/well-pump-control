@@ -1,4 +1,4 @@
-# Host-only exact dependency slice of tab5/pilot.py at 6d4b54cc9806e34b01343caf69f1df86e540d486.
+# Host-only exact dependency slice of tab5/pilot.py at 0ddc45c16dd7082bfa2480ce70cc1ed02d7b8330.
 # Generated from source AST dependencies; never imports or runs the hardware application.
 import json as ujson
 
@@ -16,8 +16,10 @@ RUNTIME_DIRECT_BINDINGS = {
     },
     'shelly-gen4-switch': {
         'SW(0)': ('boolean', None, 'read'),
-        'RLY(0)': ('boolean', None, 'readWrite'),
+        # RLY(0) is observed, never written: the Shelly script is its sole writer.
+        'RLY(0)': ('boolean', None, 'read'),
         'UDF(IsLocked)': ('integer', 's', 'read'),
+        'UDF(Tab5IsLocked)': ('boolean', None, 'readWrite'),
         '$availability': ('boolean', None, 'read'),
     },
     'tab5-runtime': {
@@ -92,6 +94,23 @@ def _v3_enum_values(value):
             all(isinstance(item, str) and item for item in value) and
             len(set(value)) == len(value))
 
+RULES_V3_WRITE_SHAPES = {
+    'Switch.Set': ('id', 'valueParameter'),
+    'Boolean.Set': ('valueParameter',),
+}
+
+RULES_V3_INHIBITION_OBJECT = 'UDF(Tab5IsLocked)'
+
+def _v3_write_parameters(method, parameters):
+    required = RULES_V3_WRITE_SHAPES.get(method)
+    if required is None or not _v3_closed(parameters, required):
+        return False
+    if 'id' in required:
+        if (not _v3_integer(parameters.get('id')) or
+                not 0 <= parameters['id'] <= 255):
+            return False
+    return _v3_name(parameters.get('valueParameter'))
+
 def _v3_field(value):
     required = ('systemName', 'type', 'unit', 'logging', 'object', 'access')
     if not _v3_closed(value, required, required + ('enumValues', 'write')):
@@ -113,16 +132,14 @@ def _v3_field(value):
     write = value.get('write')
     if value['access'] == 'readWrite':
         if (not _v3_closed(write, ('method', 'parameters', 'normalValue')) or
-                not isinstance(write.get('method'), str) or not write['method'] or
-                not _v3_closed(write.get('parameters'), ('id', 'valueParameter')) or
-                not _v3_integer(write['parameters'].get('id')) or
-                not 0 <= write['parameters']['id'] <= 255 or
-                not _v3_name(write['parameters'].get('valueParameter')) or
+                not _v3_write_parameters(write.get('method'), write.get('parameters')) or
                 not _v3_typed_value(write.get('normalValue'), field_type, enums)):
             return None
     elif write is not None:
         return None
-    return {'type': field_type, 'enumValues': enums, 'assignmentTarget': value['access'] == 'readWrite'}
+    return {'type': field_type, 'enumValues': enums,
+            'assignmentTarget': value['access'] == 'readWrite',
+            'inhibitionTarget': value['object'] == RULES_V3_INHIBITION_OBJECT}
 
 def _v3_output(value):
     required = ('systemName', 'type', 'unit', 'logging')
@@ -140,7 +157,8 @@ def _v3_output(value):
             return None
     elif enums is not None:
         return None
-    return {'type': field_type, 'enumValues': enums, 'assignmentTarget': False}
+    return {'type': field_type, 'enumValues': enums, 'assignmentTarget': False,
+            'inhibitionTarget': False}
 
 def _v3_system_field(value):
     common = ('id', 'systemName', 'label', 'source', 'runtimeRole', 'type', 'unit', 'logging')
@@ -181,6 +199,7 @@ def _v3_system_field(value):
         return None
     return {'type': value['type'], 'enumValues': value.get('enumValues'),
             'assignmentTarget': value.get('assignmentTarget') is True,
+            'inhibitionTarget': False,
             'role': role, 'source': value['source']}
 
 def _v3_clause(value, fields):
@@ -244,6 +263,12 @@ def _v3_phase(value, fields, event_class, close_phase):
             return False
         if close_phase and assignment['ownership'] != 'transition':
             return False
+        if target.get('inhibitionTarget') is True:
+            # Release is a consequence of ownership and mode, never an authored
+            # value. Only a held opening assignment may request inhibition.
+            if (close_phase or assignment['value'] is not True or
+                    assignment['ownership'] != 'whileOpen'):
+                return False
         if target.get('role') == 'operatingMode':
             if (event_class != 'monitor' or assignment['value'] != 'Monitor' or
                     assignment['ownership'] != 'whileOpen'):
@@ -447,6 +472,14 @@ def _rules_v3_package_valid(package):
                 return False
     return True
 
+RULES_V3_SUPPORTED_WRITES = {
+    RULES_V3_INHIBITION_OBJECT: {
+        'method': 'Boolean.Set',
+        'parameters': {'valueParameter': 'value'},
+        'normalValue': False,
+    },
+}
+
 def _rules_v3_runtime_supported(package):
     """Reject schema-valid declarations that this device application cannot execute."""
     for device in package.get('devices', []):
@@ -459,10 +492,12 @@ def _rules_v3_runtime_supported(package):
                 return False
             if field.get('access') == 'readWrite':
                 write = field.get('write')
+                supported = RULES_V3_SUPPORTED_WRITES.get(field.get('object'))
                 if (device.get('driver') != 'shelly-gen4-switch' or
-                        not isinstance(write, dict) or write.get('method') != 'Switch.Set' or
-                        write.get('parameters') != {'id': 0, 'valueParameter': 'on'} or
-                        write.get('normalValue') is not True):
+                        supported is None or not isinstance(write, dict) or
+                        write.get('method') != supported['method'] or
+                        write.get('parameters') != supported['parameters'] or
+                        write.get('normalValue') is not supported['normalValue']):
                     return False
     for calculation in package.get('calculations', []):
         if calculation.get('kind') == 'expression':
@@ -547,6 +582,20 @@ def resolve_rules_v3_package(package):
             operating_mode_target = field['systemName']
     pump_target = 'PumpEnable' if 'PumpEnable' in writable else None
     lock_field = 'IsLocked' if 'IsLocked' in field_types else None
+    # Resolved by its exact device binding so an editable system name, or an alias
+    # declaring the same object twice, cannot create a second competing target.
+    inhibition_target = None
+    for device in package['devices']:
+        if device.get('driver') != 'shelly-gen4-switch':
+            continue
+        for field in device['fields']:
+            if field['object'] != RULES_V3_INHIBITION_OBJECT:
+                continue
+            if field.get('access') != 'readWrite':
+                continue
+            if inhibition_target is not None:
+                return None  # two targets for one physical component
+            inhibition_target = field['systemName']
     tab5_objects = {}
     for device in package['devices']:
         if device.get('driver') == 'tab5-runtime':
@@ -593,6 +642,7 @@ def resolve_rules_v3_package(package):
         'writableTargets': writable,
         'operatingModeTarget': operating_mode_target,
         'pumpTarget': pump_target,
+        'inhibitionTarget': inhibition_target,
         'lockField': lock_field,
         'calculations': calculation_plan,
     }

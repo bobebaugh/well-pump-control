@@ -63,9 +63,12 @@ function defaults() {
         severity: "Red",
         enabled: true,
         eventClass: "transient",
-        opening: { trigger: { type: "condition", condition: { mode: "all", clauses: [{ field: "SupplyVoltage", operator: "gt", value: 265 }, { field: "ShellyEMAvailable", operator: "eq", value: true }], observationCount: 2, minimumSeconds: 0 } } },
-        closing: { policy: "condition", condition: { mode: "all", clauses: [{ field: "SupplyVoltage", operator: "lt", value: 265 }, { field: "ShellyEMAvailable", operator: "eq", value: true }], observationCount: 30, minimumSeconds: 0 } },
-        onOpen: phase([{ target: "PumpEnable", value: false, ownership: "whileOpen" }]),
+        opening: { trigger: { type: "condition", condition: { mode: "all", clauses: [{ field: "SupplyVoltage", operator: "gt", value: 266 }, { field: "ShellyEMAvailable", operator: "eq", value: true }], observationCount: 2, minimumSeconds: 0 } } },
+        // Three-valued any: back in range, or the electrical source is gone. With
+        // the source missing the voltage clause is unknown and the availability
+        // clause decides, so the event can still clear.
+        closing: { policy: "condition", condition: { mode: "any", clauses: [{ field: "SupplyVoltage", operator: "lte", value: 266 }, { field: "ShellyEMAvailable", operator: "eq", value: false }], observationCount: 10, minimumSeconds: 0 } },
+        onOpen: phase([{ target: "Tab5IsLocked", value: true, ownership: "whileOpen" }]),
         onClose: phase(),
         summary: { durationOutput: null, aggregates: [] },
         web: { notifyOnOpen: false, notifyOnClose: false, openMessage: "", closeMessage: "" }
@@ -91,7 +94,7 @@ function defaults() {
         severity: "Red",
         enabled: true,
         eventClass: "monitor",
-        opening: { trigger: { type: "internal", occurrenceField: "ShellyEMUnavailable", qualification: { observationCount: 1, minimumSeconds: 0 } } },
+        opening: { trigger: { type: "condition", condition: { mode: "all", clauses: [{ field: "ShellyEMAvailable", operator: "eq", value: false }], observationCount: 1, minimumSeconds: 0 } } },
         closing: { policy: "condition", condition: { mode: "all", clauses: [{ field: "ShellyEMAvailable", operator: "eq", value: true }], observationCount: 1, minimumSeconds: 0 } },
         onOpen: phase([{ target: "OperatingMode", value: "Monitor", ownership: "whileOpen" }]),
         onClose: phase(),
@@ -107,7 +110,7 @@ function defaults() {
         eventClass: "latched",
         opening: { trigger: { type: "condition", condition: { mode: "all", clauses: [{ field: "ContactorFlag", operator: "eq", value: true }, { field: "PumpEnable", operator: "eq", value: true }, { field: "PumpWatts", operator: "lt", value: 500 }, { field: "ShellyEMAvailable", operator: "eq", value: true }, { field: "Shelly1Available", operator: "eq", value: true }], observationCount: 4, minimumSeconds: 0 } } },
         closing: { policy: "clearEvents" },
-        onOpen: phase([{ target: "PumpEnable", value: false, ownership: "whileOpen" }]),
+        onOpen: phase([{ target: "Tab5IsLocked", value: true, ownership: "whileOpen" }]),
         onClose: phase(),
         summary: { durationOutput: null, aggregates: [] },
         web: { notifyOnOpen: false, notifyOnClose: false, openMessage: "", closeMessage: "" }

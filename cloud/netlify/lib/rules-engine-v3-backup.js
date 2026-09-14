@@ -19,7 +19,17 @@ function authoringShape(draft) {
     for(const k of ['systemName','label','type',...(direct?['object','access']:[])]) scalar(v[k],`${p}.${k}`,'string');
     scalar(v.unit,`${p}.unit`,'nullableString'); logging(v.logging,`${p}.logging`);
     if(v.enumValues!==undefined) array(v.enumValues,`${p}.enumValues`,(x,p)=>scalar(x,p,'string'),32);
-    if(v.write!==undefined && object(v.write,`${p}.write`,['method','parameters','normalValue'])) {scalar(v.write.method,`${p}.write.method`,'string'); if(!v.write.parameters || typeof v.write.parameters!=='object' || Array.isArray(v.write.parameters)) fail(`${p}.write.parameters`,'Expected argument object.');}
+    if(v.write!==undefined && object(v.write,`${p}.write`,['method','parameters','normalValue'])) {
+      scalar(v.write.method,`${p}.write.method`,'string');
+      if(!v.write.parameters || typeof v.write.parameters!=='object' || Array.isArray(v.write.parameters)) fail(`${p}.write.parameters`,'Expected argument object.');
+      // Each method carries its own exact parameter shape; a backup restoring the
+      // wrong one would fail validation later, so it is caught on the way in.
+      else {
+        const shapes={'Switch.Set':['id','valueParameter'],'Boolean.Set':['valueParameter']};
+        const allowed=shapes[v.write.method];
+        if(allowed) object(v.write.parameters,`${p}.write.parameters`,allowed);
+      }
+    }
   };
   const condition = (v,p,qualified=true) => {
     if(!object(v,p,['mode','clauses',...(qualified?['observationCount','minimumSeconds']:[])])) return;

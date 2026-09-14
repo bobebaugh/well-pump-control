@@ -201,7 +201,7 @@ function captureDevice() {
 function renderDevice() {
   const device = state.draft.devices[state.selected.devices];
   if (!device) { editor.innerHTML = "<p class='empty-editor'>Add a device to begin.</p>"; return; }
-  const readCommands = {'shelly-gen1-em':'GET /emeter/0', 'shelly-gen4-switch':'Shelly.GetStatus; Shelly.GetComponents with dynamic_only=true and config/status included', 'tab5-runtime':'Local acquisition (no Shelly command)'};
+  const readCommands = {'shelly-gen1-em':'GET /emeter/0', 'shelly-gen4-switch':'One filtered Shelly.GetComponents naming switch:0, input:0 and the named virtual components, with config/status included', 'tab5-runtime':'Local acquisition (no Shelly command)'};
   const driverOptions = Object.entries(state.capabilities.drivers).map(([id, label]) => `<option value="${escapeHtml(id)}"${id === device.driver ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
   const rows = device.fields.map((field, index) => `
     <div class="device-field-row" data-index="${index}">
@@ -217,7 +217,7 @@ function renderDevice() {
         <button class="row-delete field-delete" type="button" data-remove-field="${index}" aria-label="Remove field">×</button>
       </div>
       <details class="field-action-mapping"${field.access === "readWrite" ? " open" : ""}>
-        <summary>Device action mapping — supported relay ON / OFF</summary><button type="button" class="secondary-button" data-relay-mapping="${index}">Use supported relay mapping</button>
+        <summary>Device action mapping — supported relay ON / OFF</summary><button type="button" class="secondary-button" data-inhibition-mapping="${index}">Use supported relay mapping</button>
         <div>
           <label><span>Write method</span><input data-key="writeMethod" value="${escapeHtml(field.write?.method || "")}" placeholder="Switch.Set" readonly></label>
           <label><span>Write arguments</span><input data-key="writeParameters" value="${escapeHtml(typeof field.write?.parameters === "string" ? field.write.parameters : JSON.stringify(field.write?.parameters || {}))}" placeholder='{"id":0,"valueParameter":"on"}' readonly></label>
@@ -236,7 +236,7 @@ function renderDevice() {
     <p class="form-help">Current acquisition: ${escapeHtml(readCommands[device.driver] || "Choose a supported driver")}</p>
     <div class="subsection-heading"><div><p class="kicker">NAMED FIELDS</p><h2>Telemetry and actions</h2></div><button class="secondary-button compact-button" id="add-device-field" type="button">Add field</button></div>
     <div class="device-fields-grid">${rows}</div>
-    <p class="form-help">Rules reference system names. The only supported write is Switch.Set on relay 0: false sends {id:0,on:false}; true sends {id:0,on:true}, subject to ownership and valid lock evidence. Normal value true releases Tab5 inhibition; it does not create pump demand. Device addresses are descriptive here; installed Tab5 configuration owns polling endpoints.</p>`;
+    <p class="form-help">Rules reference system names. The only supported write is Boolean.Set on UDF(Tab5IsLocked), which sends {value:true|false} to the component id Tab5 discovers by name. RLY(0) is observed, not written: the Shelly script is the relay's sole writer and closes it only when IsLocked is 0 and Tab5IsLocked is false. Setting the flag inhibits; it is released when the last owning event closes or while Monitor is engaged, never by an authored false. Device addresses are descriptive here; installed Tab5 configuration owns polling endpoints.</p>`;
 }
 
 function captureCalculation() {
@@ -824,11 +824,11 @@ function navigateFinding(path) {
   target.scrollIntoView({block:'center'});target.setAttribute('tabindex','-1');target.focus();
 }
 editor.addEventListener('click',e=>{
-  const button=e.target.closest('[data-relay-mapping]'); if(!button) return;
+  const button=e.target.closest('[data-inhibition-mapping]'); if(!button) return;
   const device=state.draft.devices[state.selected.devices];
-  if(device.driver!=='shelly-gen4-switch') return setStatus('Relay mapping is available only for Shelly Gen4 switch.','warning');
+  if(device.driver!=='shelly-gen4-switch') return setStatus('Inhibition mapping is available only for Shelly Gen4 switch.','warning');
   captureCurrent(); const field=device.fields[Number(button.dataset.relayMapping)];
-  Object.assign(field,{object:'RLY(0)',type:'boolean',unit:null,access:'readWrite',write:{method:'Switch.Set',parameters:{id:0,valueParameter:'on'},normalValue:true}});
+  Object.assign(field,{object:'UDF(Tab5IsLocked)',type:'boolean',unit:null,access:'readWrite',write:{method:'Boolean.Set',parameters:{valueParameter:'value'},normalValue:false}});
   delete field.enumValues;markDirty();renderEditor();
 });
 document.querySelector('#validation-findings').addEventListener('click',e=>{const b=e.target.closest('[data-finding-path]');if(b) navigateFinding(b.dataset.findingPath);});
