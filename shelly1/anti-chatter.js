@@ -243,9 +243,13 @@ function tick() {
   }
 }
 
+// The input:0 edge detector, and the only reason this script knows a pump ran.
+// Tab5IsLocked is read through its component handle, not from here.
 Shelly.addStatusHandler(function (event) {
   if (event.component !== "input:0") return;
-  if (event.delta === undefined || typeof event.delta.state !== "boolean") return;
+  // A falsy delta covers both null and undefined. An exception thrown here stops
+  // the script, which leaves RLY0 frozen wherever it was with nothing logged.
+  if (!event.delta || typeof event.delta.state !== "boolean") return;
   if (!initializationComplete) return;
   if (event.delta.state === true) pumpStarted();
   else pumpStopped();

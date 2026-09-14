@@ -127,6 +127,19 @@ Two sanctioned paths, both requiring a person (§4.4):
    6-minute lockout.
 2. The online Restart Shelly 1 request, which reboots the device.
 
+A third, which is a consequence of the design rather than a sanctioned control:
+restarting the script clears `IsLocked` and `loCntr`, including a permanent
+strikeout. The lockout is deliberately not preserved — it is reactive, so if the
+underlying fault is still there the next short cycle re-arms it, and the
+initialization delay stops that happening immediately. It matters because the five
+tuning values are script constants now, so changing one means an edit and a
+restart.
+
+Restarting the script while the pump is mid-fill also interrupts the run. The pump
+resumes when the delay ends, and if the tank then fills in under `MinRuntime` that
+counts as a short cycle and costs one `InitLockTime` lockout. Self-clearing, and
+cheaper than the extra state it would take to suppress.
+
 `IsLocked` and `loCntr` are not persisted, so either path returns both to zero.
 Clearing is never automatic, never from a rules package, and never a consequence of
 a Tab5 restart, Clear Events, or Monitor.
@@ -145,6 +158,18 @@ Not set by the script — configure these on the Shelly before installing:
   slots; its five tuning settings are constants in the script.
 - `switch:0` power-on default **off**, so RLY0 starts open. The script preserves
   that state through its five-second initialization delay.
+
+  **The device is not set this way yet.** An owner capture on 2026-09-14 reported
+  `initial_state: "on"`, which closes the relay at boot before any script runs.
+  Change it before installing this script:
+
+  ```
+  http://192.168.50.201/rpc/Switch.SetConfig?id=0&config={"initial_state":"off"}
+  ```
+
+  Until it is changed, the 3-second on-delay in front of RLY0 is the only thing
+  preventing a pump start in the gap between boot and script start. That is a
+  dependency, not a design.
 - `input:0` in a mode that reports a level in `status.state`, since edges are taken
   from the status handler.
 - The script set to **run on startup**.

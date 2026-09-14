@@ -83,6 +83,23 @@ presence-checks every requested key and consults no count. And
 corroborating the acknowledgement the dispatcher requires from the sibling
 `Boolean.Set`.
 
+One design decision is open and is not implemented. The Shelly script seeds
+`Tab5IsLocked` false at startup so Tab5 must positively reassert an outstanding
+inhibition. That cannot detect an absent Tab5: Tab5 writes only on a mismatch, so a
+healthy Tab5 owing no inhibition is silent and looks exactly like a dead one. When
+the initialization delay ends the relay closes in both cases. That is the permissive
+posture already agreed, but the owner has raised whether water should flow at all
+when Tab5 is DOA or off the network. Making the seed a real liveness test needs a
+signal present when nothing is wrong - a periodic write or a `last_update_ts`
+heartbeat - and both add a recurring write to a steady state that is deliberately
+silent.
+
+A device prerequisite is also outstanding: `switch:0` must be changed to
+`initial_state: "off"` before the new script is installed. The owner capture shows
+`"on"`, which closes the relay at boot before any script runs; until it is changed
+the 3-second on-delay in front of RLY0 is the only thing preventing a pump start in
+that gap.
+
 Acceptance evidence still to be captured, none of it fabricated here: a reply showing
 `Tab5IsLocked` as a `boolean:<id>` component with `config.name` and a Boolean
 `status.value`, and a `Boolean.Set` reply confirming the bare `null` for that exact

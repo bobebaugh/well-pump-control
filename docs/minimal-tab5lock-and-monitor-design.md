@@ -105,6 +105,23 @@ The five-second hold-open window lets Tab5 reassert a hard lock before false may
 close RLY0. A missing/unusable Boolean handle removes Tab5's contribution only; it
 must never clear or override a nonzero Shelly lock.
 
+**What the seed can and cannot establish.** It makes Tab5 positively reassert an
+outstanding inhibition rather than inherit a stale true. It cannot detect an absent
+Tab5. Tab5 writes the flag only when its desired value differs from what it
+observes, so a healthy Tab5 owing no inhibition writes nothing at all — verified
+against the kernel: with an inhibition owed it writes, with none owed it is silent.
+From the Shelly's side a flag still false when the window ends means either "Tab5
+is alive and owes no inhibition" or "Tab5 is dead, or off the network". Those are
+indistinguishable, and the relay closes in both cases.
+
+That is the permissive posture stated in §1, and it is deliberate: Tab5 is not an
+immediate protection path, and a well that refuses to run is its own hazard. It is
+recorded because the seed reads like a liveness test and is not one. Making it one
+needs a signal that exists when nothing is wrong — a periodic write, or the
+component's `last_update_ts` read as a heartbeat — and either adds a recurring write
+to a steady state that is deliberately silent. **Open owner decision; not
+implemented.**
+
 Preserve the existing short-cycle algorithm. `MinRuntime`, `InitLockTime`,
 `MaxLOcntr`, `TimeToResetLOcntr`, and `InitDelay` are constants at the beginning of
 the script so the owner can edit them in the Shelly script editor. Only
