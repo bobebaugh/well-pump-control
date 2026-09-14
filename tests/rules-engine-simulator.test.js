@@ -110,12 +110,23 @@ test("Tab5Lock is stuck where it was when Shelly 1 is unreachable", () => {
   assert.ok(steps.some(step => step.notes.some(note => /old value stands/.test(note))));
 });
 
-test("a LAN failure engages Monitor on its own through the internal-trigger event", () => {
-  // This is the hazard analysis_monitor_not_manual describes, demonstrated.
+test("a LAN failure does NOT engage Monitor: nothing produces internal occurrences", () => {
+  // An earlier version of this model had H001 opening on EM loss, which made a
+  // LAN failure look as though it suspended the controller by itself. The
+  // installed loop builds one occurrence map, from the manual operator Monitor
+  // request (pilot.py 5309, passed at 5362), and has no producer for internal
+  // occurrences at all. H001 cannot open on the device, so the model must not
+  // open it either.
   const steps = run({ cycles: 40, injections: [{ kind: "lan", atCycle: 10 }] });
+  assert.equal(steps.at(-1).monitor, false, "no internal occurrence is produced");
+  assert.ok(!steps.at(-1).openEvents.includes("H001"));
+  assert.equal(steps.at(-1).cloud, false, "the LAN is still down; only the Monitor claim was wrong");
+});
+
+test("an internal-trigger event still opens when it is injected deliberately", () => {
+  const steps = run({ cycles: 40, injections: [{ kind: "event", eventId: "H001", atCycle: 10 }] });
   assert.equal(at(steps, 9).monitor, false);
-  assert.equal(steps.at(-1).monitor, true, "H001 opens on EM loss and suspends the controller");
-  assert.equal(steps.at(-1).cloud, false, "and the cloud is gone, so nobody can undo it remotely");
+  assert.equal(steps.at(-1).monitor, true);
   assert.ok(steps.at(-1).notes.some(note => /Exit is a Tab5 restart/.test(note)));
 });
 
@@ -262,10 +273,12 @@ test("Monitor stops the write, so the counter cannot deliver its release", () =>
   // Two things specified separately that collide: Monitor stops all
   // rules-originated writes so a Shelly reboot is the clear path, and the
   // counter releases itself. The release has nowhere to go.
+  // Monitor has to be injected: nothing on the device produces it from EM loss.
   const steps = run({ cycles: 40, transientRelease: 10, assumeCounter: true, counterHold: 5,
-    injections: [{ kind: "event", eventId: "E007", atCycle: 5 }, { kind: "em", atCycle: 8 }] });
+    injections: [{ kind: "event", eventId: "E007", atCycle: 5 }, { kind: "em", atCycle: 8 },
+      { kind: "event", eventId: "H001", atCycle: 9 }] });
   const end = steps.at(-1);
-  assert.equal(end.monitor, true, "H001 engages Monitor when the EM goes");
+  assert.equal(end.monitor, true, "an injected Monitor freezes processing");
   assert.equal(end.counterRemaining, 0, "the counter has run down");
   assert.equal(end.tab5Lock, 1, "but Tab5 stopped writing, so the Shelly never hears about it");
   assert.equal(end.pumpRuns, false);

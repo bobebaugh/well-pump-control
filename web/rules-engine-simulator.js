@@ -26,6 +26,9 @@
 //  4. $availability is always true or false for an enabled device.
 //  5. A write only lands if the target is reachable.
 //  6. Every event in a cycle sees one frozen snapshot.
+//  7. Only the manual operator occurrence is produced. Internal-trigger events
+//     have no producer in the installed loop and therefore never open by
+//     themselves; they can only be injected.
 // And from shelly1/anti-chatter.js:
 //  7. IsLocked counts itself down and reaches zero without help from Tab5.
 //  8. A strike sets IsLocked; the MaxLOcntr-th strike makes it permanent (-1).
@@ -287,9 +290,20 @@ function simulateScenario(input, scenarioInput) {
           let openValue = injected ? true : null;
           if (!injected && trigger.type === "condition") {
             openValue = simCondition(trigger.condition, snapshot, kernel.previous);
-          } else if (!injected && trigger.type === "internal") {
-            openValue = world.emUp === false;
-          } else if (!injected && trigger.type === "manual") {
+          } else if (!injected && (trigger.type === "internal" || trigger.type === "manual")) {
+            // Neither fires on its own here, and for different reasons.
+            //
+            // Manual is an operator occurrence: it arrives from outside, so it
+            // is only ever injected.
+            //
+            // Internal is the one that misleads. The installed loop supplies
+            // exactly one occurrence map, built from the manual operator
+            // Monitor request (pilot.py 5309, passed at 5362). There is NO
+            // producer for internal occurrences anywhere in it, so an
+            // internal-trigger event cannot open on the device at all.
+            // Modelling it as firing on device loss was fiction, and it made
+            // a LAN failure look as though it suspended the controller by
+            // itself. It does not. Inject it if you want to see that path.
             openValue = false;
           }
           const need = ((trigger.condition || {}).observationCount) ||
@@ -314,8 +328,7 @@ function simulateScenario(input, scenarioInput) {
           // counts as not true.
           const stillAsserting = injected ? true
             : trigger.type === "condition" ? simCondition(trigger.condition, snapshot, kernel.previous)
-            : trigger.type === "internal" ? world.emUp === false
-            : false;
+            : false;   // no producer for internal or manual occurrences: see above
           held.asserting = stillAsserting === true;
           let closeValue = false;
           if (injected) closeValue = false;
