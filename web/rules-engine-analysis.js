@@ -217,6 +217,13 @@ function analyzeAuthoringPackage(input) {
             `${label} tests ${name}, which no device, calculated field or system field defines.`));
         }
       }
+      for (const name of analysisConditionFields(condition)) {
+        const field = fields.get(name);
+        if (field && field.origin === "device" && field.deviceEnabled === false) {
+          findings.push(analysisFinding("error", `analysis_${phase}_disabled_device`, `${path}.${phase}`,
+            `${label} tests ${name}, which comes from ${field.deviceLabel}. That device is disabled, so ${name} is never present and this condition can never be decided.`));
+        }
+      }
       const contradiction = analysisUnsatisfiable(condition, fields);
       if (contradiction) {
         findings.push(analysisFinding("error", `analysis_${phase}_unsatisfiable`, `${path}.${phase}`,
@@ -278,16 +285,22 @@ function analyzeAuthoringPackage(input) {
         findings.push(analysisFinding(level, "analysis_inhibit_until_restart", path,
           `${label} holds ${ANALYSIS_PUMP_TARGET} off and closes only on Clear Events, which is not implemented. Once this opens there is no water until Tab5 is restarted.${latent}`));
       }
-      const explicit = (escape.blocking || []).filter(item => item.explicit);
-      if (explicit.length) {
-        findings.push(analysisFinding(level, "analysis_inhibit_needs_availability", path,
-          `${label} holds ${ANALYSIS_PUMP_TARGET} off, and its closing condition requires ${explicit.map(item => item.name).join(", ")} to be true. If ${explicit[0].deviceLabel} goes offline while this event is open, the condition can never qualify and the pump stays off until ${explicit[0].deviceLabel} returns or Tab5 restarts. A device failure becomes a water outage.${latent}`));
-      } else {
-        const implicit = (escape.blocking || []);
-        if (implicit.length) {
-          findings.push(analysisFinding(enabled ? "warning" : "info", "analysis_inhibit_close_depends_on_device", path,
-            `${label} holds ${ANALYSIS_PUMP_TARGET} off and closes on ${implicit.map(item => item.name).join(", ")}, read from ${implicit[0].deviceLabel}. While that device is unavailable those clauses cannot be evaluated, so the event cannot close and the hold stays on.${latent}`));
-        }
+      // A measured device field is absent from the snapshot when its device is
+      // rejected, and rules_v3_condition_value returns None for the whole
+      // condition on the first absent field, in "any" mode as well as "all".
+      // So one measurement in a closing condition is enough to freeze the
+      // event open for as long as that device is gone. An availability flag is
+      // always True or False and never causes this.
+      const blocking = escape.blocking || [];
+      const measured = blocking.filter(item => !item.explicit);
+      const explicit = blocking.filter(item => item.explicit);
+      if (measured.length) {
+        findings.push(analysisFinding(level, "analysis_inhibit_evidence_loss", path,
+          `${label} holds ${ANALYSIS_PUMP_TARGET} off and can only close by reading ${measured.map(item => item.name).join(", ")} from ${measured[0].deviceLabel}. If ${measured[0].deviceLabel} goes offline while this event is open, those clauses cannot be evaluated, the closing condition never qualifies, and the pump stays off until the device returns or Tab5 restarts. The evidence that would release the inhibit is the same evidence that vanished.${latent}`));
+      }
+      if (explicit.length && measured.length) {
+        findings.push(analysisFinding("warning", "analysis_inert_availability_clause", path,
+          `${label} also tests ${explicit.map(item => item.name).join(", ")} in its closing condition, which has no effect. ${measured[0].name} is evaluated first and is absent whenever ${explicit[0].deviceLabel} is unavailable, so the condition is already undecided before the availability clause is reached. Spelling the guard out does not change the behaviour of the rule.`));
       }
     }
 

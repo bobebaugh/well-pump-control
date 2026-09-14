@@ -15,13 +15,38 @@ const backup = JSON.parse(fs.readFileSync(
 function codes(result) { return result.findings.map(item => item.code); }
 function find(result, code) { return result.findings.find(item => item.code === code); }
 
-test("the shipped package holds the pump off behind a device that can vanish", () => {
+test("the shipped package holds the pump off behind evidence that can vanish", () => {
   const result = analyzeAuthoringPackage(backup);
-  const finding = find(result, "analysis_inhibit_needs_availability");
-  assert.ok(finding, "E007 closes only while ShellyEMAvailable is true; that must be reported");
+  const finding = find(result, "analysis_inhibit_evidence_loss");
+  assert.ok(finding, "E007 can only close by reading SupplyVoltage from the EM");
   assert.equal(finding.level, "error");
   assert.match(finding.message, /E007/);
-  assert.match(finding.message, /ShellyEMAvailable/);
+  assert.match(finding.message, /SupplyVoltage/);
+});
+
+test("an availability guard in a closing condition is reported as inert", () => {
+  const result = analyzeAuthoringPackage(backup);
+  const finding = find(result, "analysis_inert_availability_clause");
+  assert.ok(finding, "ShellyEMAvailable cannot rescue a close that also reads SupplyVoltage");
+  assert.match(finding.message, /has no effect/);
+  // Removing the guard must not make the finding go away: it is the measured
+  // field that freezes the condition, not the guard.
+  const stripped = JSON.parse(JSON.stringify(backup));
+  const event = stripped.authoringPackage.events.find(item => item.id === "E007");
+  event.closing.condition.clauses = event.closing.condition.clauses
+    .filter(clause => clause.field !== "ShellyEMAvailable");
+  const after = analyzeAuthoringPackage(stripped);
+  assert.equal(find(after, "analysis_inert_availability_clause"), undefined);
+  assert.equal(find(after, "analysis_inhibit_evidence_loss").level, "error");
+});
+
+test("a condition reading a disabled device can never be decided", () => {
+  const pkg = JSON.parse(JSON.stringify(backup));
+  pkg.authoringPackage.devices.find(item => item.id === "shelly-em-main").enabled = false;
+  const result = analyzeAuthoringPackage(pkg);
+  const present = codes(result);
+  assert.ok(present.includes("analysis_opening_disabled_device"));
+  assert.ok(present.includes("analysis_closing_disabled_device"));
 });
 
 test("a disabled inhibit is reported one level down rather than not at all", () => {
