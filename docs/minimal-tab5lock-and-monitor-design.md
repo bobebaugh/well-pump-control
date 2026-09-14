@@ -9,21 +9,28 @@ overlay on a well that worked without it. Every line added is a line that can
 fail in the garage. Where a choice exists between reusing something proven and
 building something better, this design reuses.
 
-**Revision 2**, after review. Seven findings accepted; the corrections are
-marked **[R2]** where they change what was proposed. The largest are: the
-support gate rejects the new write outright and was missed entirely; A8's
-reconcile as written would have broken one-shot `transition` assignments; and
-`H001` cannot fire on the device at all, because nothing produces internal
-occurrences.
+**Revision 3**, after a second review. Corrections are marked **[R2]** and
+**[R3]** by the round that produced them.
+
+R3's largest findings: the authored write shape fails the **schema**, not just
+the support gate, so contract work is unavoidable; the rollout as written still
+had two relay writers, and is reordered to remove the window entirely; and
+`Boolean.Set` returns JSON `null` on success, which the dispatcher currently
+classifies as `invalid-response`.
+
+R2's were: the support gate was missed entirely; A8's reconcile would have
+broken one-shot `transition` assignments; and `H001` cannot fire on the device,
+because nothing produces internal occurrences.
 
 Three changes: `A`, `B`, `C`. Dead-code removal has been **[R2]** moved out of
 this plan into its own unit — it is not a prerequisite, and one file proposed
 for deletion holds live V3 coverage.
 
-All in `tab5/pilot.py` and `shelly1/anti-chatter.js` except one editor control
-and one rules-package edit. **No new field type, no counter, no schema version
-bump.** A package edit **is** required, and existing packages will be rejected
-after this lands — see §7.
+All in `tab5/pilot.py` and `shelly1/anti-chatter.js` except one editor control,
+one rules-package edit, and **[R3]** a contract change mirrored on both sides.
+**No new field type and no counter.** The earlier claim of no schema change is
+**withdrawn** — see §A5b. A package edit is required, and existing packages will
+be rejected after this lands — see §7.
 
 ---
 
@@ -125,7 +132,7 @@ Add a second accepted shape rather than loosening the first:
 | --- | --- | --- |
 | object | `RLY(0)` | `UDF(Tab5IsLocked)` |
 | method | `Switch.Set` | `Boolean.Set` |
-| parameters | `{"id": 0, "valueParameter": "on"}` | `{"valueParameter": "value"}` |
+| parameters | `{"id": 0, "valueParameter": "on"}` | `{"valueParameter": "value"}` — **[R3]** needs a contract change, see A5b |
 | normalValue | `true` | `false` |
 
 **No component id appears in the authored package.** Ids are assigned at
@@ -135,14 +142,83 @@ discovery, and the dispatcher substitutes it. That is the whole answer to "how
 does the discovered id replace the authored parameters": the package never
 carries one.
 
-**Acknowledgment is method-specific — [R2].** `issue_rules_v3_action`
-(1312) accepts a write only when the reply carries `was_on`, which is a
-`Switch.Set` reply field. `Boolean.Set` does not return it. The success test
-must branch on method, and must not treat "no recognised field" as success.
-
 **Pilot must mirror this.** The publication and support validation in
 `cloud/netlify/lib/rules-engine-v3-*.js` carries the same constraint and has to
 accept the second shape, or a package that Tab5 can run will not publish.
+
+### A5b. The schema, and why the id cannot simply be authored — **[R3]**
+
+`runtime-package-v3.schema.json`'s `write.parameters` is a closed object with
+**both `id` and `valueParameter` required**:
+
+```json
+"parameters": { "additionalProperties": false,
+  "required": ["id", "valueParameter"], ... }
+```
+
+So `{"valueParameter": "value"}` fails validation before any Tab5 code runs.
+The claim that this change needs no contract work was wrong.
+
+`Boolean.Set` does take an `id` — its parameters are `{id, value}` — so the
+schema field is meaningful. The problem is narrower: **the id is assigned at
+component creation and is not stable across a rebuild**, so an authored id is a
+value that is correct until someone deletes and recreates the component, and
+then silently addresses the wrong thing.
+
+Two ways to resolve it:
+
+| | Change | Cost |
+| --- | --- | --- |
+| **Author a placeholder id, override at dispatch** | none to the contract | the package carries a number that is ignored and wrong; the gate must accept any id; a reader cannot tell it is meaningless |
+| **Contract change (recommended)** | `parameters` becomes a `oneOf`: the switch shape, or `{valueParameter}` with an optional `componentName`; `id` optional for non-`Switch.Set` methods | four files |
+
+Take the contract change. The placeholder is the kind of quiet lie that costs a
+day in eighteen months.
+
+Four files move together: `interfaces/runtime-package-v3.schema.json`,
+`contracts/rules-runtime-package-v3.schema.json`, Pilot's validator in
+`cloud/netlify/lib/rules-engine-v3-contract.js`, and Tab5's `_v3_write` plus
+`_rules_v3_runtime_supported`.
+
+**Whether this needs a schemaVersion bump is a review question.** Old packages
+still validate against the widened schema, so it is backward compatible in the
+usual sense — but the cutover in §7 is already hard, so a bump costs little and
+makes the incompatibility explicit rather than implied.
+
+### A5c. What `Boolean.Set` actually returns — **[R3]**
+
+Verified against the Shelly documentation rather than assumed: **`Boolean.Set`
+returns JSON `null` on success.** No `was`, no `was_on`, no result object. Over
+`GET /rpc/Boolean.Set?id=<n>&value=true` the body is the four characters `null`.
+
+`issue_rules_v3_action` (1307) does:
+
+```python
+if not isinstance(data, dict):
+    return 'invalid-response'
+```
+
+`null` parses to `None`, which is not a dict, so **a successful write would be
+reported as a failure**. The consequence is worse than a bad status string: the
+reconcile compares intent against the observation, sees the flag did change, and
+stops — but any logic keyed to the outcome string sees a permanent failure, and
+an implementation that retried on failure would write every cycle, destroying
+the zero-writes-in-steady-state property that justifies the whole approach.
+
+**The accepted success response, stated so it can be tested rather than
+inferred:**
+
+| Reply body | Outcome |
+| --- | --- |
+| `null` | `acknowledged` |
+| `{}` or `{"result": null}` (envelope forms) | `acknowledged` |
+| anything containing `error`, or `code` **and** `message` | `rpc-error` |
+| a non-200 status, or a body that is not JSON | `invalid-response` |
+
+Success for `Boolean.Set` is therefore **the absence of an error**, not the
+presence of a field. `Switch.Set` keeps its existing `was_on` test unchanged.
+Both are tested directly, with a recorded device reply, not a hand-written
+fixture guess.
 
 ### A6. Editor
 
@@ -159,9 +235,11 @@ becomes the two-input function from the proposal:
 relay closed  ⟺  IsLocked == 0  AND  Tab5IsLocked == false
 ```
 
-A missing or unreadable `Tab5IsLocked` reads as `false` and the relay closes,
-matching how `hasHandle()` already degrades for the other two. Fail-open applies
-to the script's own faults as well as everything else's.
+A missing or unreadable `Tab5IsLocked` reads as `false`, matching how
+`hasHandle()` already degrades for the other two. **[R3]** That removes *Tab5's*
+inhibition only — it is one input to the function, not an override. If
+`IsLocked != 0` the script still holds RLY0 open, because that lock is its own
+and a missing Tab5 flag is no evidence about short cycling.
 
 #### Sole writer must be enforced, not intended — **[R2]**
 
@@ -230,8 +308,32 @@ hardware:
 
 - **Multiple owners.** Two events holding the flag is one `true`. The flag stays
   true while any owner remains.
-- **Last-owner release.** `false` is emitted on the cycle after the last owner
-  is removed, not on the removal of the first.
+- **Last-owner release.** `false` is emitted **in the same cycle's dispatch** as
+  the removal of the last owner — **[R3]**, correcting R2's "on the following
+  cycle". The reconcile runs after the event loop, so an owner removed by a
+  close during that loop is already gone when the reconcile reads the owner set.
+  Waiting a cycle would be a second, different behaviour.
+
+#### Only one assignment shape is legal on this target — **[R3]**
+
+Scoping the reconcile is not sufficient. The same problem survives *on the flag
+itself*: a `transition` assignment writes `true`, the reconcile finds no owner
+on the next pass, and writes `false` over it. The flag would flicker and the
+inhibit would evaporate.
+
+So constrain the target, in `_v3_assignment` alongside the existing
+`operatingMode` rule (2493):
+
+| Assignment to `Tab5IsLocked` | |
+| --- | --- |
+| `true`, `whileOpen` | the only accepted form |
+| `true`, `transition` | **rejected at validation** |
+| `false`, any ownership | **rejected at validation** |
+
+Release is not something a rule expresses. It comes from the last owner going
+away, or from entering Monitor. That makes the flag's lifetime a property of
+the ownership set and nothing else, which is the only reason the reconcile can
+be trusted as the single writer.
 
 #### The I/O contract this must obey — owner-specified, normative
 
@@ -279,9 +381,11 @@ Three qualifications the earlier revision skipped — **[R2]**:
 - **Pagination.** `Shelly.GetComponents` returns `total` alongside the array,
   and an owner-run query has already been observed returning 12 of 20. The
   reader must compare `total` against the returned length and reject the
-  acquisition when they disagree rather than treating a short page as absence —
-  otherwise a truncated reply reads as a missing component, which under A7's
-  fail-open rule closes the relay.
+  acquisition when they disagree rather than treating a short page as absence.
+  **[R3]** The consequence is on Tab5's side only: a rejected acquisition means
+  Tab5 reads nothing and writes nothing that cycle. It does **not** reach the
+  Shelly script, whose handle to its own component is local and unaffected by
+  how a remote reply was paginated.
 - **"One read" is a steady-state goal, not an invariant.** Component discovery
   after a Shelly reboot, and recovery from a rejected acquisition, may cost an
   extra call. Those exceptions should be named and bounded rather than pretended
@@ -402,11 +506,19 @@ excursion, which is the failure mode a one-shot release would have.
 Removing the pump-action filter at 3534-3535 is not enough on its own, and the
 earlier revision was wrong to present it as a tidy-up.
 
-**Ordering.** Resolve the effective mode **once, at the top of the cycle, from
-kernel state carried in**, before any event is evaluated. Do not recompute it
-mid-loop. Otherwise whether an event is processed depends on whether it happens
-to sit before or after the Monitor event in package order, which is not a
-property anyone should have to reason about.
+**Ordering — two decisions, not one — [R3].** The document previously conflated
+them, which is why last-owner release read two different ways.
+
+| Decision | Uses | Why |
+| --- | --- | --- |
+| **Which events evaluate** | the mode **carried in** from the previous cycle, resolved once before the loop | otherwise whether an event is processed depends on where it sits relative to the Monitor event in package order |
+| **What the flag is written to** | the mode **resulting from** this cycle's evaluation, after the loop | otherwise entering Monitor takes a whole extra cycle to release, and the release time depends on event order again |
+
+So a Monitor event opening on cycle *n* does not stop the other events on cycle
+*n* — they were already selected — but it **does** release the flag on cycle
+*n*'s dispatch. Suspension starts at *n+1*; release is immediate. That is the
+behaviour the operator expects from a control whose whole purpose is to restore
+water, and it removes the ordering dependence from both halves.
 
 **Scope on entry.** On the Normal → Monitor boundary, suppress *both*:
 
@@ -449,7 +561,27 @@ condition trigger on availability, with a recovery close.
 | | Trigger | Closing policy | Exit |
 | --- | --- | --- | --- |
 | `M001` Operator Monitor | manual occurrence | `clearEvents` | never closes → **Restart Tab5** |
-| `H001` Electrical source invalid | **condition** on `Shelly1Available == false` — was internal | condition on availability restored | closes when the device returns |
+| `H001` Electrical source invalid | **condition**: `ShellyEMAvailable == false` — was internal | condition: `ShellyEMAvailable == true` | closes when the EM returns |
+
+**The device set is the EM, not Shelly 1 — [R3].** R2 wrote `Shelly1Available`,
+which was wrong on both counts: `H001` is *Electrical source invalid*, its
+original internal occurrence was `ShellyEMUnavailable`, and the electrical
+measurements it stands for come from the EM. Opening and closing are the exact
+complement of each other on that one availability flag, which is decidable even
+when the EM is gone — `$availability` is always true or false for an enabled
+device, never absent — so unlike E007 this pair does not need Change B to close.
+
+**Shelly 1 is deliberately not in the set.** Losing Shelly 1 is a different
+failure with a different consequence, and it has its own informational event in
+`S020`. If it should also suspend processing, that is a second Monitor event
+and a separate decision, not an extra clause here.
+
+**When Shelly 1 is unreachable, Monitor cannot clear the flag — [R3].** Entering
+Monitor emits `Tab5IsLocked = false`, but a write only lands if the device
+answers. If the LAN is down, the stored flag keeps its value on the Shelly and
+the inhibit stands until communication returns and the reconcile writes again.
+Monitor is a Tab5-side decision; it cannot reach across a broken link. The
+sanctioned clear path in that state remains the breaker or HAND.
 
 Two consequences:
 
@@ -478,8 +610,6 @@ Protection continues at the layers below: Shelly chatter and short-cycle, the
 - The generic counter field type. A8 plus B gives self-release without it.
 - Generalising ownership dispatch for the pump target. Untouched.
 - Clear Events. Still a concept; `M001` closing on it is what makes it terminal.
-- Removing `PumpEnable` / RLY0 writing from Tab5. Left working and unused.
-- A schema version bump. Nothing in the authoring contract changes.
 - A boot-without-rules escape hatch. Worth doing; not this change.
 - Dead-code removal. **[R2]** Moved out — see §5a.
 
@@ -573,46 +703,84 @@ Host suites, no hardware, no emulator.
 25. Mode is resolved once per cycle: reordering the events in the package does
     not change which events are processed.
 
----
-
-## 7. Rollout — **[R2]**, promotion is not installation
-
-Promoting two branches does not coordinate three installations. Making `RLY(0)`
-read-only is a hard cutover: the moment the new Tab5 build runs, every currently
-published package fails the support gate and does not adopt.
-
-There is no configuration in which old and new are both correct, so the sequence
-matters and every step is a person doing something:
-
-1. **Publish the revised package first, do not deliver it.** It assigns
-   `Tab5IsLocked`, not `PumpEnable`, and carries `H001` on a condition trigger.
-   The current Tab5 build will not adopt it — the object is unknown to it —
-   which is the intended interlock, not a failure.
-2. **Install the Shelly script.** It declares `Tab5IsLocked` and takes sole
-   ownership of RLY0. Until Tab5 writes the flag it stays false, so the relay
-   closes exactly as before. This step is independently safe and reversible.
-3. **Verify the component exists and reads back**, by name, before going further.
-   Tab5 rejects the whole acquisition if it is missing.
-4. **Install the Tab5 build, then restart.** Adoption is restart-only. The new
-   package now adopts; the old one would not.
-5. **Confirm `values.shelly1_tab5lock` is present** in the observation and that
-   a deliberate inhibit moves it, once, and moves it back.
-
-**Between steps 2 and 4 the system is unprotected by Tab5** — the flag exists,
-nothing writes it, and the old package no longer adopts. Mechanical protection
-is unaffected throughout: pressure switch, 3-second on-delay, 6-minute limit,
-HAND, and the Shelly's own chatter lock. Keep the window short and do it in
-daylight.
-
-**Rollback** is reinstalling the previous Tab5 build and re-delivering the
-previous package. The Shelly script can stay: with nothing writing `Tab5IsLocked`
-it holds false and the relay behaves as it does today.
-
-Both branches still promote together — Change A spans `tab5/pilot.py`,
-`shelly1/anti-chatter.js` and the Pilot editor — but promotion is step zero, not
-the deployment.
+**[R3] Contract, response and cutover**
+26. The widened `write.parameters` accepts both shapes; the switch shape is
+    unchanged and still rejects an unknown property.
+27. A `Boolean.Set` reply of `null` is `acknowledged`; `{}` and
+    `{"result": null}` are too; a body carrying `error` is `rpc-error`; a
+    non-JSON body is `invalid-response`. Recorded device replies, not guesses.
+28. A steady-state cycle with the flag already correct issues no RPC, proven by
+    counting calls across many cycles — the property `null`-as-failure would
+    have destroyed.
+29. `Tab5IsLocked = true, transition` is rejected at validation; so is
+    `Tab5IsLocked = false` with any ownership; `true, whileOpen` is accepted.
+30. Entering Monitor releases the flag **in that cycle's dispatch**, and the
+    last owner closing releases it in that cycle's dispatch too.
+31. Mutual rejection, tested both ways: the new build refuses the old package,
+    and the old build refuses the revised one. This is the interlock §7 rests
+    on and must be proven before the first install.
+32. `H001` opens on `ShellyEMAvailable == false` and closes on `true`, with no
+    dependence on Change B.
+33. With Shelly 1 unreachable, entering Monitor leaves the stored flag unchanged
+    and the write is retried once communication returns.
 
 ---
+
+## 7. Rollout — **[R3]**, reordered to remove the two-writer window
+
+R2's sequence installed the Shelly script while the old Tab5 was still running
+its old package. That Tab5 keeps writing RLY0 and the new script reverses it,
+once a second: exactly the conflict `016ba5a`'s open-only rule existed to
+prevent. Reordering removes the window rather than shortening it.
+
+**The interlock that makes this work:** once the new Tab5 build makes `RLY(0)`
+read-only, the old package fails `_rules_v3_runtime_supported` and does not
+adopt. `adopt_rules_v3_staged_package` returns `None`, there is no V3 runtime,
+`run_rules_v3_cycle` is never called, and Tab5 issues **no device writes at
+all** — the dead `issue_runtime_stop` path is unreachable and the operator
+controls do not touch the relay. Tab5 is inert by construction, not by
+intention.
+
+### Cutover
+
+| | Step | Writers of RLY0 |
+| --- | --- | --- |
+| 1 | Install the new Tab5 build. **Restart.** The old package no longer adopts; Tab5 runs with no rules runtime and writes nothing. | old script only |
+| 2 | Install the new Shelly script. It declares `Tab5IsLocked` and takes the relay. | new script only |
+| 3 | Verify by name that all three components exist and read back. | new script only |
+| 4 | **Publish and Deliver** the revised package. Refresh *Tab5 — last reported package identities* and confirm it is **staged**. | new script only |
+| 5 | **Restart Tab5.** It adopts and begins writing the flag. | new script only |
+| 6 | Confirm `values.shelly1_tab5lock` is in the observation, and that one deliberate inhibit moves it once and back. | new script only |
+
+There is no step at which two things write the relay.
+
+**Delivery, corrected — [R3].** "Publish but do not deliver" cannot lead to
+adoption; the editor's control is *Publish and Deliver*, and delivery only
+requests a download. Staging is confirmed separately on the device-status panel,
+and adoption happens on the **next restart** after staging is confirmed. Steps 4
+and 5 are two distinct operator actions with a check between them, not one.
+
+**Between steps 1 and 5 Tab5 contributes no protection** — it has no rules
+package. Mechanical protection is unaffected throughout: pressure switch,
+3-second on-delay, 6-minute limit, HAND, and from step 2 the Shelly's own
+chatter lock. Keep the window short and do it in daylight.
+
+### Rollback
+
+Symmetric, and it **must restore the old script — [R3]**. Leaving the new script
+running under the old Tab5 recreates the same two-writer conflict in the
+opposite direction, because the old package assigns `PumpEnable` again.
+
+| | Step | Writers of RLY0 |
+| --- | --- | --- |
+| 1 | Install the old Tab5 build. **Restart.** The revised package fails the *old* gate — `UDF(Tab5IsLocked)` is not in its binding table — so again no runtime and no writes. | new script only |
+| 2 | Restore the previous Shelly script (`016ba5a`), which is open-only. | old script only |
+| 3 | Deliver the previous package; confirm staged. | old script only |
+| 4 | Restart Tab5. | old script + Tab5, as before |
+
+Each build refuses the other's package, in both directions. That mutual
+rejection is the safety property the whole sequence rests on, and it is worth
+testing before the first install rather than discovering on the night.
 
 ## 8. Review outcomes
 
@@ -627,6 +795,12 @@ Settled in review; recorded so they are not reopened.
 | Analyser warning | **Distinguish** automatic-recoverable Monitor from restart-only. Do not call a recoverable configuration safe without checking that its recovery condition can actually qualify — a condition that reads the device it is recovering from cannot, which is Change B's whole point. |
 | Deletion scope | **Out of this change.** Separate unit; one file proposed for deletion holds live V3 coverage — §5a. |
 | `rules_v3_field_values` | Deferred with the rest of §5a. Unreachable but current, so argue it individually. |
+| **[R3]** Contract work | **Included.** The schema requires both parameter fields, so there is no no-contract path. Placeholder-id rejected as a quiet lie — §A5b. |
+| **[R3]** `schemaVersion` bump | **Open.** Backward compatible, but the cutover is already hard. Cheap to bump, and it makes the incompatibility explicit. |
+| **[R3]** Flag assignment shapes | **`true, whileOpen` only.** Transition and explicit false rejected at validation — §A8. |
+| **[R3]** Mode decisions | **Two.** Carried-in mode selects events; resulting mode selects the write. Suspension at *n+1*, release at *n* — §C3. |
+| **[R3]** System Monitor device set | **The EM.** `ShellyEMAvailable`, complementary open and close. Shelly 1 is a separate decision — §"User versus System". |
+| Shared counter, dead-code cleanup | Closed. Not reopened. |
 
 ## 9. Still open
 
@@ -639,3 +813,8 @@ Settled in review; recorded so they are not reopened.
 3. **Short-excursion release.** §C4 accepts that a brief telemetry loss now
    releases a hold that previously persisted. If that is wrong for the leak
    classes specifically, it needs a mechanism this design does not contain.
+4. **`schemaVersion` bump — [R3].** See the table above. A decision, not a
+   discovery.
+5. **The step 1-5 gap — [R3].** Tab5 contributes no protection while it has no
+   adoptable package. The sequence makes that window explicit and short, but it
+   does not remove it, and nothing in this design can.
