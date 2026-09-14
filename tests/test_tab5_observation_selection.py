@@ -71,6 +71,7 @@ FUNCTIONS = {
     "_v3_logging",
     "_v3_typed_value",
     "_v3_enum_values",
+    "_v3_write_parameters",
     "_v3_field",
     "_v3_output",
     "_v3_system_field",
@@ -91,6 +92,9 @@ FUNCTIONS = {
     "rules_v3_state_report",
 }
 CONSTANTS = {
+    "RULES_V3_INHIBITION_OBJECT",
+    "RULES_V3_WRITE_SHAPES",
+    "RULES_V3_SUPPORTED_WRITES",
     "SITE_ID",
     "DEVICE_ID",
     "MAX_DURABLE_OBSERVATION_INTERVAL_MS",
@@ -831,7 +835,7 @@ class ObservationSelectionTests(unittest.TestCase):
         raw = fixture.read_text(encoding="utf-8")
         self.assertEqual(
             hashlib.sha256(raw.encode("utf-8")).hexdigest(),
-            "f07d332e7566ec0b73d9ef97af243a33d157205fc7505f0d4c1b7cdfa5ede6b9")
+            "e4aa4d1379e9ba80c7635bf700bfd79d58f35facfd93934d031f515ea7ca330e")
         pointer = self.v3_pointer(raw)
         with tempfile.TemporaryDirectory() as directory:
             staged_path = pathlib.Path(directory) / "rules-runtime-v3-staged.json"

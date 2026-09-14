@@ -1,17 +1,54 @@
 # Minimal Tab5 lock and Monitor design — implementation handoff
 
-Revision 4 — consolidated after three reviews, 2026-09-14.
+Revision 5 — implemented, 2026-09-14. Revision 4 was the pre-implementation
+handoff; this revision records the corrections agreed at the bounded review and
+the behavior actually built.
 
-**Status: design, not implemented.** This is the controlling handoff for the
-proposed unit. It supersedes `lock-coordination-design-proposal.md` and revisions
-1–3 of this file where they differ. Git history preserves the review discussion.
-The browser simulator is an experimental proposal model, not a reference
-implementation or proof of installed behavior.
+**Status: implemented on `pilot-working` and `tab5-working`; not installed and
+not deployed.** This supersedes `lock-coordination-design-proposal.md` and
+revisions 1–4 of this file where they differ. Git history preserves the review
+discussion. The browser simulator is an experimental proposal model, not a
+reference implementation or proof of installed behavior.
 
-The owner requested this consolidation for a fresh implementation session.
-That session first conducts the bounded final review in §10. This document
-does not itself authorize implementation, promotion, installation, publication
-of a rules package, or hardware actions.
+Source publication does not install Tab5 files, publish or deliver a rules
+package, change Firebase, or operate hardware. Each remains a separate owner
+action.
+
+### Corrections agreed at review and carried into this revision
+
+- **Short-cycle scoring (§2).** Deliberate Tab5 inhibition drops the contactor
+  and produces a falling pump-input edge. The script must not score that as a
+  short cycle; three would otherwise reach the permanent lockout only a person
+  can clear. The suppression is driven by a latched cause recorded when the
+  script opens RLY0, not by a level read of the flag at edge time.
+- **Authoritative reconciliation (§5.1).** The final named reconciliation removes
+  every competing action for the inhibition target before appending its value.
+  The ordinary action collapse prefers a non-normal value, and the flag's normal
+  value is `false`, so appending a release beside an inhibit would silently keep
+  the inhibit.
+- **Unknown versus invalid (§5.2).** Absent evidence and an unevaluable clause are
+  distinct. Unknown participates in three-valued all/any; a structurally invalid
+  or unsupported clause still rejects the whole condition and is never outvoted
+  by a definite sibling.
+- **Ownership checks after RLY0 becomes read-only (§6).** `pumpTarget` no longer
+  resolves. Operator handling, relay diagnostics and observation status read the
+  inhibition target instead, so User Monitor still reports restoration honestly
+  rather than inferring "not needed" from an absent target.
+- **Command attribution (§6).** System Monitor holds the same mode target as User
+  Monitor. Command completion is tied to the user's own Monitor event instance,
+  never to effective mode, and pending result state is resolved through
+  completion or failure.
+- **Monitor evaluation (§6).** In Monitor, non-monitor events are not evaluated at
+  all; their state and qualification counts are carried untouched, neither
+  advanced nor reset. Monitor-class events continue to run so System Monitor can
+  exit and logging-only monitor events keep highlighting conditions.
+- **Qualification values (§7).** Transient-disable qualification is authored
+  configuration. The intended package clears E007 on ten reads; thirty is an
+  acceptable maximum. No count is hard-coded and no new validation ceiling is
+  added — the tests read the authored value from the package.
+- **Maintenance interruption (§8).** A Shelly reboot physically drops its relay
+  and can interrupt a running pump. That interruption is accepted. No manual
+  relay-close procedure is added, and no Shelly lock is ever overridden.
 
 ## 1. Goal and boundaries
 
@@ -64,11 +101,31 @@ proof of physical contact position.
 
 The new Boolean is non-persisted, defaults false on Shelly reboot, and is read
 by the script. A missing/unusable Boolean handle removes Tab5's contribution
-only; it must never clear or override a nonzero Shelly lock.
+only; it must never clear or override a nonzero Shelly lock. The script never
+writes it at all — not even at startup — because a script restart without a
+device reboot must not wipe an inhibition Tab5 still believes it holds.
 
 Preserve the existing short-cycle algorithm and its settings in this unit unless
-the owner separately authorizes their alteration. The script must not reset the
-Boolean repeatedly after initialization.
+the owner separately authorizes their alteration.
+
+**A commanded stop is not a short cycle.** Applying Tab5's inhibition opens RLY0,
+which de-energizes the contactor and produces a falling SW edge indistinguishable
+in shape from a real short cycle. Scoring it would let ordinary protective action
+accumulate strikes toward the permanent lockout. The script therefore latches why
+it opened the relay at the moment it issues the call, and a stop that follows its
+own Tab5-applied open scores nothing.
+
+The latch, not a level read, is what makes this correct in both directions. Tab5's
+intent may be withdrawn before the contactor edge is processed, so the reason has
+to outlive the intent. Equally, a genuine short cycle that merely coincides with
+an intent the script has not yet applied still scores, because the latch is false.
+The relay policy is evaluated against the observed output, so steady state costs
+no `Switch.Set` call and each transition costs exactly one; an unreadable output
+is not a mismatch and produces no call.
+
+After a commanded stop the run timer restarts when the relay recloses, so a Tab5
+inhibition grants a fresh `MinRuntime` allowance. That follows from preserving the
+existing algorithm unchanged and is accepted in this unit.
 
 **Power-on ON is not script-failure recovery.** If the script opens RLY0 and
 stops, do not claim it will close automatically. Treat the relay as retaining
@@ -102,19 +159,27 @@ the authored rule value.
 
 ### 3.2 One acquisition request in steady state
 
-Consolidate the existing GetStatus/GetComponents pair into a filtered
-GetComponents request containing switch:0, input:0 and the three named virtual
-components' discovered keys, with configuration and status included.
+The GetStatus/GetComponents pair is replaced by a single filtered GetComponents
+request naming switch:0, input:0 and the three named virtual components'
+discovered keys, with configuration and status included. A known mapping costs
+exactly one request per cycle and no GetStatus at all.
 
-Discovery and recovery may require additional requests. Bound those exceptions;
-do not hide retries inside every cycle. Verify the name/type mapping in the
-reply, invalidate an obsolete mapping, and resume normal filtered reads only
-after discovery succeeds. Do not write using a rejected mapping.
+Discovery is a bounded exception, not a retry hidden inside every cycle: it runs
+on the first cycle and after the mapping is invalidated, and costs one extra
+request on those cycles only. The name and type mapping is verified in every
+reply; a reply that contradicts it discards the mapping so the next cycle
+rediscovers by name.
 
-Handle pagination and `total` explicitly. Confirm the filtered endpoint's
-actual count semantics and record a representative response. Do not interpret a
-short page as valid absence. A remote acquisition failure does not make the
-script's local virtual-component handle disappear.
+A remote acquisition failure does not prove the components moved or disappeared,
+so a transport failure keeps the mapping while a contradicting reply discards it.
+
+**Acceptance is presence-checked, not derived from `total`.** Every requested key
+must be present and verified; anything missing rejects the acquisition. The owner
+captured the unfiltered call paginating — `offset` 0, `total` 20, twelve
+components returned, `switch:0` absent from the first page — which is why the
+keys filter is required rather than merely faster. What `total` means under that
+filter is not yet established by a captured response, and presence-checking is
+correct under either meaning, so no acceptance rule depends on it.
 
 One response reduces latency but is not a guaranteed simultaneous hardware
 snapshot. Read-to-write races remain possible; later cycles reconcile them.
@@ -140,6 +205,16 @@ evidence from the supported transport.
 
 Shelly's documented HTTP GET example returns `null`:
 https://shelly-api-docs.shelly.cloud/gen2/DynamicComponents/Virtual/Boolean/
+
+Discovery matches a `boolean:<id>` entry whose `config.name` is exactly
+`Tab5IsLocked`, requires `status.value` to be a Boolean, and takes the id from the
+key. Missing, duplicate, wrong-typed and malformed matches all reject the mapping.
+The id is never authored or hard-coded; the owner observed `IsLocked` move between
+ids across a rebuild. Host tests use a clearly labeled documentation-based fixture
+(`tests/fixtures/shelly1-getcomponents-documentation.json`); a captured
+`Shelly.GetComponents` response confirming the boolean shape is an installation
+acceptance check recorded before cutover step 4 is accepted, not a prerequisite
+for the parser.
 
 Keep acknowledgment distinct from subsequent observed flag state and relay
 restoration. Preserve resource cleanup on success, parse failure and timeout.
@@ -213,9 +288,19 @@ flag to false; conditions still present requalify normally.
 Do not reconcile every writable device field to its normal value. That would
 undo unrelated transition assignments. Preserve their existing semantics.
 
-Use existing action collapse, but ensure no earlier inhibit action can defeat
-Monitor release. The final selected flag action must agree with resulting
-mode and ownership. No direct relay action may accompany it.
+**The reconciliation is authoritative, not a peer.** Every other action for this
+target is removed before the reconciled value is appended, so the flag never
+reaches the ordinary collapse with a competitor. This is not belt-and-braces: the
+collapse prefers a non-normal value, and this target's normal value is `false`, so
+a release appended beside an inhibit would be the one discarded. The authoring
+restriction in §4 is then defence in depth rather than the only defence. The final
+selected flag action agrees with the resulting mode and ownership, and no direct
+relay action may accompany it.
+
+An action is emitted only when this cycle's observed flag differs from the desired
+value, so a correct steady state produces no write. Absent evidence produces no
+action at all: reconciliation resumes when communication returns rather than
+writing blind.
 
 ### 5.2 Three-valued all/any
 
@@ -225,8 +310,16 @@ Evaluate valid clauses to true, false or unknown:
 - any: any true means true; otherwise any unknown means unknown; otherwise false.
 
 Missing evidence stays unknown; it is never replaced with a normal measurement.
-This applies to opening, closing and guarded conditions. Preserve validation of
-unsupported/malformed clauses and existing qualification policy.
+This applies to opening, closing and guarded conditions.
+
+**Unknown and invalid are different results.** Unknown means the evidence is
+absent this cycle — the field has no value, or a changes-type clause has no prior
+value. Invalid means the runtime cannot evaluate the clause at all: an unsupported
+operator, a malformed comparison, or a declared number that arrived as something
+else. Unknown participates in the aggregation above. Invalid rejects the whole
+condition exactly as before, in any clause position and in either mode, and is
+never outvoted by a definite sibling. A clause that could not be read must not be
+rescued by one that could.
 
 Unknown does not advance or reset an observation count. Definite false resets
 the relevant count; definite true advances it. Preserve existing minimumSeconds
@@ -258,8 +351,11 @@ monitor-class event does not engage Monitor merely because of its class.
   continue evaluating in Monitor.
 
 Two cycle decisions remove event-order dependence:
-1. Mode carried into the cycle selects evaluation: in Monitor skip non-monitor
-   events, retaining their state and owners.
+1. Mode carried into the cycle selects evaluation: in Monitor, non-monitor events
+   are not evaluated at all. Their active state, instance, owners and
+   qualification counts are carried untouched — neither advanced nor reset — so a
+   condition arising during Monitor cannot open one, and one open on entry is
+   neither closed nor erased.
 2. Mode after evaluation selects the final flag write.
 
 Monitor opening on cycle n releases the flag at n's dispatch; non-monitor
@@ -287,10 +383,18 @@ retained ownership can reassert before E007 resumes and qualifies closed.
 Test this exact sequence. Test E007's ten-read missing-EM close separately with
 H001 disabled; it is not the expected combined-package timeline.
 
-Preserve the operator-control result contract. Review existing local/online
-mode and relay-restoration reporting so a System Monitor is not falsely
-reported as a user-issued command completion. General Monitor display wording
-may need updating; do not add a new command protocol for this.
+**Command attribution.** The operator-control result contract is unchanged, but
+its inputs are. System Monitor now holds the same mode target as User Monitor, so
+effective mode no longer identifies who asked. Completion is tied to the live
+instance of the user's own manual Monitor event; a request that is accepted but
+whose event does not open is failed explicitly rather than left pending for
+something else to satisfy later. Relay restoration is reported only for the
+user's own request, and still requires fresh physical evidence — a fresh
+`islocked = 0` with RLY0 observed on. An accepted Monitor never proves RLY0 moved.
+
+Observation status reports the two separately: `user_monitor_active` is the user's
+own Monitor instance, and `monitor_mode_active` is the effective mode from any
+owner. No new command protocol is added.
 
 ## 7. Focused verification
 
@@ -353,6 +457,15 @@ one currently installed.
 Until adoption, Tab5 contributes no rule protection. The owner must accept this
 maintenance interval and control hardware testing. Mechanical controls remain.
 
+**Pump permission may be interrupted during the interval, and that is accepted.**
+Restarting the Shelly physically drops its relay open, which stops a running pump.
+Between stopping the old Tab5 files and starting the new script, RLY0 also keeps
+whatever state it was last left in, and no software is in a position to close it.
+No manual relay-close step is added to avoid this, and no Shelly lock is ever
+overridden to shorten it. Mechanical and hardwired controls, the pressure switch,
+the on-delay, the max-runtime limit and the HAND bypass all remain in front of the
+relay throughout.
+
 A stopped/inert Tab5 is the interlock preventing two relay writers during
 changes. If no-runtime staging does not pass its regression, do not improvise
 this sequence on hardware.
@@ -384,33 +497,50 @@ Update CURRENT.md and DESIGN.md on both affected product lines with actual
 implemented behavior and verified state, not the older pending-deployment
 narrative. Keep the simulator explicitly experimental until separately aligned.
 
-Before rollout, the owner accepts the maintenance interval and the deliberate
-System Monitor release posture, including H001/E007 reassertion on recovery.
-The script-stopped relay behavior remains unproven; no automatic release claim
-depends on it.
+Before rollout, the owner accepts the maintenance interval, the possible
+interruption of a running pump, and the deliberate System Monitor release
+posture, including H001/E007 reassertion on recovery. The script-stopped relay
+behavior remains unproven; no automatic release claim depends on it.
+
+Two device observations remain acceptance checks rather than source evidence, and
+neither is fabricated in the repository: a captured `Shelly.GetComponents`
+response showing the `Tab5IsLocked` boolean in the documented shape, and a
+captured `Boolean.Set` HTTP GET response confirming the bare `null`
+acknowledgement. Host tests use a clearly labeled documentation-based fixture and
+prove the parser's decisions, not the device's answers.
 
 This handoff chooses Boolean, named reconciliation, schema v3 with strict support
 gates, same-cycle dispatch, retained ownership, and separate cleanup. Do not
 reopen those choices without a concrete implementation blocker.
 
-## 10. Fresh-session final review and implementation entry
+**Where Shelly lock evidence is now required.** Under the previous design Tab5
+re-closed RLY0 itself and refused without a fresh `islocked = 0`. Tab5 no longer
+writes the relay, so withdrawing its flag states only that Tab5 is done
+inhibiting; it is not gated on the Shelly lock, and a nonzero or unavailable lock
+still holds RLY0 open because the script enforces it. The fresh-evidence
+requirement is unchanged where it still applies: confirming a Shelly restart, and
+confirming relay restoration for a User Monitor request.
 
-Read AGENTS.md, CURRENT.md, DESIGN.md and this file on the current working
-branches. Verify branch tips once and preserve newer authorized work. Do not
-reconstruct old conversations or use the simulator as the implementation oracle.
+## 10. Implementation record
 
-Before coding, perform one bounded review of:
-- the exact contract/compiler/resolver path and mutual support rejection;
-- absence of rule-driven relay writes after cutover;
-- no-runtime staging/restart behavior and both rollback cases;
-- final-mode reconciliation and the combined Monitor timeline.
+The bounded review in revision 4 §10 was completed and its findings are carried
+into the sections above. The unit is implemented on `pilot-working` and
+`tab5-working`.
 
-Report only concrete blockers or contradictions. If none remain, say the plan
-is ready and wait for the owner's implementation authorization, unless the
-session's opening instruction already grants it. Ordinary implementation choices
-within the authorized unit do not need repeated confirmation.
+What remains owner-directed and is not done by this unit: promotion to `pilot`
+and `Tab5`, Pilot deployment, publication and delivery of the revised rules
+package, Firebase changes, installation of Tab5 files, device restarts, and any
+hardware operation.
 
-Develop on pilot-working and tab5-working under the existing one-process
-workflow. Publish tested working-branch commits with concise evidence.
-Promotion, rules-package publication, file installation, restarts and hardware
-tests remain separately owner-directed.
+Outstanding acceptance evidence, to be recorded before the cutover is accepted:
+
+- a captured `Shelly.GetComponents` reply showing `Tab5IsLocked` as a
+  `boolean:<id>` component with `config.name` and a Boolean `status.value`;
+- a captured filtered `keys=[...]` reply, which also settles what `total` means
+  under that filter (no acceptance rule depends on it either way);
+- a captured `Boolean.Set` HTTP GET reply confirming the bare `null`
+  acknowledgement;
+- observed relay behavior across a Shelly reboot with an inhibition outstanding.
+
+Host tests prove decisions, not device answers. They do not establish actual
+Shelly response shapes, installed reset behavior, relay motion, or cycle latency.

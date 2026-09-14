@@ -1,0 +1,132 @@
+{
+  "kind": "documentation-fixture",
+  "provenance": {
+    "status": "DOCUMENTATION-BASED. This is NOT a captured hardware response.",
+    "derivedFrom": [
+      "Shelly Gen2+ Virtual Components documentation for the Boolean component:",
+      "https://shelly-api-docs.shelly.cloud/gen2/DynamicComponents/Virtual/Boolean/",
+      "and the envelope shape Shelly.GetComponents uses for number components."
+    ],
+    "captured": [
+      "The owner observed the unfiltered Shelly.GetComponents envelope on the",
+      "installed device: components carry key/status/config, @meta-declared virtual",
+      "components additionally carry config.owner and attrs.role, input:0 reports",
+      "status.state, and the unfiltered call paginates (offset 0, total 20, twelve",
+      "components returned, switch:0 absent from the first page)."
+    ],
+    "notCaptured": [
+      "No boolean:<id> component has been observed on the device yet, because",
+      "Tab5IsLocked is declared by a script revision that is not installed.",
+      "The boolean entries below therefore follow the documented shape.",
+      "A captured Shelly.GetComponents response confirming it is an INSTALLATION",
+      "ACCEPTANCE CHECK, recorded before cutover step 4 is accepted.",
+      "The filtered keys=[...] response shape, and what `total` means under that",
+      "filter, are likewise not yet captured. Acceptance in the parser is",
+      "presence-checked rather than derived from `total` for that reason."
+    ],
+    "idsAreExamples": [
+      "Component ids are assigned at creation and are not stable across a rebuild;",
+      "the owner observed IsLocked move from number:202 to number:201. The ids here",
+      "are deliberately different from the observed ones so that any test relying",
+      "on a hard-coded id fails."
+    ]
+  },
+
+  "discoveryResponse": {
+    "components": [
+      {
+        "key": "number:240",
+        "status": {"value": 90, "source": "", "last_update_ts": 0},
+        "config": {"id": 240, "name": "InitLockTime", "min": 1, "max": 86400,
+                   "persisted": true, "default_value": 90, "owner": "script:1"},
+        "attrs": {"owner": "script:1", "role": "initLockTime"}
+      },
+      {
+        "key": "number:241",
+        "status": {"value": 0, "source": "rpc", "last_update_ts": 1789380610},
+        "config": {"id": 241, "name": "IsLocked", "min": -1, "max": 86400,
+                   "persisted": false, "default_value": 0, "owner": "script:1"},
+        "attrs": {"owner": "script:1", "role": "isLocked"}
+      },
+      {
+        "key": "number:242",
+        "status": {"value": 0, "source": "rpc", "last_update_ts": 1789380610},
+        "config": {"id": 242, "name": "loCntr", "min": 0, "max": 3,
+                   "persisted": false, "default_value": 0, "owner": "script:1"},
+        "attrs": {"owner": "script:1", "role": "lockoutCount"}
+      },
+      {
+        "key": "number:243",
+        "status": {"value": 3600, "source": "", "last_update_ts": 0},
+        "config": {"id": 243, "name": "TimeToResetLOcntr", "min": 60, "max": 86400,
+                   "persisted": true, "default_value": 3600, "owner": "script:1"},
+        "attrs": {"owner": "script:1", "role": "lockoutResetTime"}
+      },
+      {
+        "key": "number:244",
+        "status": {"value": 60, "source": "", "last_update_ts": 0},
+        "config": {"id": 244, "name": "MinRuntime", "min": 1, "max": 600,
+                   "persisted": true, "default_value": 60, "owner": "script:1"},
+        "attrs": {"owner": "script:1", "role": "minRuntime"}
+      },
+      {
+        "key": "number:245",
+        "status": {"value": 3, "source": "", "last_update_ts": 0},
+        "config": {"id": 245, "name": "MaxLOcntr", "min": 1, "max": 3,
+                   "persisted": true, "default_value": 3, "owner": "script:1"},
+        "attrs": {"owner": "script:1", "role": "maxLockoutCount"}
+      },
+      {
+        "key": "boolean:246",
+        "status": {"value": false, "source": "rpc", "last_update_ts": 1789380610},
+        "config": {"id": 246, "name": "Tab5IsLocked", "persisted": false,
+                   "default_value": false, "owner": "script:1"},
+        "attrs": {"owner": "script:1", "role": "tab5IsLocked"}
+      }
+    ],
+    "cfg_rev": 131,
+    "offset": 0,
+    "total": 21
+  },
+
+  "filteredResponse": {
+    "components": [
+      {
+        "key": "input:0",
+        "status": {"id": 0, "state": false},
+        "config": {"id": 0, "name": null, "type": "switch", "enable": true,
+                   "invert": false, "factory_reset": true}
+      },
+      {
+        "key": "switch:0",
+        "status": {"id": 0, "output": true, "source": "init"},
+        "config": {"id": 0, "name": null, "initial_state": "on",
+                   "auto_on": false, "auto_off": false}
+      },
+      {
+        "key": "number:241",
+        "status": {"value": 0, "source": "rpc", "last_update_ts": 1789380610},
+        "config": {"id": 241, "name": "IsLocked", "persisted": false,
+                   "default_value": 0, "owner": "script:1"},
+        "attrs": {"owner": "script:1", "role": "isLocked"}
+      },
+      {
+        "key": "number:242",
+        "status": {"value": 0, "source": "rpc", "last_update_ts": 1789380610},
+        "config": {"id": 242, "name": "loCntr", "persisted": false,
+                   "default_value": 0, "owner": "script:1"},
+        "attrs": {"owner": "script:1", "role": "lockoutCount"}
+      },
+      {
+        "key": "boolean:246",
+        "status": {"value": false, "source": "rpc", "last_update_ts": 1789380610},
+        "config": {"id": 246, "name": "Tab5IsLocked", "persisted": false,
+                   "default_value": false, "owner": "script:1"},
+        "attrs": {"owner": "script:1", "role": "tab5IsLocked"}
+      }
+    ],
+    "cfg_rev": 131,
+    "offset": 0,
+    "total": 21
+  }
+}

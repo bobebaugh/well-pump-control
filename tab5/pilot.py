@@ -28,11 +28,21 @@ import cloud
 # --- config (values from firmware/tab5/main/pilot_config.h) ---
 SHELLY_EM_URL = 'http://192.168.50.141/emeter/0'
 SHELLY_1_STATUS_URL = 'http://192.168.50.201/rpc/Shelly.GetStatus'
+# Discovery resolves the dynamic component ids by name. The unfiltered call is
+# paginated and truncates, so it is never used for acquisition.
 SHELLY_1_COMPONENTS_URL = ('http://192.168.50.201/rpc/Shelly.GetComponents?'
                            'dynamic_only=true&include=%5B%22config%22%2C%22status%22%5D')
+# Steady-state acquisition: one filtered request naming every component this cycle
+# needs. The key list is built from ids resolved by name, never hard-coded.
+SHELLY_1_FILTERED_URL = ('http://192.168.50.201/rpc/Shelly.GetComponents?'
+                         'keys={}&include=%5B%22config%22%2C%22status%22%5D')
 SHELLY_1_STOP_URL = 'http://192.168.50.201/rpc/Switch.Set?id=0&on=false'
 SHELLY_1_SWITCH_URL = 'http://192.168.50.201/rpc/Switch.Set?id={}&on={}'
+SHELLY_1_BOOLEAN_SET_URL = 'http://192.168.50.201/rpc/Boolean.Set?id={}&value={}'
 SHELLY_1_RESTART_URL = 'http://192.168.50.201/rpc/Shelly.Reboot'
+SHELLY_1_LOCK_NAME = 'IsLocked'
+SHELLY_1_COUNT_NAME = 'loCntr'
+SHELLY_1_FLAG_NAME = 'Tab5IsLocked'
 SAMPLE_PERIOD_MS = 1000
 SHELLY_TIMEOUT_S = 1  # requests has whole-second granularity; C++ used 750ms
 STALE_AFTER_MS = 3000
@@ -73,10 +83,12 @@ MATERIAL_EXACT_CHANGE_PATHS = (
     'values.battery_charge_enabled',
     'values.shelly1_sw0',
     'values.shelly1_rly0',
+    'values.shelly1_tab5lock',
     'status.adc_available',
     'status.battery_available',
     'status.clock_synced',
     'status.user_monitor_active',
+    'status.monitor_mode_active',
     'status.tab5_relay_restoration',
 )
 MATERIAL_CHANGE_LABELS = {
@@ -90,12 +102,15 @@ MATERIAL_CHANGE_LABELS = {
     'values.battery_charge_enabled': 'Tab5 battery',
     'values.shelly1_sw0': 'Shelly 1',
     'values.shelly1_rly0': 'Shelly 1',
+    'values.shelly1_tab5lock': 'Tab5 inhibition',
     'values.shelly1_lock': 'Shelly 1',
     'values.shelly1_lockout_count': 'Shelly 1',
+    'values.shelly1_tab5lock': 'Tab5 inhibition',
     'status.adc_available': 'pressure ADC',
     'status.battery_available': 'Tab5 battery',
     'status.clock_synced': 'Tab5 clock',
     'status.user_monitor_active': 'Tab5 operator mode',
+    'status.monitor_mode_active': 'Tab5 operating mode',
     'status.tab5_relay_restoration': 'Tab5 relay evidence',
     'status.shelly_available': 'Shelly EM',
     'status.shelly1_available': 'Shelly 1',
@@ -123,8 +138,10 @@ RUNTIME_DIRECT_BINDINGS = {
     },
     'shelly-gen4-switch': {
         'SW(0)': ('boolean', None, 'read'),
-        'RLY(0)': ('boolean', None, 'readWrite'),
+        # RLY(0) is observed, never written: the Shelly script is its sole writer.
+        'RLY(0)': ('boolean', None, 'read'),
         'UDF(IsLocked)': ('integer', 's', 'read'),
+        'UDF(Tab5IsLocked)': ('boolean', None, 'readWrite'),
         '$availability': ('boolean', None, 'read'),
     },
     'tab5-runtime': {
@@ -478,6 +495,9 @@ wifi_connected = False
 network_traffic_allowed = False
 shelly_resume_confirmation_pending = True
 shelly1_resume_confirmation_pending = True
+# Dynamic component ids resolved by name. Held across cycles so steady state costs
+# one request, and discarded whenever the device contradicts it.
+shelly1_routing = None
 
 
 # --- Shelly reads ---
@@ -507,19 +527,26 @@ def _shelly_read_reason(url, data):
         if not isinstance(data.get('components'), list):
             return 'components-not-list'
         found = {}
+        prefixes = {SHELLY_1_LOCK_NAME: 'number:', SHELLY_1_COUNT_NAME: 'number:',
+                    SHELLY_1_FLAG_NAME: 'boolean:'}
         for component in data['components']:
             if not isinstance(component, dict):
                 continue
             key, config, status = component.get('key'), component.get('config'), component.get('status')
-            if (not isinstance(key, str) or not key.startswith('number:') or
-                    not isinstance(config, dict) or not isinstance(status, dict)):
+            if (not isinstance(key, str) or not isinstance(config, dict) or
+                    not isinstance(status, dict)):
                 continue
             name = config.get('name')
-            if name in ('IsLocked', 'loCntr'):
-                if name in found:
-                    return 'duplicate-' + name
-                found[name] = status.get('value')
-        for name, low, high in (('IsLocked', -1, 86400), ('loCntr', 0, 3)):
+            prefix = prefixes.get(name)
+            if prefix is None:
+                continue
+            if name in found:
+                return 'duplicate-' + name
+            if not key.startswith(prefix):
+                return 'wrong-component-type-' + name
+            found[name] = status.get('value')
+        for name, low, high in ((SHELLY_1_LOCK_NAME, -1, 86400),
+                                (SHELLY_1_COUNT_NAME, 0, 3)):
             if name not in found:
                 return 'missing-' + name
             value = found[name]
@@ -527,6 +554,10 @@ def _shelly_read_reason(url, data):
                 return 'wrong-type-' + name
             if not low <= value <= high:
                 return 'out-of-range-' + name
+        if SHELLY_1_FLAG_NAME not in found:
+            return 'missing-' + SHELLY_1_FLAG_NAME
+        if not isinstance(found[SHELLY_1_FLAG_NAME], bool):
+            return 'wrong-type-' + SHELLY_1_FLAG_NAME
     return None
 
 
@@ -610,57 +641,189 @@ def normalize_shelly1_status(data):
     return {'sw0': sw0, 'rly0': rly0}
 
 
-def normalize_shelly1_components(data):
-    """Discover both named script numbers without assuming dynamic component IDs."""
+def _shelly1_component_id(key, prefix):
+    """Extract the dynamic numeric id from a component key, or None."""
+    if not isinstance(key, str) or not key.startswith(prefix):
+        return None
+    tail = key[len(prefix):]
+    if not tail or not all('0' <= char <= '9' for char in tail):
+        return None
+    return int(tail)
+
+
+def _shelly1_lock_value(value):
+    return (isinstance(value, int) and not isinstance(value, bool) and
+            -1 <= value <= 86400)
+
+
+def _shelly1_count_value(value):
+    return (isinstance(value, int) and not isinstance(value, bool) and
+            0 <= value <= 3)
+
+
+def shelly1_component_routing(data):
+    """Resolve the named virtual components to their dynamic ids, by name only.
+
+    The numeric ids are assigned at creation and are not stable across a rebuild,
+    so they are discovered every time and never authored. A missing, duplicated or
+    malformed match rejects the whole mapping rather than yielding a partial one.
+    """
     if not isinstance(data, dict) or not isinstance(data.get('components'), list):
         return None
+    wanted = {
+        SHELLY_1_LOCK_NAME: ('number:', _shelly1_lock_value),
+        SHELLY_1_COUNT_NAME: ('number:', _shelly1_count_value),
+        SHELLY_1_FLAG_NAME: ('boolean:', lambda value: isinstance(value, bool)),
+    }
     found = {}
     for component in data['components']:
         if not isinstance(component, dict):
             continue
-        key = component.get('key')
         config = component.get('config')
         status = component.get('status')
-        if (not isinstance(key, str) or not key.startswith('number:') or
-                not isinstance(config, dict) or not isinstance(status, dict)):
+        if not isinstance(config, dict) or not isinstance(status, dict):
             continue
         name = config.get('name')
-        if name in ('IsLocked', 'loCntr'):
-            if name in found:  # ambiguous discovery is not usable evidence
-                return None
-            found[name] = status.get('value')
-    locked = found.get('IsLocked')
-    counter = found.get('loCntr')
-    if (not isinstance(locked, int) or isinstance(locked, bool) or
-            not -1 <= locked <= 86400 or
-            not isinstance(counter, int) or isinstance(counter, bool) or
-            not 0 <= counter <= 3):
+        expected = wanted.get(name)
+        if expected is None:
+            continue
+        prefix, valid = expected
+        component_id = _shelly1_component_id(component.get('key'), prefix)
+        if component_id is None or not valid(status.get('value')):
+            return None  # a malformed declaration is not usable evidence
+        if name in found:
+            return None  # ambiguous discovery is not usable evidence
+        found[name] = component_id
+    if len(found) != len(wanted):
         return None
-    return {'is_locked': locked, 'lockout_count': counter}
+    return found
 
 
-def normalize_shelly1_cycle(status_data, components_data):
-    """Join two sequential RPC replies into one all-or-unavailable acquisition."""
-    status = normalize_shelly1_status(status_data)
-    components = normalize_shelly1_components(components_data)
-    if status is None or components is None:
+def shelly1_filtered_keys(routing):
+    """Name every component one acquisition needs, static keys included."""
+    if not isinstance(routing, dict):
         return None
-    status.update(components)
-    return status
+    try:
+        return ['switch:0', 'input:0',
+                'number:{}'.format(routing[SHELLY_1_LOCK_NAME]),
+                'number:{}'.format(routing[SHELLY_1_COUNT_NAME]),
+                'boolean:{}'.format(routing[SHELLY_1_FLAG_NAME])]
+    except Exception:
+        return None
 
 
-def read_shelly1(read_json=None):
-    """Read one two-RPC Shelly cycle; never manipulate its script numbers."""
+def _percent_encode_keys(keys):
+    """Encode the keys filter as a JSON array without urllib on the device."""
+    encoded = '%2C'.join('%22{}%22'.format(key) for key in keys)
+    return '%5B{}%5D'.format(encoded)
+
+
+def shelly1_filtered_url(routing):
+    keys = shelly1_filtered_keys(routing)
+    if keys is None:
+        return None
+    return SHELLY_1_FILTERED_URL.format(_percent_encode_keys(keys))
+
+
+def normalize_shelly1_filtered(data, routing):
+    """Accept one filtered reply only when every requested component is present.
+
+    Acceptance is presence-checked rather than derived from `total`, whose meaning
+    under a keys filter is not established by a captured response. A short or
+    filtered page is therefore never read as valid absence: anything missing
+    rejects the acquisition and forces the mapping to be resolved again.
+    """
+    keys = shelly1_filtered_keys(routing)
+    if keys is None or not isinstance(data, dict):
+        return None
+    components = data.get('components')
+    if not isinstance(components, list):
+        return None
+    by_key = {}
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        key = component.get('key')
+        if not isinstance(key, str):
+            continue
+        if key in by_key:
+            return None  # a duplicated key is not usable evidence
+        by_key[key] = component
+    if any(key not in by_key for key in keys):
+        return None  # incomplete page; never interpreted as absence
+    switch_status = by_key['switch:0'].get('status')
+    input_status = by_key['input:0'].get('status')
+    if not isinstance(switch_status, dict) or not isinstance(input_status, dict):
+        return None
+    rly0 = switch_status.get('output')
+    sw0 = input_status.get('state')
+    if not isinstance(rly0, bool) or not isinstance(sw0, bool):
+        return None
+    named = {}
+    for name, key, valid in (
+            (SHELLY_1_LOCK_NAME, keys[2], _shelly1_lock_value),
+            (SHELLY_1_COUNT_NAME, keys[3], _shelly1_count_value),
+            (SHELLY_1_FLAG_NAME, keys[4], lambda value: isinstance(value, bool))):
+        component = by_key[key]
+        config = component.get('config')
+        status = component.get('status')
+        if not isinstance(config, dict) or not isinstance(status, dict):
+            return None
+        if config.get('name') != name:
+            return None  # the id moved under us; the mapping is obsolete
+        value = status.get('value')
+        if not valid(value):
+            return None
+        named[name] = value
+    return {
+        'sw0': sw0, 'rly0': rly0,
+        'is_locked': named[SHELLY_1_LOCK_NAME],
+        'lockout_count': named[SHELLY_1_COUNT_NAME],
+        'tab5_is_locked': named[SHELLY_1_FLAG_NAME],
+        # Dynamic routing travels with the acquisition that proved it, and is kept
+        # out of the authored rule values.
+        'flag_id': routing[SHELLY_1_FLAG_NAME],
+    }
+
+
+def read_shelly1(read_json=None, routing=None):
+    """Acquire one Shelly 1 cycle and return it with the mapping that produced it.
+
+    Steady state is a single filtered request. Discovery is a bounded exception on
+    the first cycle and after the mapping is invalidated, never a retry hidden
+    inside every cycle. The result is all-or-unavailable; the script's own numbers
+    are read and never written.
+    """
     getter = read_json if callable(read_json) else _read_json
+    attempted_discovery = False
+    if not isinstance(routing, dict):
+        try:
+            discovery = getter(SHELLY_1_COMPONENTS_URL)
+        except Exception:
+            discovery = None
+        routing = shelly1_component_routing(discovery)
+        attempted_discovery = True
+        if routing is None:
+            return None, None
+    url = shelly1_filtered_url(routing)
+    if url is None:
+        return None, None
     try:
-        status_data = getter(SHELLY_1_STATUS_URL)
+        reply = getter(url)
     except Exception:
-        status_data = None
-    try:
-        components_data = getter(SHELLY_1_COMPONENTS_URL)
-    except Exception:
-        components_data = None
-    return normalize_shelly1_cycle(status_data, components_data)
+        reply = None
+    if reply is None:
+        # A remote failure does not prove the components moved or disappeared, so
+        # the mapping is kept and the next cycle costs one request again.
+        return None, routing
+    record = normalize_shelly1_filtered(reply, routing)
+    if record is not None:
+        return record, routing
+    # The device answered and the answer did not match the mapping: an id moved,
+    # a name changed, or the page was incomplete. Discard it so the next cycle
+    # rediscovers by name rather than reusing an obsolete route. Discovery is not
+    # attempted twice in one cycle.
+    return None, (routing if attempted_discovery else None)
 
 
 def shelly1_restart_request(request_get=None):
@@ -756,6 +919,39 @@ def operator_monitor_occurrence_field(resolved):
                 event.get('closing', {}).get('policy') == 'clearEvents'):
             return trigger.get('occurrenceField')
     return None
+
+
+def operator_monitor_event_id(resolved):
+    """Identify the manual Monitor event itself, not merely its occurrence."""
+    if not isinstance(resolved, dict):
+        return None
+    mode_target = resolved.get('operatingModeTarget')
+    for event in resolved.get('events', []):
+        trigger = event.get('opening', {}).get('trigger', {})
+        assignments = event.get('onOpen', {}).get('assignments', [])
+        selects_monitor = any(
+            item.get('target') == mode_target and item.get('value') == 'Monitor' and
+            item.get('ownership') == 'whileOpen'
+            for item in assignments if isinstance(item, dict))
+        if (event.get('enabled') is True and event.get('eventClass') == 'monitor' and
+                trigger.get('type') == 'manual' and selects_monitor and
+                event.get('closing', {}).get('policy') == 'clearEvents'):
+            return event.get('id')
+    return None
+
+
+def user_monitor_instance(runtime, event_id):
+    """Return the live instance of the user's Monitor event, or None.
+
+    Ties a user command to the occurrence it actually opened. System Monitor
+    engaging the same mode is a different event and never satisfies this.
+    """
+    if not isinstance(runtime, dict) or not isinstance(event_id, str):
+        return None
+    state = runtime.get('kernel', {}).get('events', {}).get(event_id)
+    if not isinstance(state, dict) or state.get('active') is not True:
+        return None
+    return state.get('instanceId')
 
 
 def shelly_restart_confirmation(pending, observation_sequence, now_ticks_ms,
@@ -883,6 +1079,8 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
                              if isinstance(shelly1, dict) else None),
             'shelly1_lockout_count': (shelly1.get('lockout_count')
                                       if isinstance(shelly1, dict) else None),
+            'shelly1_tab5lock': (shelly1.get('tab5_is_locked')
+                                 if isinstance(shelly1, dict) else None),
         },
         'status': {
             'shelly_available': shelly_is_available,
@@ -906,6 +1104,9 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
             'shelly1_age_ms': sample_age_ms(
                 observed_ticks_ms, shelly1_last_valid_ticks_ms),
             'shelly1_failure_count': shelly1_failures,
+            # Dispatch routing proved by this acquisition, never an authored value.
+            'shelly1_tab5lock_id': (shelly1.get('flag_id')
+                                    if isinstance(shelly1, dict) else None),
             'wifi_connected': wifi_is_connected,
             'network_traffic_allowed': traffic_is_allowed,
             'clock_synced': clock_is_synced,
@@ -984,6 +1185,7 @@ RUNTIME_OBJECT_PATHS = {
     'shelly-gen4-switch': {
         'SW(0)': 'values.shelly1_sw0', 'RLY(0)': 'values.shelly1_rly0',
         'UDF(IsLocked)': 'values.shelly1_lock',
+        'UDF(Tab5IsLocked)': 'values.shelly1_tab5lock',
         '$availability': 'status.shelly1_available',
     },
 }
@@ -1280,17 +1482,72 @@ def issue_runtime_stop(observation):
         return 'request-failed:{}'.format(error)
 
 
+def _issue_boolean_set(observation, value):
+    """Write Tab5's inhibition flag using the id this acquisition proved.
+
+    No readback and no same-cycle retry: a later cycle reconciles. The device is
+    asked over the GET-style RPC the installed requests client is proven with.
+    """
+    status = observation.get('status', {})
+    values = observation.get('values', {})
+    if status.get('shelly1_available') is not True:
+        return 'shelly-unavailable'
+    observed = values.get('shelly1_tab5lock')
+    if not isinstance(observed, bool):
+        return 'flag-evidence-unavailable'
+    if observed is value:
+        return 'observed-desired-state'
+    component_id = status.get('shelly1_tab5lock_id')
+    if not isinstance(component_id, int) or isinstance(component_id, bool):
+        return 'flag-routing-unavailable'
+    url = SHELLY_1_BOOLEAN_SET_URL.format(
+        component_id, 'true' if value else 'false')
+    reply = None
+    try:
+        reply = requests.get(url, timeout=SHELLY_TIMEOUT_S)
+        status_code = getattr(reply, 'status_code', None)
+        if not isinstance(status_code, int) or status_code != 200:
+            return 'rpc-http-error'
+        body = reply.json()
+        # The supported HTTP GET form answers a bare JSON null for this method.
+        # Nothing else is accepted as success: not {}, not an arbitrary error-free
+        # object, not an invented envelope.
+        if body is not None:
+            return 'rpc-error' if isinstance(body, dict) and (
+                'error' in body or 'code' in body) else 'invalid-response'
+        return 'acknowledged'
+    except Exception as error:
+        return 'request-failed:{}'.format(error)
+    finally:
+        if reply is not None:
+            try:
+                reply.close()
+            except Exception:
+                pass
+
+
 def issue_rules_v3_action(resolved, action, observation):
-    """Issue one kernel-selected write to the installed Shelly (GET-only RPC)."""
+    """Issue one kernel-selected write to the installed Shelly (GET-only RPC).
+
+    Acknowledgement means only that the request was accepted. It is never evidence
+    that the flag now reads back, nor that RLY0 moved.
+    """
     target = action.get('target')
     value = action.get('value')
     spec = resolved.get('writableTargets', {}).get(target)
     if not isinstance(spec, dict):
         return 'no-write-definition'
-    if spec.get('method') != 'Switch.Set':
-        return 'unsupported-method:{}'.format(spec.get('method'))
     if not isinstance(value, bool):
         return 'unsupported-value:{}'.format(value)
+    method = spec.get('method')
+    if method == 'Boolean.Set':
+        if target != resolved.get('inhibitionTarget'):
+            return 'unsupported-boolean-target'
+        return _issue_boolean_set(observation, value)
+    if method != 'Switch.Set':
+        return 'unsupported-method:{}'.format(method)
+    # Retained compatibility path. No accepted package can reach it: the runtime
+    # support gate rejects RLY(0) as readWrite, so no relay write is authored.
     if observation.get('status', {}).get('shelly1_available') is not True:
         return 'shelly-unavailable'
     observed = observation.get('values', {}).get('shelly1_rly0')
@@ -1367,14 +1624,16 @@ def dispatch_rules_v3_actions(resolved, actions, observation):
 
 
 def rules_v3_relay_diagnostic(runtime, observation, actions):
+    """Observe the existing kernel and snapshot decisions; create no action."""
     resolved, kernel = runtime['resolved'], runtime['kernel']
-    target = resolved.get('pumpTarget')
+    target = resolved.get('inhibitionTarget') or resolved.get('pumpTarget')
     values = observation.get('values', {})
     available = observation.get('status', {}).get('shelly1_available') is True
+    held = target is not None and _rules_v3_has_owner(kernel, target)
     selected = tuple((item.get('value'), item.get('reason')) for item in actions
                      if item.get('target') == target)
-    return (kernel.get('releasePending'), available, values.get('shelly1_rly0'),
-            values.get('shelly1_lock'), selected)
+    return (held, available, values.get('shelly1_rly0'),
+            values.get('shelly1_tab5lock'), values.get('shelly1_lock'), selected)
 
 
 def runtime_condition_value(condition, fields):
@@ -2333,6 +2592,29 @@ def _v3_enum_values(value):
             len(set(value)) == len(value))
 
 
+# Each supported device method has its own exact parameter shape. The branches are
+# discriminated by method and stay closed, so an id is never made optional for a
+# method that requires it, nor accepted for one that does not carry it.
+RULES_V3_WRITE_SHAPES = {
+    'Switch.Set': ('id', 'valueParameter'),
+    'Boolean.Set': ('valueParameter',),
+}
+# The one physical object that carries Tab5's inhibition. Resolved by device
+# binding rather than by an editable system name.
+RULES_V3_INHIBITION_OBJECT = 'UDF(Tab5IsLocked)'
+
+
+def _v3_write_parameters(method, parameters):
+    required = RULES_V3_WRITE_SHAPES.get(method)
+    if required is None or not _v3_closed(parameters, required):
+        return False
+    if 'id' in required:
+        if (not _v3_integer(parameters.get('id')) or
+                not 0 <= parameters['id'] <= 255):
+            return False
+    return _v3_name(parameters.get('valueParameter'))
+
+
 def _v3_field(value):
     required = ('systemName', 'type', 'unit', 'logging', 'object', 'access')
     if not _v3_closed(value, required, required + ('enumValues', 'write')):
@@ -2354,16 +2636,14 @@ def _v3_field(value):
     write = value.get('write')
     if value['access'] == 'readWrite':
         if (not _v3_closed(write, ('method', 'parameters', 'normalValue')) or
-                not isinstance(write.get('method'), str) or not write['method'] or
-                not _v3_closed(write.get('parameters'), ('id', 'valueParameter')) or
-                not _v3_integer(write['parameters'].get('id')) or
-                not 0 <= write['parameters']['id'] <= 255 or
-                not _v3_name(write['parameters'].get('valueParameter')) or
+                not _v3_write_parameters(write.get('method'), write.get('parameters')) or
                 not _v3_typed_value(write.get('normalValue'), field_type, enums)):
             return None
     elif write is not None:
         return None
-    return {'type': field_type, 'enumValues': enums, 'assignmentTarget': value['access'] == 'readWrite'}
+    return {'type': field_type, 'enumValues': enums,
+            'assignmentTarget': value['access'] == 'readWrite',
+            'inhibitionTarget': value['object'] == RULES_V3_INHIBITION_OBJECT}
 
 
 def _v3_output(value):
@@ -2382,7 +2662,8 @@ def _v3_output(value):
             return None
     elif enums is not None:
         return None
-    return {'type': field_type, 'enumValues': enums, 'assignmentTarget': False}
+    return {'type': field_type, 'enumValues': enums, 'assignmentTarget': False,
+            'inhibitionTarget': False}
 
 
 def _v3_system_field(value):
@@ -2424,6 +2705,7 @@ def _v3_system_field(value):
         return None
     return {'type': value['type'], 'enumValues': value.get('enumValues'),
             'assignmentTarget': value.get('assignmentTarget') is True,
+            'inhibitionTarget': False,
             'role': role, 'source': value['source']}
 
 
@@ -2490,6 +2772,12 @@ def _v3_phase(value, fields, event_class, close_phase):
             return False
         if close_phase and assignment['ownership'] != 'transition':
             return False
+        if target.get('inhibitionTarget') is True:
+            # Release is a consequence of ownership and mode, never an authored
+            # value. Only a held opening assignment may request inhibition.
+            if (close_phase or assignment['value'] is not True or
+                    assignment['ownership'] != 'whileOpen'):
+                return False
         if target.get('role') == 'operatingMode':
             if (event_class != 'monitor' or assignment['value'] != 'Monitor' or
                     assignment['ownership'] != 'whileOpen'):
@@ -2827,6 +3115,19 @@ def rules_v3_state_report(running=None, desired=None, staged=None, rejected=None
     }
 
 
+# Structural validity is not runtime support. This application executes exactly one
+# device write, on the inhibition Boolean. A package declaring RLY(0) as readWrite
+# is rejected here even though that shape remains structurally valid, which is what
+# makes old and new control packages mutually incompatible across the cutover.
+RULES_V3_SUPPORTED_WRITES = {
+    RULES_V3_INHIBITION_OBJECT: {
+        'method': 'Boolean.Set',
+        'parameters': {'valueParameter': 'value'},
+        'normalValue': False,
+    },
+}
+
+
 def _rules_v3_runtime_supported(package):
     """Reject schema-valid declarations that this device application cannot execute."""
     for device in package.get('devices', []):
@@ -2839,10 +3140,12 @@ def _rules_v3_runtime_supported(package):
                 return False
             if field.get('access') == 'readWrite':
                 write = field.get('write')
+                supported = RULES_V3_SUPPORTED_WRITES.get(field.get('object'))
                 if (device.get('driver') != 'shelly-gen4-switch' or
-                        not isinstance(write, dict) or write.get('method') != 'Switch.Set' or
-                        write.get('parameters') != {'id': 0, 'valueParameter': 'on'} or
-                        write.get('normalValue') is not True):
+                        supported is None or not isinstance(write, dict) or
+                        write.get('method') != supported['method'] or
+                        write.get('parameters') != supported['parameters'] or
+                        write.get('normalValue') is not supported['normalValue']):
                     return False
     for calculation in package.get('calculations', []):
         if calculation.get('kind') == 'expression':
@@ -2928,6 +3231,20 @@ def resolve_rules_v3_package(package):
             operating_mode_target = field['systemName']
     pump_target = 'PumpEnable' if 'PumpEnable' in writable else None
     lock_field = 'IsLocked' if 'IsLocked' in field_types else None
+    # Resolved by its exact device binding so an editable system name, or an alias
+    # declaring the same object twice, cannot create a second competing target.
+    inhibition_target = None
+    for device in package['devices']:
+        if device.get('driver') != 'shelly-gen4-switch':
+            continue
+        for field in device['fields']:
+            if field['object'] != RULES_V3_INHIBITION_OBJECT:
+                continue
+            if field.get('access') != 'readWrite':
+                continue
+            if inhibition_target is not None:
+                return None  # two targets for one physical component
+            inhibition_target = field['systemName']
     tab5_objects = {}
     for device in package['devices']:
         if device.get('driver') == 'tab5-runtime':
@@ -2974,6 +3291,7 @@ def resolve_rules_v3_package(package):
         'writableTargets': writable,
         'operatingModeTarget': operating_mode_target,
         'pumpTarget': pump_target,
+        'inhibitionTarget': inhibition_target,
         'lockField': lock_field,
         'calculations': calculation_plan,
     }
@@ -3225,62 +3543,90 @@ def run_rules_v3_cycle(runtime, observation, now_ms, occurrences=None,
     }
 
 
+# Absent evidence, distinct from a clause this runtime cannot evaluate at all.
+# Unknown participates in all/any; invalid poisons the whole condition, because a
+# clause that could not be read must never be rescued by a definite sibling.
+RULES_V3_UNKNOWN = ('unknown',)
+
+
+def _rules_v3_clause_value(clause, fields, previous_fields, occurrences):
+    """Evaluate one clause as True, False, RULES_V3_UNKNOWN, or None for invalid."""
+    if not isinstance(clause, dict):
+        return None
+    name = clause.get('field')
+    operator = clause.get('operator')
+    expected = clause.get('value')
+    if operator == 'occurs':
+        return occurrences.get(name) is True
+    current = fields.get(name)
+    if current is None:
+        return RULES_V3_UNKNOWN  # no evidence this cycle
+    if operator == 'eq':
+        return current == expected
+    if operator == 'neq':
+        return current != expected
+    if operator in ('between', 'outside'):
+        if (not isinstance(expected, list) or len(expected) != 2 or
+                not all(_v3_number(item) for item in expected)):
+            return None
+        if not _v3_number(current):
+            return None  # a declared number arrived unusable; not merely absent
+        inside = expected[0] <= current <= expected[1]
+        return inside if operator == 'between' else not inside
+    if operator in ('changes', 'changes_from', 'changes_to'):
+        previous = previous_fields.get(name)
+        if previous is None:
+            return RULES_V3_UNKNOWN  # present now, but no prior value to compare
+        if operator == 'changes':
+            return current != previous
+        if operator == 'changes_from':
+            return previous == expected and current != previous
+        return current == expected and previous != current
+    if operator not in ('lt', 'lte', 'gt', 'gte'):
+        return None
+    if not (_v3_number(current) and _v3_number(expected)):
+        return None
+    if operator == 'lt':
+        return current < expected
+    if operator == 'lte':
+        return current <= expected
+    if operator == 'gt':
+        return current > expected
+    return current >= expected
+
+
 def rules_v3_condition_value(condition, fields, previous_fields=None, occurrences=None):
-    """Evaluate a V3 condition as True, False, or unavailable (None)."""
+    """Evaluate a V3 condition as True, False, or unavailable (None).
+
+    Three-valued across clauses: for all, one definite false decides regardless of
+    what is unknown; for any, one definite true decides. Otherwise an unknown
+    clause leaves the condition unavailable. A structurally invalid or
+    unsupported clause still rejects the whole condition, unchanged.
+    """
     if not isinstance(condition, dict) or not isinstance(fields, dict):
         return None
     clauses = condition.get('clauses')
-    if condition.get('mode') not in ('all', 'any') or not isinstance(clauses, list) or not clauses:
+    mode = condition.get('mode')
+    if mode not in ('all', 'any') or not isinstance(clauses, list) or not clauses:
         return None
     previous_fields = previous_fields if isinstance(previous_fields, dict) else {}
     occurrences = occurrences if isinstance(occurrences, dict) else {}
-    results = []
+    decisive = False if mode == 'all' else True
+    saw_unknown = False
+    saw_decisive = False
     for clause in clauses:
-        if not isinstance(clause, dict):
-            return None
-        name = clause.get('field')
-        operator = clause.get('operator')
-        expected = clause.get('value')
-        if operator == 'occurs':
-            results.append(occurrences.get(name) is True)
-            continue
-        current = fields.get(name)
-        if current is None:
-            return None
-        if operator == 'eq':
-            result = current == expected
-        elif operator == 'neq':
-            result = current != expected
-        elif operator in ('between', 'outside'):
-            if (not _v3_number(current) or not isinstance(expected, list) or
-                    len(expected) != 2 or not all(_v3_number(item) for item in expected)):
-                return None
-            inside = expected[0] <= current <= expected[1]
-            result = inside if operator == 'between' else not inside
-        elif operator in ('changes', 'changes_from', 'changes_to'):
-            previous = previous_fields.get(name)
-            if previous is None:
-                return None
-            if operator == 'changes':
-                result = current != previous
-            elif operator == 'changes_from':
-                result = previous == expected and current != previous
-            else:
-                result = current == expected and previous != current
-        elif not (_v3_number(current) and _v3_number(expected)):
-            return None
-        elif operator == 'lt':
-            result = current < expected
-        elif operator == 'lte':
-            result = current <= expected
-        elif operator == 'gt':
-            result = current > expected
-        elif operator == 'gte':
-            result = current >= expected
-        else:
-            return None
-        results.append(result)
-    return all(results) if condition['mode'] == 'all' else any(results)
+        result = _rules_v3_clause_value(clause, fields, previous_fields, occurrences)
+        if result is None:
+            return None  # invalid clauses are never outvoted
+        if result is RULES_V3_UNKNOWN:
+            saw_unknown = True
+        elif result is decisive:
+            saw_decisive = True
+    if saw_decisive:
+        return decisive
+    if saw_unknown:
+        return None
+    return not decisive
 
 
 def _new_rules_v3_event_state(event_id):
@@ -3418,13 +3764,22 @@ def advance_rules_v3_kernel(resolved, state, fields, now_ms,
     clear_all = clear_event_ids is True
     clear_ids = set(clear_event_ids if isinstance(clear_event_ids, (list, tuple, set)) else ())
     old_mode = rules_v3_effective_mode(resolved, next_state)
+    # Decision one: the mode carried INTO the cycle selects what is evaluated. In
+    # Monitor, non-monitor events are not evaluated at all - their active state,
+    # owners and qualification counts are carried untouched, neither advanced nor
+    # reset. Monitor-class events keep running so System Monitor can exit and
+    # logging-only monitor events keep highlighting conditions.
+    suspend_non_monitor = old_mode == 'Monitor'
     pump_target = resolved.get('pumpTarget')
+    inhibition_target = resolved.get('inhibitionTarget')
     old_pump_owner = (pump_target is not None and
                       _rules_v3_has_owner(next_state, pump_target))
     actions = []
     records = []
     for event in resolved.get('events', []):
         event_state = next_state['events'][event['id']]
+        if suspend_non_monitor and event.get('eventClass') != 'monitor':
+            continue
         if event.get('enabled') is not True:
             if event_state.get('active') is True:
                 instance_id = event_state.get('instanceId')
@@ -3555,6 +3910,24 @@ def advance_rules_v3_kernel(resolved, state, fields, now_ms,
                     pump_target, normal_value, 'owner-release'))
             else:
                 next_state['releasePending'] = False
+    if inhibition_target is not None:
+        # Decision two: the mode and ownership resulting from THIS cycle select the
+        # final flag value, and this reconciliation is authoritative. Any other
+        # action for this target is removed first: the ordinary collapse prefers a
+        # non-normal value, whose normal value here is false, so appending a
+        # release beside an inhibit would silently keep the inhibit. Only this
+        # target is reconciled; unrelated transition assignments keep their own
+        # established behavior.
+        actions = [item for item in actions
+                   if item.get('target') != inhibition_target]
+        desired = (False if new_mode == 'Monitor'
+                   else _rules_v3_has_owner(next_state, inhibition_target))
+        observed = frozen.get(inhibition_target)
+        if isinstance(observed, bool) and observed is not desired:
+            _rules_v3_append_action(actions, _rules_v3_action(
+                inhibition_target, desired,
+                'monitor-release' if new_mode == 'Monitor' else
+                'active-ownership' if desired else 'owner-release'))
     for name, value in frozen.items():
         if value is not None:
             next_state['previousFields'][name] = value
@@ -3897,7 +4270,8 @@ def build_events_hmi_model(observation):
         'event_engine': status.get('rules_runtime_state', 'UNAVAILABLE'),
         'active_events': (', '.join(active) if active else
                           'NONE' if active is not None else 'UNAVAILABLE'),
-        'user_monitor': ('ACTIVE' if status.get('user_monitor_active') is True
+        'user_monitor': ('USER' if status.get('user_monitor_active') is True
+                         else 'SYSTEM' if status.get('monitor_mode_active') is True
                          else 'NORMAL'),
         'relay_restoration': status.get(
             'tab5_relay_restoration', 'not-applicable').upper(),
@@ -5049,6 +5423,8 @@ last_operator_command_id = None
 last_operator_command_sequence = 0
 online_operator_command = None
 monitor_result_command = None
+monitor_result_event_id = None
+monitor_result_instance = None
 monitor_relay_restoration = 'not-applicable'
 
 log('Operational HMI initialized; V3 runs only when a valid startup package exists')
@@ -5201,7 +5577,7 @@ while True:
                 shelly_resume_confirmation_pending = False
         shelly1_poll_attempted = True
         shelly1_started_ms = time.ticks_ms()
-        shelly1_sample = read_shelly1()
+        shelly1_sample, shelly1_routing = read_shelly1(routing=shelly1_routing)
         shelly1_acquisition_ms = elapsed_ticks_ms(
             shelly1_started_ms, time.ticks_ms())
         service_navigation()
@@ -5298,9 +5674,12 @@ while True:
                     'monitor-event-unavailable'))
             operator_control_status = 'USER MONITOR FAILED: EVENT UNAVAILABLE'
         else:
-            pump_target = rules_v3_runtime['resolved'].get('pumpTarget')
-            had_inhibit = _rules_v3_has_owner(
-                rules_v3_runtime['kernel'], pump_target)
+            # Ownership of the inhibition flag, resolved by its device binding.
+            # After RLY0 became read-only there is no pump target to consult, and
+            # reporting "not needed" from its absence would fabricate lock state.
+            inhibit_target = rules_v3_runtime['resolved'].get('inhibitionTarget')
+            had_inhibit = (inhibit_target is not None and _rules_v3_has_owner(
+                rules_v3_runtime['kernel'], inhibit_target))
             relay_on = observation['values'].get('shelly1_rly0')
             lock_value = observation['values'].get('shelly1_lock')
             monitor_relay_restoration = (
@@ -5308,6 +5687,9 @@ while True:
                 else 'unconfirmed' if had_inhibit else 'not-needed')
             operator_occurrences = {occurrence_field: True}
             monitor_result_command = selected_command
+            monitor_result_event_id = operator_monitor_event_id(
+                rules_v3_runtime['resolved'])
+            monitor_result_instance = None
             if selected_command is not None:
                 cloud.submit_operator_result(operator_result(
                     selected_command, device_session_id, 'accepted',
@@ -5409,28 +5791,52 @@ while True:
         if mode_now != rules_v3_last_mode:
             log('V3 MODE: {} -> {}'.format(rules_v3_last_mode, mode_now))
             rules_v3_last_mode = mode_now
-        if operator_occurrences is not None and mode_now == 'Monitor':
-            operator_control_status = 'USER MONITOR ACTIVE; RELAY {}'.format(
-                monitor_relay_restoration.upper())
-            if monitor_result_command is not None:
-                cloud.submit_operator_result(operator_result(
-                    monitor_result_command, device_session_id,
-                    'confirmed-completed', 'monitor-active',
-                    monitor_relay_restoration))
-        if (mode_now == 'Monitor' and
+        # Completion is tied to the instance of the user's own Monitor event, not
+        # to effective mode. System Monitor holds the same mode target, so mode
+        # alone would let an unrelated H001 close out a stale user request.
+        live_monitor_instance = user_monitor_instance(
+            rules_v3_runtime, monitor_result_event_id)
+        if operator_occurrences is not None:
+            if live_monitor_instance is not None:
+                monitor_result_instance = live_monitor_instance
+                operator_control_status = 'USER MONITOR ACTIVE; RELAY {}'.format(
+                    monitor_relay_restoration.upper())
+                if monitor_result_command is not None:
+                    cloud.submit_operator_result(operator_result(
+                        monitor_result_command, device_session_id,
+                        'confirmed-completed', 'monitor-active',
+                        monitor_relay_restoration))
+                    monitor_result_command = None
+            else:
+                # The request was accepted but its event did not open. Resolve the
+                # pending result rather than leaving it to be satisfied later by
+                # something the operator did not ask for.
+                operator_control_status = 'USER MONITOR FAILED: EVENT DID NOT OPEN'
+                if monitor_result_command is not None:
+                    cloud.submit_operator_result(operator_result(
+                        monitor_result_command, device_session_id, 'failed',
+                        'monitor-event-did-not-open', monitor_relay_restoration))
+                    monitor_result_command = None
+                monitor_result_event_id = None
+                monitor_relay_restoration = 'not-applicable'
+        if (monitor_result_instance is not None and
+                live_monitor_instance == monitor_result_instance and
                 monitor_relay_restoration == 'unconfirmed' and
                 observation['status'].get('shelly1_available') is True and
                 observation['values'].get('shelly1_lock') == 0 and
                 observation['values'].get('shelly1_rly0') is True):
+            # Fresh physical evidence, still required: an accepted Monitor never
+            # proves RLY0 moved.
             monitor_relay_restoration = 'confirmed'
             operator_control_status = 'USER MONITOR ACTIVE; RELAY CONFIRMED'
-            if monitor_result_command is not None:
-                cloud.submit_operator_result(operator_result(
-                    monitor_result_command, device_session_id,
-                    'confirmed-completed', 'monitor-active', 'confirmed'))
+        if monitor_result_instance is not None and live_monitor_instance is None:
+            # The user's Monitor instance ended with this runtime; nothing later
+            # may report against it.
+            monitor_result_instance = None
+            monitor_result_event_id = None
         relay_diagnostic = rules_v3_relay_diagnostic(rules_v3_runtime, observation, v3_actions)
         if relay_diagnostic != rules_v3_last_relay_diagnostic:
-            log('V3 RELAY EVIDENCE: sequence={} release_pending={} available={} observed_on={} lock={} selected={}'.format(
+            log('V3 RELAY EVIDENCE: sequence={} inhibit_held={} available={} observed_rly0={} observed_flag={} lock={} selected={}'.format(
                 observation_sequence, *relay_diagnostic))
             rules_v3_last_relay_diagnostic = relay_diagnostic
         v3_processing_ms = elapsed_ticks_ms(v3_started_ms, time.ticks_ms())
@@ -5454,9 +5860,14 @@ while True:
                       rules_v3_effective_mode(
                           rules_v3_runtime['resolved'],
                           rules_v3_runtime['kernel']) == 'Monitor')
-    observation['status']['user_monitor_active'] = monitor_active
+    # Monitor mode is now reachable from System Monitor as well, so the two are
+    # reported separately. Relay restoration describes the user's own request and
+    # is not applicable to a Monitor the operator did not ask for.
+    observation['status']['monitor_mode_active'] = monitor_active
+    observation['status']['user_monitor_active'] = monitor_result_instance is not None
     observation['status']['tab5_relay_restoration'] = (
-        monitor_relay_restoration if monitor_active else 'not-applicable')
+        monitor_relay_restoration if monitor_result_instance is not None
+        else 'not-applicable')
     observation['status']['operator_control_status'] = operator_control_status
     if (isinstance(rules_v3_staged_reference, dict) and
             (not isinstance(rules_v3_running_reference, dict) or

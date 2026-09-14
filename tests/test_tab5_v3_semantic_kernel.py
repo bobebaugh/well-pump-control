@@ -15,6 +15,7 @@ FUNCTIONS = {
     "_finite_number", "_v3_closed", "_v3_number", "_v3_integer", "_v3_name", "_v3_id",
     "_v3_scalar", "_v3_logging", "_v3_typed_value", "_v3_enum_values",
     "_v3_field", "_v3_output", "_v3_system_field", "_v3_clause",
+    "_v3_write_parameters", "_rules_v3_clause_value",
     "_v3_condition", "_v3_phase", "_v3_dependencies_acyclic",
     "_rules_v3_package_valid", "_rules_v3_runtime_supported", "resolve_rules_v3_package",
     "accept_rules_v3_device_record", "freeze_rules_v3_snapshot",
@@ -26,6 +27,8 @@ FUNCTIONS = {
     "advance_rules_v3_kernel", "restart_rules_v3_kernel",
 }
 CONSTANTS = {"RULES_V3_SCHEMA_VERSION", "RULES_V3_PACKAGE_KIND",
+             "RULES_V3_INHIBITION_OBJECT", "RULES_V3_WRITE_SHAPES",
+             "RULES_V3_SUPPORTED_WRITES", "RULES_V3_UNKNOWN",
              "RUNTIME_DIRECT_BINDINGS"}
 
 
@@ -73,7 +76,7 @@ def inhibit(event_id, open_field, open_operator, open_value,
         }},
         "closing": closing,
         "onOpen": {"assignments": [{
-            "target": "PumpEnable", "value": False, "ownership": "whileOpen",
+            "target": "Tab5IsLocked", "value": True, "ownership": "whileOpen",
         }], "guardedGroups": []},
         "onClose": {"assignments": [], "guardedGroups": []},
         "summary": {"durationOutput": None, "aggregates": []},
@@ -102,6 +105,7 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
             "ShellyEMAvailable": True,
             "PumpWatts": 2800.0,
             "PumpEnable": True,
+            "Tab5IsLocked": False,
             "IsLocked": 0,
         }
         values.update(changes)
@@ -115,7 +119,12 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
     def action_values(actions, target):
         return [item["value"] for item in actions if item["target"] == target]
 
-    def test_01_transient_high_voltage_confirms_and_requires_30_recovery_observations(self):
+    def closing_count(self, resolved, event_id):
+        """Read the authored qualification instead of restating it in the test."""
+        event = next(item for item in resolved["events"] if item["id"] == event_id)
+        return event["closing"]["condition"]["observationCount"]
+
+    def test_01_transient_high_voltage_confirms_and_requires_authored_recovery(self):
         resolved = self.resolved(as_text=True)
         state = self.logic["new_rules_v3_kernel"](resolved)
         state, actions, records = self.step(
@@ -124,17 +133,18 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
         state, actions, records = self.step(
             resolved, state, 1000, self.fields(SupplyVoltage=270.0))
         self.assertEqual([item["type"] for item in records], ["open"])
-        self.assertEqual(self.action_values(actions, "PumpEnable"), [False])
-        for index in range(29):
+        self.assertEqual(self.action_values(actions, "Tab5IsLocked"), [True])
+        needed = self.closing_count(resolved, "E007")
+        for index in range(needed - 1):
             state, actions, records = self.step(
                 resolved, state, 2000 + index * 1000,
-                self.fields(SupplyVoltage=240.0, PumpEnable=False))
-            self.assertEqual(records, [])
+                self.fields(SupplyVoltage=240.0, Tab5IsLocked=True))
+            self.assertEqual(records, [], "closed before the authored count")
         state, actions, records = self.step(
-            resolved, state, 31000,
-            self.fields(SupplyVoltage=240.0, PumpEnable=False))
+            resolved, state, 2000 + needed * 1000,
+            self.fields(SupplyVoltage=240.0, Tab5IsLocked=True))
         self.assertEqual([item["type"] for item in records], ["close"])
-        self.assertEqual(self.action_values(actions, "PumpEnable"), [True])
+        self.assertEqual(self.action_values(actions, "Tab5IsLocked"), [False])
 
     def test_02_dropped_atomic_source_record_freezes_recovery(self):
         resolved = self.resolved()
@@ -154,17 +164,17 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
         state, _, _ = self.step(resolved, state, 0, self.fields(SupplyVoltage=270.0))
         state, _, _ = self.step(resolved, state, 1000, self.fields(SupplyVoltage=270.0))
         state, _, _ = self.step(
-            resolved, state, 2000, self.fields(SupplyVoltage=240.0, PumpEnable=False))
+            resolved, state, 2000, self.fields(SupplyVoltage=240.0, Tab5IsLocked=True))
         self.assertEqual(state["events"]["E007"]["closeCount"], 1)
-        dropped = self.fields(PumpEnable=False)
+        dropped = self.fields(Tab5IsLocked=True)
         dropped.pop("SupplyVoltage")
         state, _, records = self.step(resolved, state, 3000, dropped)
         self.assertEqual(records, [])
         self.assertEqual(state["events"]["E007"]["closeCount"], 1)
-        for index in range(29):
+        for index in range(self.closing_count(resolved, "E007") - 1):
             state, _, records = self.step(
                 resolved, state, 4000 + index * 1000,
-                self.fields(SupplyVoltage=240.0, PumpEnable=False))
+                self.fields(SupplyVoltage=240.0, Tab5IsLocked=True))
         self.assertEqual([item["type"] for item in records], ["close"])
 
     def test_03_overlapping_transient_owners_release_only_after_final_close(self):
@@ -178,18 +188,18 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
             resolved, state, 0,
             self.fields(SupplyVoltage=270.0, PumpWatts=100.0))
         self.assertEqual(len(records), 2)
-        self.assertEqual(len(state["owners"]["PumpEnable"]["instances"]), 2)
+        self.assertEqual(len(state["owners"]["Tab5IsLocked"]["instances"]), 2)
         state, actions, records = self.step(
             resolved, state, 1000,
-            self.fields(SupplyVoltage=240.0, PumpWatts=100.0, PumpEnable=False))
+            self.fields(SupplyVoltage=240.0, PumpWatts=100.0, Tab5IsLocked=True))
         self.assertEqual([item["eventId"] for item in records], ["VOLTAGE"])
-        self.assertEqual(len(state["owners"]["PumpEnable"]["instances"]), 1)
-        self.assertNotIn(True, self.action_values(actions, "PumpEnable"))
+        self.assertEqual(len(state["owners"]["Tab5IsLocked"]["instances"]), 1)
+        self.assertNotIn(False, self.action_values(actions, "Tab5IsLocked"))
         state, actions, records = self.step(
             resolved, state, 2000,
-            self.fields(SupplyVoltage=240.0, PumpWatts=600.0, PumpEnable=False))
-        self.assertNotIn("PumpEnable", state["owners"])
-        self.assertEqual(self.action_values(actions, "PumpEnable"), [True])
+            self.fields(SupplyVoltage=240.0, PumpWatts=600.0, Tab5IsLocked=True))
+        self.assertNotIn("Tab5IsLocked", state["owners"])
+        self.assertEqual(self.action_values(actions, "Tab5IsLocked"), [False])
 
     def test_04_transient_close_cannot_release_overlapping_latch(self):
         transient = inhibit("TRANSIENT", "SupplyVoltage", "gt", 265,
@@ -202,14 +212,14 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
             resolved, state, 0, self.fields(SupplyVoltage=270.0, PumpWatts=100.0))
         state, actions, records = self.step(
             resolved, state, 1000,
-            self.fields(SupplyVoltage=240.0, PumpWatts=600.0, PumpEnable=False))
+            self.fields(SupplyVoltage=240.0, PumpWatts=600.0, Tab5IsLocked=True))
         self.assertEqual([item["eventId"] for item in records], ["TRANSIENT"])
         self.assertTrue(state["events"]["LATCH"]["active"])
-        self.assertNotIn(True, self.action_values(actions, "PumpEnable"))
+        self.assertNotIn(False, self.action_values(actions, "Tab5IsLocked"))
         state, actions, records = self.step(
             resolved, state, 2000,
-            self.fields(PumpEnable=False), clear_event_ids=["LATCH"])
-        self.assertEqual(self.action_values(actions, "PumpEnable"), [True])
+            self.fields(Tab5IsLocked=True), clear_event_ids=["LATCH"])
+        self.assertEqual(self.action_values(actions, "Tab5IsLocked"), [False])
 
     def test_05_two_monitor_causes_return_normal_only_after_final_owner(self):
         operator = copy.deepcopy(self.fixture["events"][1])
@@ -248,7 +258,12 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
         self.assertTrue(state["events"]["H001"]["active"])
         self.assertEqual(self.logic["rules_v3_effective_mode"](resolved, state), "Monitor")
 
-    def test_07_events_track_in_monitor_and_active_inhibit_applies_on_normal(self):
+    def test_07_non_monitor_events_are_not_evaluated_in_monitor(self):
+        """In Monitor a non-monitor event is not evaluated at all.
+
+        Its qualification neither advances nor resets, so a condition that arises
+        during Monitor cannot open one, and the state it had on entry survives.
+        """
         operator = copy.deepcopy(self.fixture["events"][1])
         voltage = inhibit("VOLTAGE", "SupplyVoltage", "gt", 265,
                           "SupplyVoltage", "lt", 265)
@@ -256,51 +271,81 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
         state = self.logic["new_rules_v3_kernel"](resolved)
         state, _, _ = self.step(
             resolved, state, 0, occurrences={"OperatorMonitorRequest": True})
+        self.assertEqual(self.logic["rules_v3_effective_mode"](resolved, state), "Monitor")
+        for step_ms in (1000, 2000, 3000):
+            state, actions, records = self.step(
+                resolved, state, step_ms, self.fields(SupplyVoltage=270.0))
+            self.assertEqual(records, [], "a suspended event must not open")
+            self.assertEqual(self.action_values(actions, "Tab5IsLocked"), [])
+        self.assertFalse(state["events"]["VOLTAGE"]["active"])
+        self.assertEqual(state["events"]["VOLTAGE"]["openCount"], 0,
+                         "qualification is frozen, not advanced")
+        # Leaving Monitor resumes evaluation on the following cycle.
         state, actions, records = self.step(
-            resolved, state, 1000, self.fields(SupplyVoltage=270.0, PumpEnable=True))
-        self.assertEqual([item["eventId"] for item in records], ["VOLTAGE"])
-        self.assertEqual(self.action_values(actions, "PumpEnable"), [])
-        state, actions, records = self.step(
-            resolved, state, 2000, self.fields(SupplyVoltage=270.0, PumpEnable=True),
+            resolved, state, 4000, self.fields(SupplyVoltage=270.0),
             clear_event_ids=["M001"])
         self.assertEqual(self.logic["rules_v3_effective_mode"](resolved, state), "Normal")
-        self.assertEqual(self.action_values(actions, "PumpEnable"), [False])
+        self.assertEqual([item["eventId"] for item in records], ["M001"],
+                         "the exit cycle still evaluates monitor events only")
+        state, actions, records = self.step(
+            resolved, state, 5000, self.fields(SupplyVoltage=270.0))
+        self.assertEqual([item["eventId"] for item in records], ["VOLTAGE"])
+        self.assertEqual(self.action_values(actions, "Tab5IsLocked"), [True])
 
-    def test_event_can_close_in_monitor_without_fabricated_relay_action(self):
+    def test_retained_event_is_not_closed_or_erased_by_monitor_suspension(self):
+        """An event open on entry keeps its instance and owner through Monitor.
+
+        Suppression releases the physical inhibition; it never fabricates a close
+        and never discards the ownership that will be reasserted on exit.
+        """
         operator = copy.deepcopy(self.fixture["events"][1])
         voltage = inhibit("VOLTAGE", "SupplyVoltage", "gt", 265,
                           "SupplyVoltage", "lt", 265)
         resolved = self.resolved([operator, voltage])
         state = self.logic["new_rules_v3_kernel"](resolved)
-        state, _, _ = self.step(
-            resolved, state, 0, occurrences={"OperatorMonitorRequest": True})
+        state, actions, _ = self.step(
+            resolved, state, 0, self.fields(SupplyVoltage=270.0))
+        self.assertEqual(self.action_values(actions, "Tab5IsLocked"), [True])
+        instance = state["events"]["VOLTAGE"]["instanceId"]
         state, actions, records = self.step(
-            resolved, state, 1000, self.fields(SupplyVoltage=270.0))
-        self.assertEqual([item["type"] for item in records], ["open"])
-        self.assertEqual(self.action_values(actions, "PumpEnable"), [])
-        state, actions, records = self.step(
-            resolved, state, 2000, self.fields(SupplyVoltage=240.0))
-        self.assertEqual([(item["eventId"], item["type"]) for item in records],
-                         [("VOLTAGE", "close")])
-        self.assertEqual(self.action_values(actions, "PumpEnable"), [])
+            resolved, state, 1000, self.fields(SupplyVoltage=270.0, Tab5IsLocked=True),
+            occurrences={"OperatorMonitorRequest": True})
+        self.assertEqual(self.action_values(actions, "Tab5IsLocked"), [False])
+        # The opening condition clears while suspended: still no close is recorded.
+        for step_ms in (2000, 3000, 4000):
+            state, actions, records = self.step(
+                resolved, state, step_ms, self.fields(SupplyVoltage=240.0))
+            self.assertEqual(records, [], "suspension must not fabricate a close")
+            self.assertEqual(self.action_values(actions, "Tab5IsLocked"), [])
+        self.assertTrue(state["events"]["VOLTAGE"]["active"])
+        self.assertEqual(state["events"]["VOLTAGE"]["instanceId"], instance)
+        self.assertIn("Tab5IsLocked", state["owners"])
         self.assertEqual(self.logic["rules_v3_effective_mode"](resolved, state),
                          "Monitor")
 
-    def test_08_islocked_tri_state_gates_enable_selection(self):
+    def test_08_releasing_the_flag_does_not_depend_on_shelly_lock_evidence(self):
+        """Tab5 releases only its own intent; the Shelly lock is not Tab5's to read.
+
+        Under the previous design Tab5 re-closed RLY0 itself, so it refused without
+        fresh `IsLocked == 0`. Tab5 no longer writes the relay: withdrawing its flag
+        states only that Tab5 is done inhibiting. A nonzero or unavailable Shelly
+        lock still holds RLY0 open, which the Shelly script enforces and
+        tests/shelly1-anti-chatter.test.js covers.
+        """
         event = inhibit("VOLTAGE", "SupplyVoltage", "gt", 265,
                         "SupplyVoltage", "lt", 265)
         resolved = self.resolved([event])
-        for lock_value, expected in ((15, []), (-1, []), (0, [True]), (None, [])):
+        for lock_value in (15, -1, 0, None):
             with self.subTest(lock_value=lock_value):
                 state = self.logic["new_rules_v3_kernel"](resolved)
                 state, _, _ = self.step(
-                    resolved, state, 0,
-                    self.fields(SupplyVoltage=270.0, PumpEnable=True))
+                    resolved, state, 0, self.fields(SupplyVoltage=270.0))
                 closing = self.fields(
-                    SupplyVoltage=240.0, PumpEnable=False, IsLocked=lock_value)
+                    SupplyVoltage=240.0, Tab5IsLocked=True, IsLocked=lock_value)
                 state, actions, records = self.step(resolved, state, 1000, closing)
                 self.assertEqual([item["type"] for item in records], ["close"])
-                self.assertEqual(self.action_values(actions, "PumpEnable"), expected)
+                self.assertEqual(self.action_values(actions, "Tab5IsLocked"), [False])
+                self.assertNotIn("Tab5IsLocked", state["owners"])
 
     def test_monitor_releases_existing_inhibit_without_closing_its_event(self):
         operator = copy.deepcopy(self.fixture["events"][1])
@@ -311,17 +356,17 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
         state, actions, _ = self.step(
             resolved, state, 0,
             self.fields(SupplyVoltage=270.0, PumpEnable=True, IsLocked=0))
-        self.assertEqual(self.action_values(actions, "PumpEnable"), [False])
+        self.assertEqual(self.action_values(actions, "Tab5IsLocked"), [True])
         state, actions, records = self.step(
             resolved, state, 1000,
-            self.fields(SupplyVoltage=270.0, PumpEnable=False, IsLocked=0),
+            self.fields(SupplyVoltage=270.0, Tab5IsLocked=True, IsLocked=0),
             occurrences={"OperatorMonitorRequest": True})
         self.assertTrue(state["events"]["VOLTAGE"]["active"])
         self.assertNotIn(("VOLTAGE", "close"),
                          [(item["eventId"], item["type"]) for item in records])
         self.assertEqual(self.logic["rules_v3_effective_mode"](resolved, state),
                          "Monitor")
-        self.assertEqual(self.action_values(actions, "PumpEnable"), [True])
+        self.assertEqual(self.action_values(actions, "Tab5IsLocked"), [False])
 
     def test_09_shelly_timed_reenable_is_reasserted_off_with_active_owner(self):
         event = inhibit("VOLTAGE", "SupplyVoltage", "gt", 265,
@@ -333,7 +378,7 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
         state, actions, records = self.step(
             resolved, state, 1000, self.fields(SupplyVoltage=270.0, PumpEnable=True))
         self.assertEqual(records, [])
-        self.assertEqual(self.action_values(actions, "PumpEnable"), [False])
+        self.assertEqual(self.action_values(actions, "Tab5IsLocked"), [True])
 
     def test_10_restart_clears_board_then_persistent_evidence_reopens(self):
         event = inhibit("VOLTAGE", "SupplyVoltage", "gt", 265,
@@ -371,12 +416,12 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
         state, _, records = self.step(
             resolved, state, 0, self.fields(PumpWatts=100.0, PumpEnable=True))
         self.assertEqual([item["type"] for item in records], ["open"])
-        missing = self.fields(PumpEnable=False)
+        missing = self.fields(Tab5IsLocked=True)
         missing.pop("PumpWatts")
         state, actions, records = self.step(resolved, state, 1000, missing)
         self.assertTrue(state["events"]["LATCH"]["active"])
         self.assertEqual(records, [])
-        self.assertNotIn(True, self.action_values(actions, "PumpEnable"))
+        self.assertNotIn(False, self.action_values(actions, "Tab5IsLocked"))
 
     def test_12_guarded_groups_use_one_frozen_transition_snapshot(self):
         package = copy.deepcopy(self.fixture)

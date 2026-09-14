@@ -7,7 +7,8 @@ from test_tab5_v3_integration import load_logic
 
 class ShellyDiagnosticTests(unittest.TestCase):
     def setUp(self):
-        self.logic = load_logic({'_read_json', 'read_shelly1', 'rules_v3_relay_diagnostic'})
+        self.logic = load_logic({'_read_json', 'read_shelly1', 'rules_v3_relay_diagnostic',
+                                 '_rules_v3_has_owner'})
         self.lines = []
         self.logic['log'] = self.lines.append
         self.now = 0
@@ -56,20 +57,45 @@ class ShellyDiagnosticTests(unittest.TestCase):
         calls = []
         def get(url, timeout):
             calls.append(url)
-            data = ({'switch:0': {'output': True}, 'input:0': {'state': False}}
-                    if url == self.logic['SHELLY_1_STATUS_URL'] else {'components': []})
             self.now += 10
-            return types.SimpleNamespace(status_code=200, json=lambda: data, close=lambda: None)
+            return types.SimpleNamespace(
+                status_code=200, json=lambda: {'components': []}, close=lambda: None)
         self.logic['requests'] = types.SimpleNamespace(get=get)
-        self.assertIsNone(self.logic['read_shelly1']())
-        self.assertEqual(calls, [self.logic['SHELLY_1_STATUS_URL'], self.logic['SHELLY_1_COMPONENTS_URL']])
+        sample, routing = self.logic['read_shelly1']()
+        self.assertIsNone(sample)
+        self.assertIsNone(routing, 'an unusable discovery yields no mapping')
+        self.assertEqual(calls, [self.logic['SHELLY_1_COMPONENTS_URL']],
+                         'a failed discovery does not go on to request components')
         self.assertIn('reason=missing-IsLocked', self.lines[-1])
+
+    def test_missing_boolean_component_is_reported_distinctly(self):
+        url = self.logic['SHELLY_1_COMPONENTS_URL']
+        reason = self.logic['_shelly_read_reason']
+        numbers = [
+            {'key': 'number:201', 'config': {'name': 'IsLocked'}, 'status': {'value': 0}},
+            {'key': 'number:202', 'config': {'name': 'loCntr'}, 'status': {'value': 0}}]
+        self.assertEqual(reason(url, {'components': numbers}), 'missing-Tab5IsLocked')
+        flag = {'key': 'boolean:246', 'config': {'name': 'Tab5IsLocked'},
+                'status': {'value': False}}
+        self.assertIsNone(reason(url, {'components': numbers + [flag]}))
+        wrong_value = {'key': 'boolean:246', 'config': {'name': 'Tab5IsLocked'},
+                       'status': {'value': 0}}
+        self.assertEqual(reason(url, {'components': numbers + [wrong_value]}),
+                         'wrong-type-Tab5IsLocked')
+        wrong_kind = {'key': 'number:246', 'config': {'name': 'Tab5IsLocked'},
+                      'status': {'value': False}}
+        self.assertEqual(reason(url, {'components': numbers + [wrong_kind]}),
+                         'wrong-component-type-Tab5IsLocked')
+        self.assertEqual(reason(url, {'components': numbers + [flag, flag]}),
+                         'duplicate-Tab5IsLocked')
 
     def test_wrong_type_and_range_have_specific_reasons(self):
         url = self.logic['SHELLY_1_COMPONENTS_URL']
         data = {'components': [
             {'key': 'number:201', 'config': {'name': 'IsLocked'}, 'status': {'value': -1}},
-            {'key': 'number:202', 'config': {'name': 'loCntr'}, 'status': {'value': 0}}]}
+            {'key': 'number:202', 'config': {'name': 'loCntr'}, 'status': {'value': 0}},
+            {'key': 'boolean:246', 'config': {'name': 'Tab5IsLocked'},
+             'status': {'value': False}}]}
         reason = self.logic['_shelly_read_reason']
         self.assertIsNone(reason(url, data))
         data['components'][0]['status']['value'] = False
@@ -78,11 +104,17 @@ class ShellyDiagnosticTests(unittest.TestCase):
         self.assertEqual(reason(url, data), 'out-of-range-IsLocked')
 
     def test_relay_trace_does_not_mutate_kernel_or_observation(self):
-        runtime = {'resolved': {'pumpTarget': 'PumpEnable'}, 'kernel': {'releasePending': True}}
+        runtime = {
+            'resolved': {'pumpTarget': None, 'inhibitionTarget': 'Tab5IsLocked'},
+            'kernel': {'owners': {'Tab5IsLocked': {
+                'value': True, 'instances': {'i1': 'E007'}}}},
+        }
         observation = {'status': {'shelly1_available': True},
-                       'values': {'shelly1_rly0': False, 'shelly1_lock': 0}}
-        actions = [{'target': 'PumpEnable', 'value': True, 'reason': 'owner-release'}]
+                       'values': {'shelly1_rly0': False, 'shelly1_tab5lock': True,
+                                  'shelly1_lock': 0}}
+        actions = [{'target': 'Tab5IsLocked', 'value': False, 'reason': 'owner-release'}]
         before = copy.deepcopy((runtime, observation, actions))
         trace = self.logic['rules_v3_relay_diagnostic'](runtime, observation, actions)
-        self.assertEqual(trace, (True, True, False, 0, ((True, 'owner-release'),)))
+        self.assertEqual(
+            trace, (True, True, False, True, 0, ((False, 'owner-release'),)))
         self.assertEqual((runtime, observation, actions), before)

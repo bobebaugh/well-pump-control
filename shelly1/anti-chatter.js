@@ -1,16 +1,24 @@
-// @meta {"vc":{"isLocked":{"type":"number","config":{"name":"IsLocked","min":-1,"max":86400,"default_value":0,"persisted":false,"meta":{"ui":{"unit":"s","step":1}}}},"lockoutCount":{"type":"number","config":{"name":"loCntr","min":0,"max":3,"default_value":0,"persisted":false,"meta":{"ui":{"step":1}}}},"minRuntime":{"type":"number","config":{"name":"MinRuntime","min":1,"max":600,"default_value":60,"persisted":true,"meta":{"ui":{"unit":"s","step":1}}}},"initLockTime":{"type":"number","config":{"name":"InitLockTime","min":1,"max":86400,"default_value":90,"persisted":true,"meta":{"ui":{"unit":"s","step":1}}}},"maxLockoutCount":{"type":"number","config":{"name":"MaxLOcntr","min":1,"max":3,"default_value":3,"persisted":true,"meta":{"ui":{"step":1}}}},"lockoutResetTime":{"type":"number","config":{"name":"TimeToResetLOcntr","min":60,"max":86400,"default_value":3600,"persisted":true,"meta":{"ui":{"unit":"s","step":1}}}}}}
+// @meta {"vc":{"isLocked":{"type":"number","config":{"name":"IsLocked","min":-1,"max":86400,"default_value":0,"persisted":false,"meta":{"ui":{"unit":"s","step":1}}}},"lockoutCount":{"type":"number","config":{"name":"loCntr","min":0,"max":3,"default_value":0,"persisted":false,"meta":{"ui":{"step":1}}}},"minRuntime":{"type":"number","config":{"name":"MinRuntime","min":1,"max":600,"default_value":60,"persisted":true,"meta":{"ui":{"unit":"s","step":1}}}},"initLockTime":{"type":"number","config":{"name":"InitLockTime","min":1,"max":86400,"default_value":90,"persisted":true,"meta":{"ui":{"unit":"s","step":1}}}},"maxLockoutCount":{"type":"number","config":{"name":"MaxLOcntr","min":1,"max":3,"default_value":3,"persisted":true,"meta":{"ui":{"step":1}}}},"lockoutResetTime":{"type":"number","config":{"name":"TimeToResetLOcntr","min":60,"max":86400,"default_value":3600,"persisted":true,"meta":{"ui":{"unit":"s","step":1}}}},"tab5IsLocked":{"type":"boolean","config":{"name":"Tab5IsLocked","default_value":false,"persisted":false}}}}
 
 // Shelly 1 anti-chatter / short-cycle protection.
 //
 // The @meta line above must stay on line 1. It is what declares the six virtual
 // components; with it anywhere else the handles come back undefined.
 //
-// AUTHORITY. This script owns RLY0 and sits above Tab5. Tab5 reads IsLocked and
-// loCntr and must never write, clear, or work around them. Nothing here starts a
-// pump: RLY0 is one series element in the automation-controlled G/B- loop, so the
-// only thing this script can do is refuse to complete that loop. The pressure
-// switch on the B+ side, the 3-second on-delay, the 6-minute max-runtime limit,
-// and the HAND bypass all remain in front of it and are unaffected.
+// AUTHORITY. This script is the sole writer of RLY0 and sits above Tab5. Tab5 reads
+// IsLocked and loCntr and must never write, clear, or work around them; it publishes
+// its own inhibition as the Tab5IsLocked boolean, which this script reads and never
+// writes. Nothing here starts a pump: RLY0 is one series element in the
+// automation-controlled G/B- loop, so the only thing this script can do is refuse to
+// complete that loop. The pressure switch on the B+ side, the 3-second on-delay, the
+// 6-minute max-runtime limit, and the HAND bypass all remain in front of it and are
+// unaffected.
+//
+// RELAY POLICY. RLY0 is closed exactly when IsLocked == 0 AND Tab5IsLocked == false,
+// and open otherwise. The policy is applied against the observed output, so steady
+// state costs no Switch.Set call and each transition costs exactly one. A missing or
+// unusable Tab5IsLocked handle removes Tab5's contribution only - it can never clear
+// or override this script's own lock.
 //
 // SENSING. SW senses ground at the contactor, downstream of RLY0 and the original
 // automation, so a rising edge means the pump actually started and a falling edge
@@ -42,11 +50,13 @@ let minRuntime = Script.getVcHandle("minRuntime");
 let initLockTime = Script.getVcHandle("initLockTime");
 let maxLockoutCount = Script.getVcHandle("maxLockoutCount");
 let lockoutResetTime = Script.getVcHandle("lockoutResetTime");
+let tab5IsLocked = Script.getVcHandle("tab5IsLocked");
 
 let PERMANENT = -1;
 let lockValue = 0;           // authoritative lock state; mirrored to IsLocked
 let strikeValue = 0;         // authoritative strike count; mirrored to loCntr
-let relayHeldByScript = false; // true only while this script is holding RLY0 open
+let relayOpenByScript = false;  // true while this script is holding RLY0 open
+let relayOpenForTab5 = false;  // true when that hold is applying Tab5's inhibition
 let runStartMs = null;       // set on a rising SW edge, null when not running
 let lastInfractionMs = null; // drives the loCntr decay window
 
@@ -104,23 +114,43 @@ function setStrikes(value) {
   writeNumber(lockoutCount, value);
 }
 
-// This script may only ever OPEN the relay. Tab5 opens RLY0 for its own inhibits,
-// and anything here that asserts it closed would undo them - once a second, for as
-// long as Tab5 kept trying. So the only close performed is the release of a hold
-// this script placed itself, tracked by relayHeldByScript.
-function relayIsClosed() {
+// Tab5's published inhibition request. A missing or unusable handle contributes
+// nothing rather than a guessed hold, and can never clear this script's own lock.
+function tab5Intent() {
+  if (!hasHandle(tab5IsLocked)) return false;
+  return tab5IsLocked.getValue() === true;
+}
+
+// Tri-state on purpose: null means the output was not readable this pass. The
+// policy acts only on a definite mismatch, so unknown evidence never produces a
+// relay call and never invents an observed position.
+function relayOutput() {
   let status = Shelly.getComponentStatus("switch:0");
-  return status !== null && status !== undefined && status.output === true;
+  if (status === null || status === undefined) return null;
+  if (typeof status.output !== "boolean") return null;
+  return status.output;
 }
 
-function openRelay() {
-  relayHeldByScript = true;
-  if (relayIsClosed()) Shelly.call("Switch.Set", { id: 0, on: false });
-}
-
-function releaseRelay() {
-  relayHeldByScript = false;
-  Shelly.call("Switch.Set", { id: 0, on: true });
+// RLY0 is closed exactly when nothing holds it open. This script is the only
+// writer in this configuration, so the decision is taken from the observed output
+// rather than from an internal hold, and no call is made when it already matches.
+function applyRelayPolicy() {
+  let tab5 = tab5Intent();
+  let holdOpen = lockValue !== 0 || tab5;
+  let observed = relayOutput();
+  if (holdOpen) {
+    // Latch WHY the relay is being opened before the contactor can drop. The
+    // falling SW edge arrives from the status handler after this call returns,
+    // and Tab5 may have withdrawn its intent by then, so the reason has to
+    // outlive the intent that caused it. pumpStopped() reads this latch.
+    if (lockValue === 0 && tab5) relayOpenForTab5 = true;
+    relayOpenByScript = true;
+    if (observed === true) Shelly.call("Switch.Set", { id: 0, on: false });
+  } else {
+    relayOpenForTab5 = false;
+    relayOpenByScript = false;
+    if (observed === false) Shelly.call("Switch.Set", { id: 0, on: true });
+  }
 }
 
 function recordInfraction() {
@@ -136,13 +166,14 @@ function recordInfraction() {
     setLock(hold);
     print("[anti-chatter] strike " + count + "; RLY0 open for " + hold + "s");
   }
-  openRelay();
+  applyRelayPolicy();  // act on the new lock now instead of waiting for the tick
 }
 
 function pumpStarted() {
-  // While locked, RLY0 is open and the contactor cannot be energized. Any edge
-  // seen in that state is not a pump start, so it must not begin a run.
-  if (lockState() !== 0) return;
+  // While RLY0 is held open - by this script's lock or by Tab5's inhibition - the
+  // contactor cannot be energized. Any edge seen in that state is not a pump
+  // start, so it must not begin a run.
+  if (lockState() !== 0 || tab5Intent()) return;
   runStartMs = Date.now();
 }
 
@@ -153,6 +184,16 @@ function pumpStopped() {
   if (ranMs < 0) return;  // clock moved; discard rather than invent an infraction
   if (lockState() !== 0) return;
   let ranS = Math.floor(ranMs / 1000);
+  if (relayOpenForTab5) {
+    // This script opened RLY0 to apply Tab5's inhibition, so the pump was
+    // commanded to stop. A commanded stop is not chatter and must not score a
+    // strike; three of them would otherwise reach the permanent lockout that
+    // only a person can clear. Genuine short cycles are unaffected: a stop that
+    // happens while Tab5 merely intends an inhibit it has not yet applied still
+    // finds this latch false and scores normally.
+    print("[anti-chatter] stop applied Tab5 inhibition after " + ranS + "s; no strike");
+    return;
+  }
   if (ranS < readNumber(minRuntime, 60, 1, 600)) {
     print("[anti-chatter] short cycle: " + ranS + "s");
     recordInfraction();
@@ -169,13 +210,9 @@ function tick() {
     setLock(PERMANENT);  // a permanent lock is sticky; normalize any other negative
   }
 
-  // Relay action is driven by this script's own hold, never by the lock value
-  // alone. When unlocked it does nothing at all, leaving RLY0 to Tab5.
-  if (lockValue === 0) {
-    if (relayHeldByScript) releaseRelay();
-  } else if (relayIsClosed()) {
-    openRelay();  // re-assert only while locked, where this script has authority
-  }
+  // One level-based decision per tick covering both holds. Steady state issues
+  // no relay call at all, whichever way the policy resolves.
+  applyRelayPolicy();
 
   if (lockValue === 0 && strikes() > 0 && lastInfractionMs !== null) {
     let window = readNumber(lockoutResetTime, 3600, 60, 86400) * 1000;
@@ -201,11 +238,19 @@ if (!hasHandle(isLocked) || !hasHandle(lockoutCount)) {
         "Protection is active but nothing is published to Tab5. Check that the " +
         "@meta line is line 1 and that no other script owns these names.");
 }
+if (!hasHandle(tab5IsLocked)) {
+  print("[anti-chatter] WARNING: Tab5IsLocked handle unavailable. Local " +
+        "short-cycle protection is active, but Tab5 inhibition cannot be applied " +
+        "and a Tab5-commanded stop cannot be distinguished from a short cycle.");
+}
 
 // Volatile by design: a reboot is a sanctioned clear, so start from a known
-// unlocked state with the relay closed and no run in progress.
+// unlocked state with no run in progress. Tab5IsLocked is deliberately NOT written
+// here: Tab5 owns it, and a script restart without a device reboot must not wipe an
+// inhibition Tab5 still believes it holds. Its own default_value covers a real boot.
 setLock(0);
 setStrikes(0);
+applyRelayPolicy();
 
 let initial = Shelly.getComponentStatus("input:0");
 if (initial !== null && initial !== undefined && initial.state === true) {
@@ -215,7 +260,8 @@ if (initial !== null && initial !== undefined && initial.state === true) {
 }
 
 Timer.set(1000, true, tick);
-print("[anti-chatter] started; MinRuntime=" + readNumber(minRuntime, 60, 1, 600) +
+print("[anti-chatter] started; Tab5IsLocked=" + (hasHandle(tab5IsLocked) ? tab5Intent() : "unavailable") +
+      "; MinRuntime=" + readNumber(minRuntime, 60, 1, 600) +
       "s InitLockTime=" + readNumber(initLockTime, 90, 1, 86400) +
       "s MaxLOcntr=" + readNumber(maxLockoutCount, 3, 1, 3) +
       " TimeToResetLOcntr=" + readNumber(lockoutResetTime, 3600, 60, 86400) + "s");

@@ -6,7 +6,7 @@ output is a Pilot–Tab5 interface, not because Tab5 executes them.
 
 | File | Purpose | Status |
 | --- | --- | --- |
-| `anti-chatter.js` | Short-cycle protection. Owns RLY0, declares and publishes `IsLocked` and `loCntr`. | Not yet run on hardware |
+| `anti-chatter.js` | Short-cycle protection. Sole writer of RLY0; declares and publishes `IsLocked` and `loCntr`, and reads `Tab5IsLocked`. | Not yet run on hardware |
 | `test-harness-standalone.js` | Bench tool that declares its own copies of the two components. | Known working on the device |
 | `test-harness-attaching.js` | Same bench tool, declaring nothing and attaching to the components `anti-chatter.js` owns. | Unproven — see below |
 
@@ -32,6 +32,10 @@ rapid cycling and sits **above** Tab5. Tab5 owns excessive runtime and the leak
 class. Tab5 reads `IsLocked` and `loCntr` and never writes, clears, or works around
 them, and must not contain a second chatter implementation (§4.10).
 
+This script is now the **only** writer of RLY0. Tab5 no longer writes the relay at
+all: it publishes its inhibition as `Tab5IsLocked` and this script decides the
+relay from both holds together.
+
 Nothing in this script can start a pump. RLY0 is one series element in the G/B−
 loop, so the only available action is refusing to complete it. The pressure switch
 on B+, the 3-second on-delay, the 6-minute max-runtime limit, and the HAND bypass
@@ -39,16 +43,22 @@ are all in front of it and unaffected.
 
 ## Published contract
 
-Two virtual number components, discovered by Tab5 **by name**:
+Three components, discovered by Tab5 **by name**, never by id:
 
-| Name | Range | Meaning |
-| --- | --- | --- |
-| `IsLocked` | −1 … 86400 | `0` normal, positive = seconds remaining, `−1` permanent |
-| `loCntr` | 0 … 3 | Infractions accumulated |
+| Name | Type | Range | Writer | Meaning |
+| --- | --- | --- | --- | --- |
+| `IsLocked` | number | −1 … 86400 | this script | `0` normal, positive = seconds remaining, `−1` permanent |
+| `loCntr` | number | 0 … 3 | this script | Infractions accumulated |
+| `Tab5IsLocked` | boolean | — | Tab5 | Tab5's own inhibition request |
 
-Both are `persisted: false`. Tab5 rejects the entire acquisition if either is
-missing, out of range, or duplicated, so do not add another component using either
-name.
+All three are `persisted: false`. Tab5 rejects the entire acquisition if any is
+missing, out of range, wrong-typed, or duplicated, so do not add another component
+using any of these names.
+
+`Tab5IsLocked` is Tab5's to write and this script's to read. The script never
+writes it — not even at startup — because a script restart without a device reboot
+must not wipe an inhibition Tab5 still believes it holds. Its `default_value` of
+`false` covers a real device boot.
 
 ## Tuning values
 
@@ -133,7 +143,7 @@ Not set by the script — configure these on the Shelly before installing:
   two sets, and Tab5's `normalize_shelly1_components` rejects any name it finds
   twice — rejecting the **entire acquisition**, so the device reads as unavailable
   rather than as an obvious duplicate fault. Exactly six should exist, one per name.
-- **Mind the ten-component budget.** This script uses six of the device's ten
+- **Mind the ten-component budget.** This script uses seven of the device's ten
   slots. If slots get tight, `MaxLOcntr` and `TimeToResetLOcntr` are the two least
   likely to need field tuning and could become constants in the script.
 - `switch:0` power-on default **on**, so RLY0 closes on boot and a script failure
@@ -202,3 +212,8 @@ down and never touched `switch:0` or `input:0`.
 Two electrical assumptions are worth metering before trusting it: that a falling SW
 edge always corresponds to the contactor de-energizing, and that `Shelly.call` on
 `switch:0` is not contended by any other script or schedule on the device.
+
+`tests/shelly1-anti-chatter.test.js` runs this file in a stubbed Shelly runtime and
+covers the relay truth table, commanded-stop suppression, genuine short cycles, the
+strikeout path, and a missing `Tab5IsLocked` handle. It proves the script's
+decisions, not the device's RPC shapes or the physical relay.
