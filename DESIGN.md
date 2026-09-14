@@ -24,10 +24,13 @@ a safe value or an unlocked control state.
 One deliberate, owner-selected exception is scoped to Tab5's own inhibition intent:
 a missing or unusable `Tab5IsLocked` component removes Tab5's contribution rather
 than holding the relay open, and the flag defaults false on a Shelly reboot until
-Tab5 reasserts an outstanding inhibit. This is fail-permissive for Tab5's intent
-only. It never clears, overrides or substitutes for the Shelly's own `IsLocked`
-protection, which continues to hold RLY0 open on its own authority, and it never
-converts unavailable measurement evidence into a value.
+Tab5 reasserts an outstanding inhibit. RLY0's power-on default is open, and the
+script keeps it open for a five-second initialization delay after seeding the flag
+false. Tab5 may reassert true during that window; otherwise normal processing
+closes RLY0 when the delay ends. This is fail-permissive for Tab5's intent only. It
+never clears, overrides or substitutes for the Shelly's own `IsLocked` protection,
+which continues to hold RLY0 open on its own authority, and it never converts
+unavailable measurement evidence into a value.
 
 V3 is the target and is progressively replacing V2. Once V3 owns event evaluation
 and device writes, the normal loop must not execute V2 events or silently fall back

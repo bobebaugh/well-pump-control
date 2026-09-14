@@ -55,15 +55,15 @@ All three are `persisted: false`. Tab5 rejects the entire acquisition if any is
 missing, out of range, wrong-typed, or duplicated, so do not add another component
 using any of these names.
 
-`Tab5IsLocked` is Tab5's to write and this script's to read. The script never
-writes it — not even at startup — because a script restart without a device reboot
-must not wipe an inhibition Tab5 still believes it holds. Its `default_value` of
-`false` covers a real device boot.
+The script initializes `Tab5IsLocked` to `false`; after that seed, Tab5 owns its
+normal updates. RLY0 remains open for the five-second startup delay, giving Tab5
+time to reassert a hard lock before normal relay processing begins.
 
 ## Tuning values
 
-Four more virtual numbers, `persisted: true`, editable from the Shelly UI. Tab5
-ignores them — its reader only matches the two names above.
+The five settings are constants at the beginning of `anti-chatter.js`. They are
+deliberately not virtual components and consume no component slots. Edit them in
+the Shelly script editor when commissioning values need to change.
 
 | Name | Default | Meaning |
 | --- | --- | --- |
@@ -71,6 +71,7 @@ ignores them — its reader only matches the two names above.
 | `InitLockTime` | 90 s | RLY0 held open per non-final infraction |
 | `MaxLOcntr` | 3 | Infractions before the permanent lock |
 | `TimeToResetLOcntr` | 3600 s | Clean period after which `loCntr` decays to 0 |
+| `InitDelay` | 5 s | Startup hold-open window for Tab5 to reassert a hard lock |
 
 `MinRuntime = 60` is set against measured behaviour, not guessed. The pressure
 switch has cut-in/cut-out hysteresis, so a healthy cycle always runs the full
@@ -81,6 +82,9 @@ any stop with essentially no drawdown.
 ## Behaviour
 
 ```
+script startup    Tab5IsLocked = false    → keep RLY0 open for InitDelay
+after InitDelay   Tab5IsLocked false      → begin normal processing; close RLY0
+                  Tab5IsLocked true       → begin normal processing; keep RLY0 open
 rising SW edge   pump started            → start run timer (ignored while locked)
 falling SW edge  pump stopped            → if run < MinRuntime, infraction
 infraction       loCntr += 1
@@ -90,17 +94,10 @@ every second     IsLocked > 0            → decrement; at 0, RLY0 closes
                  clean for TimeToReset…  → loCntr = 0
 ```
 
-**This script may only ever open RLY0.** Tab5 also writes `switch:0`, to apply its
-own inhibits, so anything here that asserted the relay closed would undo them —
-once a second, for as long as Tab5 kept trying. The only close it performs is
-releasing a hold it placed itself, tracked internally rather than inferred from
-`IsLocked`.
-
-Concretely: while unlocked it issues no relay call at all, whatever state the relay
-is in, because that state is Tab5's business. While locked it re-asserts open if it
-finds the relay closed, which is within its authority and cannot conflict — Tab5
-refuses to close RLY0 while `IsLocked` is non-zero. Steady state costs zero
-`Switch.Set` calls; each transition costs exactly one.
+**This script is the sole writer of RLY0.** Once a second it evaluates both inputs:
+Shelly's anti-cycle state has first priority, followed by `Tab5IsLocked`. It opens
+RLY0 if either hold is active and closes it only when both are clear. A definite
+observed match costs no `Switch.Set` call.
 
 Correcting `IsLocked` by hand in the Shelly UI still clears a lock, because the
 release is driven by the script's own hold rather than by an event edge.
@@ -142,19 +139,19 @@ Not set by the script — configure these on the Shelly before installing:
   are owned by the declaring script. Two scripts declaring the same names create
   two sets, and Tab5's `normalize_shelly1_components` rejects any name it finds
   twice — rejecting the **entire acquisition**, so the device reads as unavailable
-  rather than as an obvious duplicate fault. Exactly six should exist, one per name.
-- **Mind the ten-component budget.** This script uses seven of the device's ten
-  slots. If slots get tight, `MaxLOcntr` and `TimeToResetLOcntr` are the two least
-  likely to need field tuning and could become constants in the script.
-- `switch:0` power-on default **on**, so RLY0 closes on boot and a script failure
-  leaves the pump able to run.
+  rather than as an obvious duplicate fault. Exactly three should exist, one per
+  interface name.
+- **Mind the ten-component budget.** This script uses three of the device's ten
+  slots; its five tuning settings are constants in the script.
+- `switch:0` power-on default **off**, so RLY0 starts open. The script preserves
+  that state through its five-second initialization delay.
 - `input:0` in a mode that reports a level in `status.state`, since edges are taken
   from the status handler.
 - The script set to **run on startup**.
 
 ### The `@meta` line
 
-It must be the **first line of the file**. It is what declares the six virtual
+It must be the **first line of the file**. It is what declares the three virtual
 components; anywhere else and `Script.getVcHandle` returns `undefined` for every
 one of them. The script guards against that and logs a warning rather than
 throwing, but nothing is published to Tab5 until it is fixed.
@@ -214,6 +211,7 @@ edge always corresponds to the contactor de-energizing, and that `Shelly.call` o
 `switch:0` is not contended by any other script or schedule on the device.
 
 `tests/shelly1-anti-chatter.test.js` runs this file in a stubbed Shelly runtime and
-covers the relay truth table, commanded-stop suppression, genuine short cycles, the
-strikeout path, and a missing `Tab5IsLocked` handle. It proves the script's
-decisions, not the device's RPC shapes or the physical relay.
+covers the five-second startup delay, hard-lock reassertion, relay truth table,
+commanded-stop suppression, genuine short cycles, the strikeout path, the exact
+three-component declaration, and a missing `Tab5IsLocked` handle. It proves the
+script's decisions, not the device's RPC shapes or the physical relay.

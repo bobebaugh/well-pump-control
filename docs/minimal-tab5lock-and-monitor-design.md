@@ -72,10 +72,10 @@ controls, ADC filtering changes, sample-period changes, and a general system-wid
 coordination framework. Consolidating the Shelly acquisition is in scope; other
 loop optimization is separate.
 
-Mechanical and hardwired controls remain in place. The owner-selected posture
-permits operation after a Shelly reboot until Tab5 reasserts an outstanding
-inhibit. Power-on RLY0 stays ON/closed; no five-second startup hold is added.
-Boot/recovery exposure is not bounded to one cycle during lost communication.
+Mechanical and hardwired controls remain in place. RLY0's power-on default is
+OFF/open. The script initializes `Tab5IsLocked` false and holds RLY0 open for five
+seconds, during which Tab5 may reassert an outstanding hard lock. If it does not,
+the script closes RLY0 and starts normal processing when the delay expires.
 
 ## 2. Fields and authority
 
@@ -99,14 +99,16 @@ Otherwise it requests RLY0 open. Only issue a relay RPC when observed output
 differs from this policy. RPC acceptance and firmware-reported output are not
 proof of physical contact position.
 
-The new Boolean is non-persisted, defaults false on Shelly reboot, and is read
-by the script. A missing/unusable Boolean handle removes Tab5's contribution
-only; it must never clear or override a nonzero Shelly lock. The script never
-writes it at all — not even at startup — because a script restart without a
-device reboot must not wipe an inhibition Tab5 still believes it holds.
+The new Boolean is non-persisted and defaults false. The script writes that false
+seed during initialization, then polls the value once a second for Tab5 changes.
+The five-second hold-open window lets Tab5 reassert a hard lock before false may
+close RLY0. A missing/unusable Boolean handle removes Tab5's contribution only; it
+must never clear or override a nonzero Shelly lock.
 
-Preserve the existing short-cycle algorithm and its settings in this unit unless
-the owner separately authorizes their alteration.
+Preserve the existing short-cycle algorithm. `MinRuntime`, `InitLockTime`,
+`MaxLOcntr`, `TimeToResetLOcntr`, and `InitDelay` are constants at the beginning of
+the script so the owner can edit them in the Shelly script editor. Only
+`IsLocked`, `loCntr`, and `Tab5IsLocked` are declared in `@meta`.
 
 **A commanded stop is not a short cycle.** Applying Tab5's inhibition opens RLY0,
 which de-energizes the contactor and produces a falling SW edge indistinguishable

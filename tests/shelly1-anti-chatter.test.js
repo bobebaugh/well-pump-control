@@ -17,6 +17,11 @@ const vm = require("node:vm");
 
 const SOURCE = fs.readFileSync(path.join(__dirname, "..", "shelly1", "anti-chatter.js"), "utf8");
 const META = JSON.parse(/^\/\/ @meta (.*)$/m.exec(SOURCE.split("\n")[0])[1]);
+function setting(name) {
+  return Number(new RegExp(`let ${name} = (\\d+);`).exec(SOURCE)[1]);
+}
+const INIT_DELAY = setting("InitDelay");
+const INIT_LOCK_TIME = setting("InitLockTime");
 
 function startScript(options = {}) {
   const declared = options.declared ?? Object.keys(META.vc);
@@ -27,7 +32,7 @@ function startScript(options = {}) {
   for (const [key, spec] of Object.entries(META.vc)) values[key] = spec.config.default_value;
 
   // null is a meaningful value here (unreadable output), so ?? would swallow it.
-  const relay = { output: options.relayOutput === undefined ? true : options.relayOutput };
+  const relay = { output: options.relayOutput === undefined ? false : options.relayOutput };
   const input = { state: options.inputState ?? false };
 
   const handles = {};
@@ -80,6 +85,16 @@ function startScript(options = {}) {
   return api;
 }
 
+function startNormal(options = {}) {
+  const s = startScript(options);
+  for (let i = 0; i < INIT_DELAY; i += 1) {
+    s.advance(1000);
+    s.tick();
+  }
+  s.calls.length = 0;
+  return s;
+}
+
 // A pump run: relay closed, SW rises, time passes, SW falls.
 function runPump(s, seconds, betweenStartAndStop) {
   s.edge(true);
@@ -88,21 +103,41 @@ function runPump(s, seconds, betweenStartAndStop) {
   s.edge(false);
 }
 
-test("startup leaves the relay closed and writes no relay call when already closed", () => {
-  const s = startScript({ relayOutput: true });
-  assert.equal(s.relayWrites().length, 0);
-  assert.equal(s.relay.output, true);
+test("startup initializes Tab5IsLocked false and holds the relay open for five seconds", () => {
+  const s = startScript({ relayOutput: false });
+  assert.equal(s.values.tab5IsLocked, false);
+  for (let i = 1; i < INIT_DELAY; i += 1) {
+    s.advance(1000); s.tick();
+    assert.equal(s.relay.output, false, `relay remains open at ${i}s`);
+  }
+  s.advance(1000); s.tick();
+  assert.equal(s.relay.output, true, "no Tab5 hard lock, so normal processing closes at 5s");
   assert.equal(s.lock(), 0);
 });
 
-test("steady state with both holds clear issues no relay call", () => {
+test("startup corrects an unexpectedly closed relay to open immediately", () => {
   const s = startScript({ relayOutput: true });
+  assert.deepEqual(s.relayWrites().map(c => c.params.on), [false]);
+  assert.equal(s.relay.output, false);
+});
+
+test("Tab5 can reassert a hard lock during initialization", () => {
+  const s = startScript({ relayOutput: false });
+  s.advance(2000); s.tick();
+  s.setTab5(true);
+  for (let i = 1; i < INIT_DELAY; i += 1) { s.advance(1000); s.tick(); }
+  assert.equal(s.values.tab5IsLocked, true);
+  assert.equal(s.relay.output, false, "Tab5 hard lock keeps RLY0 open after the delay");
+});
+
+test("steady state with both holds clear issues no relay call", () => {
+  const s = startNormal();
   for (let i = 0; i < 5; i += 1) { s.advance(1000); s.tick(); }
   assert.equal(s.relayWrites().length, 0);
 });
 
 test("Tab5 inhibition opens the relay once and release closes it once", () => {
-  const s = startScript({ relayOutput: true });
+  const s = startNormal();
   s.setTab5(true);
   s.advance(1000); s.tick();
   assert.deepEqual(s.relayWrites().map(c => c.params.on), [false]);
@@ -117,7 +152,7 @@ test("Tab5 inhibition opens the relay once and release closes it once", () => {
 });
 
 test("a stop caused by Tab5 inhibition scores no strike", () => {
-  const s = startScript({ relayOutput: true });
+  const s = startNormal();
   runPump(s, 20, () => {
     // Tab5 asserts, the script applies it, and the contactor drops.
     s.setTab5(true);
@@ -129,7 +164,7 @@ test("a stop caused by Tab5 inhibition scores no strike", () => {
 });
 
 test("three Tab5 inhibitions never reach the permanent lockout", () => {
-  const s = startScript({ relayOutput: true });
+  const s = startNormal();
   for (let i = 0; i < 3; i += 1) {
     runPump(s, 15, () => { s.setTab5(true); s.tick(); });
     s.setTab5(false);
@@ -140,15 +175,15 @@ test("three Tab5 inhibitions never reach the permanent lockout", () => {
 });
 
 test("a genuine short cycle still scores a strike and holds the relay open", () => {
-  const s = startScript({ relayOutput: true });
+  const s = startNormal();
   runPump(s, 20);
   assert.equal(s.strikes(), 1);
-  assert.equal(s.lock(), META.vc.initLockTime.config.default_value);
+  assert.equal(s.lock(), INIT_LOCK_TIME);
   assert.equal(s.relay.output, false);
 });
 
 test("a run at or beyond MinRuntime scores nothing", () => {
-  const s = startScript({ relayOutput: true });
+  const s = startNormal();
   runPump(s, 60);
   assert.equal(s.strikes(), 0);
   assert.equal(s.lock(), 0);
@@ -157,14 +192,14 @@ test("a run at or beyond MinRuntime scores nothing", () => {
 test("a genuine short cycle scores even while Tab5 intends an inhibit it has not applied", () => {
   // The distinction a bare level check would lose: Tab5's flag is set, but the
   // script has not ticked, so it did not cause this stop.
-  const s = startScript({ relayOutput: true });
+  const s = startNormal();
   runPump(s, 20, () => { s.setTab5(true); });
   assert.equal(s.strikes(), 1, "an unapplied intent must not excuse a real short cycle");
 });
 
 test("intent withdrawn before the falling edge is processed still suppresses the strike", () => {
   // The latch has to outlive the intent that caused it.
-  const s = startScript({ relayOutput: true });
+  const s = startNormal();
   s.edge(true);
   s.advance(20_000);
   s.setTab5(true);
@@ -175,7 +210,7 @@ test("intent withdrawn before the falling edge is processed still suppresses the
 });
 
 test("three genuine short cycles reach the permanent lockout", () => {
-  const s = startScript({ relayOutput: true });
+  const s = startNormal();
   for (let i = 0; i < 3; i += 1) {
     s.values.isLocked = 0;   // stand in for the lock expiring between attempts
     runPump(s, 10);
@@ -192,7 +227,7 @@ test("relay truth table", () => {
     { lock: 90, tab5: true, closed: false, label: "both held" },
   ];
   for (const item of cases) {
-    const s = startScript({ relayOutput: true });
+    const s = startNormal();
     s.values.isLocked = item.lock;
     s.setTab5(item.tab5);
     s.advance(1000); s.tick();
@@ -201,7 +236,7 @@ test("relay truth table", () => {
 });
 
 test("local lock expiry with Tab5 still held keeps the relay open", () => {
-  const s = startScript({ relayOutput: true });
+  const s = startNormal();
   s.values.isLocked = 2;
   s.setTab5(true);
   for (let i = 0; i < 4; i += 1) { s.advance(1000); s.tick(); }
@@ -211,7 +246,7 @@ test("local lock expiry with Tab5 still held keeps the relay open", () => {
 
 test("a missing Tab5IsLocked handle never clears the local lock", () => {
   const declared = Object.keys(META.vc).filter(k => k !== "tab5IsLocked");
-  const s = startScript({ relayOutput: true, declared });
+  const s = startNormal({ declared });
   s.values.isLocked = 90;
   s.advance(1000); s.tick();
   assert.equal(s.relay.output, false, "IsLocked still opens the relay");
@@ -221,29 +256,30 @@ test("a missing Tab5IsLocked handle never clears the local lock", () => {
 
 test("a missing Tab5IsLocked handle leaves the relay closed when nothing else holds it", () => {
   const declared = Object.keys(META.vc).filter(k => k !== "tab5IsLocked");
-  const s = startScript({ relayOutput: true, declared });
+  const s = startNormal({ declared });
   s.advance(1000); s.tick();
   assert.equal(s.relay.output, true, "the agreed fail-permissive posture");
 });
 
-test("the script never writes Tab5IsLocked", () => {
-  const s = startScript({ relayOutput: true });
+test("the script seeds Tab5IsLocked false, then preserves Tab5 updates", () => {
+  const s = startNormal();
+  assert.equal(s.values.tab5IsLocked, false);
   s.setTab5(true);
   for (let i = 0; i < 5; i += 1) { s.advance(1000); s.tick(); }
-  assert.equal(s.values.tab5IsLocked, true, "Tab5 owns this component");
+  assert.equal(s.values.tab5IsLocked, true, "normal polling does not overwrite Tab5");
   runPump(s, 10);
   assert.equal(s.values.tab5IsLocked, true);
 });
 
 test("an unreadable relay output produces no relay call", () => {
-  const s = startScript({ relayOutput: null });
+  const s = startNormal({ relayOutput: null });
   s.setTab5(true);
   s.advance(1000); s.tick();
   assert.equal(s.relayWrites().length, 0, "unknown evidence is not a mismatch");
 });
 
 test("an edge seen while a hold is applied does not begin a run", () => {
-  const s = startScript({ relayOutput: true });
+  const s = startNormal();
   s.setTab5(true);
   s.advance(1000); s.tick();
   s.edge(true);            // cannot happen physically; must not arm a run either
@@ -255,10 +291,21 @@ test("an edge seen while a hold is applied does not begin a run", () => {
 });
 
 test("the declared component set stays inside the device budget", () => {
-  assert.equal(Object.keys(META.vc).length, 7);
+  assert.deepEqual(Object.keys(META.vc), ["isLocked", "lockoutCount", "tab5IsLocked"]);
   assert.ok(Object.keys(META.vc).length <= 10, "ten virtual-component slots on this device");
   const names = Object.values(META.vc).map(v => v.config.name);
   assert.equal(new Set(names).size, names.length, "duplicate names break Tab5 discovery");
   assert.equal(META.vc.tab5IsLocked.config.persisted, false);
   assert.equal(META.vc.tab5IsLocked.config.default_value, false);
+});
+
+test("anti-cycle tuning remains editable as constants at the beginning of the script", () => {
+  assert.equal(setting("MinRuntime"), 60);
+  assert.equal(setting("InitLockTime"), 90);
+  assert.equal(setting("MaxLOcntr"), 3);
+  assert.equal(setting("TimeToResetLOcntr"), 3600);
+  assert.equal(setting("InitDelay"), 5);
+  for (const removed of ["minRuntime", "initLockTime", "maxLockoutCount", "lockoutResetTime"]) {
+    assert.equal(META.vc[removed], undefined, `${removed} must not consume a component slot`);
+  }
 });

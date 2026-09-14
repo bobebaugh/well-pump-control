@@ -9,6 +9,10 @@ and the Shelly script becomes the sole writer of the relay, closing it exactly w
 `IsLocked == 0 AND Tab5IsLocked == false`. A commanded stop that applies Tab5's
 inhibition no longer scores a short-cycle strike; the script latches why it opened
 the relay so a genuine short cycle coinciding with an unapplied intent still scores.
+RLY0 now powers on open. The script seeds `Tab5IsLocked` false, holds the relay open
+for five seconds so Tab5 can reassert a hard lock, and then begins normal one-second
+processing. Its `@meta` declares only the three interface fields; the five tuning
+values are owner-editable constants at the beginning of the script.
 
 Conditions are three-valued across clauses: one definite false decides an `all`
 and one definite true decides an `any`, whatever is unknown beside it. Absent
@@ -39,8 +43,9 @@ verified; no rule depends on `total`.
   freeze/reassert/close sequence, E007's authored missing-EM close with H001
   disabled, two Monitor owners, unavailable evidence producing no write, and a
   fresh runtime reconciling an old true flag to false.
-- 18 Shelly script tests pass. `tests/shelly1-anti-chatter.test.js` runs
-  `shelly1/anti-chatter.js` in a stubbed Shelly runtime: relay truth table,
+- 21 Shelly script tests pass. `tests/shelly1-anti-chatter.test.js` runs
+  `shelly1/anti-chatter.js` in a stubbed Shelly runtime: five-second startup hold,
+  hard-lock reassertion, exact three-component declaration, relay truth table,
   commanded-stop suppression, intent withdrawn before the edge, a genuine short
   cycle coinciding with an unapplied intent, the strikeout path, lock expiry with
   Tab5 still held, and a missing Boolean handle never clearing the local lock.
