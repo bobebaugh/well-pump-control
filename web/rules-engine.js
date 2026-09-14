@@ -678,7 +678,9 @@ function simScenarioFromForm() {
   const value = id => Number(document.querySelector(id).value);
   return {
     cycles: value('#sim-cycles'), transientRelease: value('#sim-transient'),
-    secondsPerCycle: value('#sim-seconds'), injections: simState.injections
+    secondsPerCycle: value('#sim-seconds'), counterHold: value('#sim-hold'),
+    assumeCounter: document.querySelector('#sim-counter').checked,
+    injections: simState.injections
   };
 }
 
@@ -704,7 +706,7 @@ function renderSimInjections() {
 function renderSimulation() {
   if (!state.draft || typeof simulateScenario !== "function") return;
   for (const [range, out] of [['#sim-cycles', '#sim-cycles-value'], ['#sim-transient', '#sim-transient-value'],
-    ['#sim-seconds', '#sim-seconds-value'], ['#sim-inspect', '#sim-inspect-value']]) {
+    ['#sim-seconds', '#sim-seconds-value'], ['#sim-hold', '#sim-hold-value'], ['#sim-inspect', '#sim-inspect-value']]) {
     document.querySelector(out).textContent = document.querySelector(range).value;
   }
   const { steps } = simulateScenario(authoringDraft(), simScenarioFromForm());
@@ -731,6 +733,7 @@ function renderSimulation() {
     <div class="sim-flags">
       ${flag(step.pumpRuns, 'pump running')}${flag(step.tab5Lock === 1, `Tab5Lock ${step.tab5Lock}`)}
       ${flag(step.isLocked !== 0, `IsLocked ${step.isLocked}`)}${flag(step.loCntr > 0, `loCntr ${step.loCntr}`)}
+      ${step.counterName ? flag(step.counterRemaining > 0, `${step.counterName} ${step.counterRemaining}`) : ''}
       ${flag(step.rly0, `RLY0 ${step.rly0 ? 'closed' : 'open'}`)}
       ${flag(step.blind, 'Tab5 blind')}${flag(step.mute, 'Tab5 mute')}${flag(!step.cloud, 'cloud down')}
       ${flag(step.monitor, 'Monitor')}${flag(step.hand, 'HAND')}${flag(!step.demand, 'no demand')}
@@ -738,6 +741,7 @@ function renderSimulation() {
     <dl class="sim-state">
       <dt>Open events</dt><dd>${escapeHtml(step.openEvents.join(', ') || 'none')}</dd>
       <dt>Requesting an inhibit</dt><dd>${escapeHtml(step.holders.join(', ') || 'nobody')}</dd>
+      <dt>Still asserting</dt><dd>${escapeHtml(step.asserting.join(', ') || 'nobody — an open event whose condition no longer evaluates true stops renewing its hold')}</dd>
       <dt>Counters</dt><dd>${escapeHtml(Object.entries(step.counters).map(([k, v]) => `${k}=${v}`).join(', ') || 'none declared')}</dd>
       <dt>Tab5 wrote</dt><dd>${step.wrote === null ? 'nothing — Tab5Lock already matches intent' : escapeHtml(`Tab5Lock = ${step.wrote} — ${step.landed ? 'landed' : 'did not land'}`)}</dd>
       <dt>Why</dt><dd>${escapeHtml(step.reasons.join(' '))}</dd>
@@ -843,7 +847,7 @@ document.querySelector("#engine-analyze").addEventListener("click", runAnalysis)
 // The simulator is a separate script. Guard the wiring so the editor still
 // loads and works if it is absent, rather than taking the page down with it.
 if (typeof simFaultKinds === "function") {
-  for (const id of ['#sim-cycles', '#sim-transient', '#sim-seconds', '#sim-inspect']) {
+  for (const id of ['#sim-cycles', '#sim-transient', '#sim-seconds', '#sim-hold', '#sim-counter', '#sim-inspect']) {
     document.querySelector(id).addEventListener('input', renderSimulation);
   }
   document.querySelector('#sim-add').addEventListener('click', () => {

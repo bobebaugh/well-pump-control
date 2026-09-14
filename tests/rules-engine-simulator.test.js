@@ -181,3 +181,102 @@ test("the browser exposes injection controls and the designed flags", () => {
   assert.match(source, /typeof simFaultKinds === "function"/);
   assert.match(source, /typeof simulateScenario !== "function"/);
 });
+
+const withoutMonitor = () => {
+  const pkg = JSON.parse(JSON.stringify(backup));
+  pkg.authoringPackage.events.find(item => item.id === "H001").enabled = false;
+  return pkg;
+};
+const runOn = (pkg, scenario) => simulateScenario(pkg, scenario).steps;
+
+test("without a counter, an event latched open by lost telemetry holds forever", () => {
+  const steps = runOn(withoutMonitor(), { cycles: 40, transientRelease: 10, injections: [
+    { kind: "event", eventId: "E007", atCycle: 5 }, { kind: "em", atCycle: 8 }] });
+  assert.equal(steps.at(-1).pumpRuns, false);
+  assert.equal(steps.at(-1).tab5Lock, 1);
+  assert.deepEqual(steps.at(-1).openEvents, ["E007"]);
+});
+
+test("the assumed counter releases the hold while the event stays latched", () => {
+  const steps = runOn(withoutMonitor(), { cycles: 40, transientRelease: 10, assumeCounter: true,
+    counterHold: 10, injections: [{ kind: "event", eventId: "E007", atCycle: 5 }, { kind: "em", atCycle: 8 }] });
+  const end = steps.at(-1);
+  assert.equal(end.pumpRuns, true, "the physical hold expires");
+  assert.equal(end.tab5Lock, 0);
+  assert.equal(end.counterRemaining, 0);
+  assert.deepEqual(end.openEvents, ["E007"], "the event stays open as evidence for the operator");
+  assert.equal(end.counterName, "Tab5IsLocked");
+});
+
+test("renewal follows the condition, not the event being open", () => {
+  // The distinction the simulator exists to expose. An open event whose
+  // opening condition no longer evaluates true stops renewing its hold; if
+  // renewal tracked "still open" instead, the counter would never release.
+  const steps = runOn(withoutMonitor(), { cycles: 40, transientRelease: 10, assumeCounter: true,
+    counterHold: 10, injections: [{ kind: "event", eventId: "E007", atCycle: 5 }, { kind: "em", atCycle: 8 }] });
+  assert.deepEqual(at(steps, 7).asserting, ["E007"]);
+  assert.deepEqual(at(steps, 20).asserting, [], "undecided telemetry is not an assertion");
+  assert.ok(at(steps, 20).openEvents.includes("E007"));
+  const falling = steps.map(step => step.counterRemaining);
+  assert.ok(falling.some(value => value > 0), "the counter was loaded while E007 was asserting");
+  assert.equal(falling.at(-1), 0, "and ran down once it stopped");
+  assert.ok(falling.lastIndexOf(0) > falling.findIndex(value => value > 0),
+    "the zero must come after the hold, not merely at the start");
+});
+
+test("a counter preset is visible for exactly the cycles it was given", () => {
+  // transientRelease must clear E007's two-observation qualification, or the
+  // event never opens and there is nothing to measure.
+  const steps = runOn(withoutMonitor(), { cycles: 40, transientRelease: 3, assumeCounter: true,
+    counterHold: 6, injections: [{ kind: "event", eventId: "E007", atCycle: 5 }] });
+  const held = steps.filter(step => step.counterRemaining > 0).length;
+  assert.ok(held >= 6, `a hold of 6 must survive at least 6 cycles, saw ${held}`);
+  assert.equal(steps.at(-1).counterRemaining, 0);
+  assert.equal(steps.at(-1).pumpRuns, true);
+});
+
+test("the hold length is a variable and a longer hold keeps the pump off longer", () => {
+  const scenario = hold => ({ cycles: 60, transientRelease: 5, assumeCounter: true, counterHold: hold,
+    injections: [{ kind: "event", eventId: "E007", atCycle: 5 }] });
+  const stopped = hold => runOn(withoutMonitor(), scenario(hold)).filter(step => !step.pumpRuns).length;
+  assert.ok(stopped(30) > stopped(5));
+});
+
+test("a counter declared in the package is used without assuming one", () => {
+  const pkg = withoutMonitor();
+  pkg.authoringPackage.systemFields.push({
+    id: "system-lock-hold", systemName: "Tab5LockHold", label: "Tab5 lock hold",
+    source: "session", runtimeRole: "counter", type: "integer", unit: "cycles",
+    initialValue: 0, maxValue: 60, logging: { mode: "change" }, assignmentTarget: true
+  });
+  pkg.authoringPackage.events.find(item => item.id === "E007").onOpen.assignments
+    .push({ target: "Tab5LockHold", value: 8, ownership: "whileOpen" });
+  const steps = runOn(pkg, { cycles: 40, transientRelease: 10, injections: [
+    { kind: "event", eventId: "E007", atCycle: 5 }, { kind: "em", atCycle: 8 }] });
+  assert.equal(steps.at(-1).counterName, "Tab5LockHold");
+  assert.equal(steps.at(-1).counterAssumed, false);
+  assert.equal(steps.at(-1).pumpRuns, true, "the declared counter releases the hold too");
+});
+
+test("Monitor stops the write, so the counter cannot deliver its release", () => {
+  // Two things specified separately that collide: Monitor stops all
+  // rules-originated writes so a Shelly reboot is the clear path, and the
+  // counter releases itself. The release has nowhere to go.
+  const steps = run({ cycles: 40, transientRelease: 10, assumeCounter: true, counterHold: 5,
+    injections: [{ kind: "event", eventId: "E007", atCycle: 5 }, { kind: "em", atCycle: 8 }] });
+  const end = steps.at(-1);
+  assert.equal(end.monitor, true, "H001 engages Monitor when the EM goes");
+  assert.equal(end.counterRemaining, 0, "the counter has run down");
+  assert.equal(end.tab5Lock, 1, "but Tab5 stopped writing, so the Shelly never hears about it");
+  assert.equal(end.pumpRuns, false);
+});
+
+test("the counter controls are wired and shown", () => {
+  const html = fs.readFileSync(path.join(root, "web", "rules-engine.html"), "utf8");
+  const source = fs.readFileSync(path.join(root, "web", "rules-engine.js"), "utf8");
+  assert.ok(html.includes('id="sim-counter"'));
+  assert.ok(html.includes('id="sim-hold"'));
+  assert.match(html, /Tab5IsLocked/);
+  assert.match(source, /assumeCounter: document\.querySelector\('#sim-counter'\)\.checked/);
+  assert.match(source, /Still asserting/);
+});

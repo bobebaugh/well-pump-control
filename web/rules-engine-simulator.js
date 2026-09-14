@@ -35,12 +35,35 @@
 // the pressure sensor, the tank, the motor. Those are hardware that works.
 
 const SIM_PUMP_TARGET = "PumpEnable";
+const SIM_ASSUMED_COUNTER = "Tab5IsLocked";
 const SIM_MAX_CYCLES = 120;
 const SIM_INIT_LOCK_TIME = 90;   // seconds, matches the script constant
 const SIM_MAX_LOCKOUT = 3;
 
 function simDefaultScenario() {
-  return { cycles: 60, secondsPerCycle: 2, transientRelease: 30, injections: [] };
+  return {
+    cycles: 60, secondsPerCycle: 2, transientRelease: 30,
+    assumeCounter: false, counterHold: 30, injections: []
+  };
+}
+
+// A counter field the package actually declares. The editor cannot author one
+// yet, so this only finds it in a hand-edited backup.
+function simDeclaredCounters(pkg) {
+  return (pkg.systemFields || []).filter(field => field.runtimeRole === "counter");
+}
+
+// A counter holds an absolute expiry rather than a value that gets decremented,
+// so a preset is max(existing, now + 1 + N) and the visible value is derived.
+// The +1 is the frozen-snapshot lag: an event assigning on cycle t can only be
+// seen from t+1, so without it a preset of N would be visible for N-1 cycles.
+function simLoadCounter(kernel, name, cycles) {
+  const expiry = kernel.tick + 1 + Number(cycles);
+  kernel.counters[name] = Math.max(kernel.counters[name] || 0, expiry);
+}
+
+function simCounterValue(kernel, name) {
+  return Math.max(0, (kernel.counters[name] || 0) - kernel.tick);
 }
 
 // Injections that are not an event opening. Event openings are offered
@@ -222,6 +245,10 @@ function simulateScenario(input, scenarioInput) {
   const total = Math.max(1, Math.min(SIM_MAX_CYCLES, Number(scenario.cycles) || 1));
   const seconds = Math.max(1, Number(scenario.secondsPerCycle) || 2);
   const events = (pkg.events || []).filter(event => event.enabled === true);
+  const declared = simDeclaredCounters(pkg).map(field => field.systemName);
+  const counterNames = new Set(declared);
+  const assumed = scenario.assumeCounter === true;
+  const counterName = assumed ? SIM_ASSUMED_COUNTER : declared[0] || null;
 
   let kernel = simNewKernel();
   let shelly = { isLocked: 0, loCntr: 0, tab5Lock: 0, rly0: true };
@@ -273,12 +300,23 @@ function simulateScenario(input, scenarioInput) {
             held.open = true; held.since = cycle; held.closeCount = 0; opened.push(id);
             if (event.eventClass === "monitor") monitor = true;
             for (const assignment of simAssignments(event, "onOpen")) {
+              if (counterNames.has(assignment.target)) {
+                simLoadCounter(kernel, assignment.target, assignment.value);
+                continue;   // a counter preset is not a hold on hardware
+              }
               if (assignment.ownership !== "whileOpen") continue;
               kernel.owners[assignment.target] = kernel.owners[assignment.target] || {};
               kernel.owners[assignment.target][id] = assignment.value;
             }
           }
         } else {
+          // Is the thing that opened this event still true right now? Undecided
+          // counts as not true.
+          const stillAsserting = injected ? true
+            : trigger.type === "condition" ? simCondition(trigger.condition, snapshot, kernel.previous)
+            : trigger.type === "internal" ? world.emUp === false
+            : false;
+          held.asserting = stillAsserting === true;
           let closeValue = false;
           if (injected) closeValue = false;
           else if (closing.policy === "condition") closeValue = simCondition(closing.condition, snapshot, kernel.previous);
@@ -288,6 +326,26 @@ function simulateScenario(input, scenarioInput) {
           if (closeValue === true) held.closeCount += 1;
           else if (closeValue === false) held.closeCount = 0;
           if (closeValue === null) notes.push(`${id} cannot close: its closing condition reads a field that is not present.`);
+          // RENEWAL IS TIED TO THE CONDITION, NOT TO THE EVENT BEING OPEN.
+          //
+          // Renewing for as long as the event is open sounds equivalent and is
+          // not. An event whose closing condition has gone undecided — because
+          // the device it reads has vanished — stays open forever, so a hold
+          // renewed on "still open" is renewed forever too, and the counter
+          // never releases in the one case it exists for.
+          //
+          // Tying renewal to the opening condition still evaluating true
+          // separates the two jobs cleanly: the EVENT is the evidence and stays
+          // latched for the operator to read, while the COUNTER is the physical
+          // assertion and decays as soon as the grounds for it can no longer be
+          // confirmed. Undecided is not true, so lost telemetry stops renewal.
+          if (stillAsserting === true) {
+            for (const assignment of simAssignments(event, "onOpen")) {
+              if (assignment.ownership === "whileOpen" && counterNames.has(assignment.target)) {
+                simLoadCounter(kernel, assignment.target, assignment.value);
+              }
+            }
+          }
           if (closeValue === true && held.closeCount >= need) {
             held.open = false; held.closeCount = 0; closed.push(id);
             for (const owned of Object.values(kernel.owners)) delete owned[id];
@@ -298,7 +356,18 @@ function simulateScenario(input, scenarioInput) {
     }
 
     const holders = Object.keys(kernel.owners[SIM_PUMP_TARGET] || {});
-    const intent = frozen ? 0 : (holders.length ? 1 : 0);
+    // With a counter in play the inhibit is a renewed hold, not a latch: while
+    // something holds the pump the counter is pushed forward, and when nothing
+    // does, or Tab5 stops running events, it runs down and releases itself.
+    const asserting = holders.filter(id => (kernel.events[id] || {}).asserting === true);
+    if (assumed && asserting.length && !frozen) {
+      simLoadCounter(kernel, SIM_ASSUMED_COUNTER, scenario.counterHold);
+    }
+    const counterRemaining = counterName ? simCounterValue(kernel, counterName) : 0;
+    const counterDriving = assumed || (counterName !== null && kernel.counters[counterName] !== undefined);
+    const intent = frozen ? 0
+      : counterDriving ? (counterRemaining > 0 ? 1 : 0)
+      : (holders.length ? 1 : 0);
     let wrote = null, landed = false;
     if (!frozen && intent !== shelly.tab5Lock) {
       wrote = intent;
@@ -315,7 +384,7 @@ function simulateScenario(input, scenarioInput) {
     else if (!world.demand) reasons.push("The pressure switch is satisfied. No demand.");
     else if (world.hand) reasons.push("HAND hard-wires the ground loop past the automation and the relay.");
     else if (shelly.isLocked !== 0) reasons.push(`The Shelly holds the relay open: IsLocked = ${shelly.isLocked}${shelly.isLocked === -1 ? " (permanent until reboot)" : ""}, loCntr = ${shelly.loCntr}.`);
-    else if (shelly.tab5Lock !== 0) reasons.push(`Tab5Lock = 1${holders.length ? `, held by ${holders.join(", ")}` : " with nobody holding it"}.`);
+    else if (shelly.tab5Lock !== 0) reasons.push(`Tab5Lock = 1${holders.length ? `, held by ${holders.join(", ")}` : " with nobody holding it"}${counterDriving ? `, ${counterName} = ${counterRemaining}` : ""}.`);
     else reasons.push("IsLocked = 0 and Tab5Lock = 0, so the ground loop is complete.");
     if (shelly.tab5Lock === 1 && !holders.length && !frozen) {
       notes.push("Tab5Lock is set but no event holds the pump. It is stranded until Tab5 can write again.");
@@ -328,6 +397,8 @@ function simulateScenario(input, scenarioInput) {
       intent, wrote, landed, monitor: frozen,
       blind: !world.emUp, mute: !world.shelly1Up, cloud: world.lan,
       power: world.utilityPower, hand: world.hand, demand: world.demand,
+      counterName, counterRemaining, counterDriving, counterAssumed: assumed,
+      asserting: asserting.slice(),
       openEvents: Object.entries(kernel.events).filter(([, held]) => held.open).map(([id]) => id),
       holders: holders.slice(),
       counters: Object.fromEntries(Object.entries(kernel.counters)
@@ -341,6 +412,7 @@ if (typeof module === "object" && module.exports) {
   module.exports = {
     simulateScenario, simCondition, simWorldAt, simInjectedOpen, simShellyTick,
     simDefaultScenario, simFaultKinds, simInjectableEvents,
+    simDeclaredCounters, simLoadCounter, simCounterValue, SIM_ASSUMED_COUNTER,
     SIM_PUMP_TARGET, SIM_MAX_CYCLES, SIM_INIT_LOCK_TIME, SIM_MAX_LOCKOUT
   };
 }
