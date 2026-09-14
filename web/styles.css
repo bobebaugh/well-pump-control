@@ -432,3 +432,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(67,168,255,.
 .control-button.danger { border-color: #a84b4b; background: #512323; }
 .control-button:disabled { cursor: wait; opacity: .5; }
 @media (max-width: 700px) { .operator-actions { grid-template-columns: 1fr; } }
+
+.analysis-tiles { grid-template-columns: 1fr; margin-top: 16px; }
+.validation-finding.info code { color: var(--muted); }
+#analysis-holds .validation-finding code { color: var(--muted); }
+#analysis-holds .validation-finding.warning code { color: var(--amber); }
+.analysis-intro { color: var(--muted); font-size: .7rem; margin: 0 0 10px; }
+.analysis-holds-heading { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.analysis-limits { margin-top: 14px; color: var(--muted); font-size: .68rem; }
+.analysis-limits summary { cursor: pointer; }
+.analysis-limits ul { margin: 8px 0 0; padding-left: 18px; }
+.analysis-limits li { margin: 4px 0; }

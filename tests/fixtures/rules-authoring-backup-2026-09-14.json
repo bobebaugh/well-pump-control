@@ -1,0 +1,779 @@
+{
+  "kind": "well-pump-rules-authoring-backup",
+  "backupVersion": 1,
+  "authoringPackage": {
+    "schemaVersion": 3,
+    "devices": [
+      {
+        "id": "shelly-em-main",
+        "label": "Shelly EM",
+        "driver": "shelly-gen1-em",
+        "address": "192.168.50.141",
+        "enabled": true,
+        "fields": [
+          {
+            "systemName": "PumpWatts",
+            "label": "Pump real power",
+            "object": "emeter/0.power",
+            "type": "number",
+            "unit": "W",
+            "access": "read",
+            "logging": {
+              "mode": "delta",
+              "threshold": 10
+            }
+          },
+          {
+            "systemName": "SupplyVoltage",
+            "label": "Supply voltage",
+            "object": "emeter/0.voltage",
+            "type": "number",
+            "unit": "V",
+            "access": "read",
+            "logging": {
+              "mode": "delta",
+              "threshold": 2
+            }
+          },
+          {
+            "systemName": "PowerFactor",
+            "label": "Power factor",
+            "object": "emeter/0.pf",
+            "type": "number",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "delta",
+              "threshold": 0.05
+            }
+          },
+          {
+            "systemName": "ShellyEnergyWh",
+            "label": "Shelly cumulative energy",
+            "object": "emeter/0.total",
+            "type": "number",
+            "unit": "Wh",
+            "access": "read",
+            "logging": {
+              "mode": "none"
+            }
+          },
+          {
+            "systemName": "ShellyEMAvailable",
+            "label": "Shelly EM available",
+            "object": "$availability",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          }
+        ]
+      },
+      {
+        "id": "shelly-1-main",
+        "label": "Shelly 1 Gen4",
+        "driver": "shelly-gen4-switch",
+        "address": "192.168.50.201",
+        "enabled": true,
+        "fields": [
+          {
+            "systemName": "PumpEnable",
+            "label": "Pump enable",
+            "object": "RLY(0)",
+            "type": "boolean",
+            "unit": null,
+            "access": "readWrite",
+            "logging": {
+              "mode": "change"
+            },
+            "write": {
+              "method": "Switch.Set",
+              "parameters": {
+                "id": 0,
+                "valueParameter": "on"
+              },
+              "normalValue": true
+            }
+          },
+          {
+            "systemName": "ContactorFlag",
+            "label": "Contactor flag",
+            "object": "SW(0)",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          },
+          {
+            "systemName": "IsLocked",
+            "label": "Shelly script lock remaining",
+            "object": "UDF(IsLocked)",
+            "type": "integer",
+            "unit": "s",
+            "access": "read",
+            "logging": {
+              "mode": "delta",
+              "threshold": 10
+            }
+          },
+          {
+            "systemName": "Shelly1Available",
+            "label": "Shelly 1 available",
+            "object": "$availability",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          }
+        ]
+      },
+      {
+        "id": "tab5-main",
+        "label": "Tab5",
+        "driver": "tab5-runtime",
+        "address": "local",
+        "enabled": true,
+        "fields": [
+          {
+            "systemName": "PressureADCCounts",
+            "label": "Pressure ADC count",
+            "object": "values.adc_raw",
+            "type": "integer",
+            "unit": "count",
+            "access": "read",
+            "logging": {
+              "mode": "none"
+            }
+          },
+          {
+            "systemName": "PressureSensorCommissioned",
+            "label": "Pressure sensor commissioned",
+            "object": "status.pressure_sensor_commissioned",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          },
+          {
+            "systemName": "ADCValid",
+            "label": "ADC available",
+            "object": "status.adc_available",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          },
+          {
+            "systemName": "ClockValid",
+            "label": "Clock synchronized",
+            "object": "status.clock_synced",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          },
+          {
+            "systemName": "WiFiConnected",
+            "label": "Wi-Fi connected",
+            "object": "status.wifi_connected",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          },
+          {
+            "systemName": "CloudAvailable",
+            "label": "Cloud delivery available",
+            "object": "status.cloud_available",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          },
+          {
+            "systemName": "BatteryPercent",
+            "label": "Battery percent",
+            "object": "values.battery_percent",
+            "type": "number",
+            "unit": "%",
+            "access": "read",
+            "logging": {
+              "mode": "delta",
+              "threshold": 5
+            }
+          },
+          {
+            "systemName": "BufferUsedPercent",
+            "label": "RAM queue used",
+            "object": "status.buffer_used_pct",
+            "type": "number",
+            "unit": "%",
+            "access": "read",
+            "logging": {
+              "mode": "delta",
+              "threshold": 5
+            }
+          },
+          {
+            "systemName": "RecordsLost",
+            "label": "Records lost",
+            "object": "status.records_lost",
+            "type": "integer",
+            "unit": "count",
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          }
+        ]
+      }
+    ],
+    "calculatedFields": [
+      {
+        "id": "calc-pressure",
+        "label": "Calibrated pressure",
+        "kind": "expression",
+        "expression": "(PressureADCCounts - 3732.02) / 211.492",
+        "output": {
+          "systemName": "PressurePSI",
+          "label": "Calibrated pressure",
+          "type": "number",
+          "unit": "psi",
+          "logging": {
+            "mode": "delta",
+            "threshold": 2
+          }
+        }
+      },
+      {
+        "id": "calc-load-ratio",
+        "label": "Pump load ratio",
+        "kind": "expression",
+        "expression": "(PumpWatts / 2900) * 100",
+        "output": {
+          "systemName": "LoadRatioPercent",
+          "label": "Pump load ratio",
+          "type": "number",
+          "unit": "%",
+          "logging": {
+            "mode": "delta",
+            "threshold": 5
+          }
+        }
+      },
+      {
+        "id": "calc-tank",
+        "label": "Main tank Boyle-law model",
+        "kind": "function",
+        "functionId": "boyle_tank",
+        "inputs": {
+          "pressure": "PressurePSI"
+        },
+        "parameters": {
+          "effectiveTankGallons": 79.3,
+          "prechargeGaugePsi": 38,
+          "atmosphericPressurePsi": 13.07,
+          "regressionWindowSeconds": 10,
+          "minimumSamples": 8
+        },
+        "outputs": [
+          {
+            "systemName": "TankWaterGallons",
+            "label": "Estimated tank water",
+            "type": "number",
+            "unit": "gal",
+            "logging": {
+              "mode": "delta",
+              "threshold": 1
+            }
+          },
+          {
+            "systemName": "PressureSlopePSIPerMinute",
+            "label": "Pressure slope",
+            "type": "number",
+            "unit": "psi/min",
+            "logging": {
+              "mode": "delta",
+              "threshold": 0.5
+            }
+          },
+          {
+            "systemName": "TankNetFlowGPM",
+            "label": "Estimated tank net flow",
+            "type": "number",
+            "unit": "GPM",
+            "logging": {
+              "mode": "delta",
+              "threshold": 0.5
+            }
+          },
+          {
+            "systemName": "PumpOffDemandGPM",
+            "label": "Estimated pump-off demand",
+            "type": "number",
+            "unit": "GPM",
+            "logging": {
+              "mode": "delta",
+              "threshold": 0.5
+            }
+          },
+          {
+            "systemName": "TankFlowQuality",
+            "label": "Tank flow quality",
+            "type": "enum",
+            "unit": null,
+            "enumValues": [
+              "VALID",
+              "INSUFFICIENT_HISTORY",
+              "PRESSURE_INVALID",
+              "SAMPLE_GAP",
+              "TREND_UNRESOLVED",
+              "TANK_MODEL_INVALID"
+            ],
+            "logging": {
+              "mode": "change"
+            }
+          }
+        ]
+      }
+    ],
+    "systemFields": [
+      {
+        "id": "system-operating-mode",
+        "systemName": "OperatingMode",
+        "label": "Operating mode",
+        "source": "session",
+        "runtimeRole": "operatingMode",
+        "type": "enum",
+        "unit": null,
+        "enumValues": [
+          "Normal",
+          "Monitor"
+        ],
+        "initialValue": "Normal",
+        "logging": {
+          "mode": "change"
+        },
+        "assignmentTarget": true
+      },
+      {
+        "id": "manual-operator-monitor",
+        "systemName": "OperatorMonitorRequest",
+        "label": "Operator Monitor request",
+        "source": "manualOccurrence",
+        "runtimeRole": "occurrence",
+        "type": "signal",
+        "unit": null,
+        "occurrenceKey": "operatorMonitor",
+        "logging": {
+          "mode": "none"
+        }
+      },
+      {
+        "id": "internal-shelly-em-unavailable",
+        "systemName": "ShellyEMUnavailable",
+        "label": "Shelly EM complete record unavailable",
+        "source": "internalOccurrence",
+        "runtimeRole": "occurrence",
+        "type": "signal",
+        "unit": null,
+        "occurrenceKey": "shellyEmUnavailable",
+        "logging": {
+          "mode": "none"
+        }
+      }
+    ],
+    "events": [
+      {
+        "id": "E007",
+        "systemName": "UtilityVoltageHigh",
+        "displayName": "Utility voltage high",
+        "severity": "Red",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "SupplyVoltage",
+                  "operator": "gt",
+                  "value": 266
+                },
+                {
+                  "field": "ShellyEMAvailable",
+                  "operator": "eq",
+                  "value": true
+                }
+              ],
+              "observationCount": 2,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "SupplyVoltage",
+                "operator": "lte",
+                "value": 266
+              },
+              {
+                "field": "ShellyEMAvailable",
+                "operator": "eq",
+                "value": true
+              }
+            ],
+            "observationCount": 10,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [
+            {
+              "target": "PumpEnable",
+              "value": false,
+              "ownership": "whileOpen"
+            }
+          ],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": false,
+          "notifyOnClose": false,
+          "openMessage": "",
+          "closeMessage": ""
+        }
+      },
+      {
+        "id": "M001",
+        "systemName": "OperatorMonitor",
+        "displayName": "Operator Monitor",
+        "severity": "Info",
+        "enabled": true,
+        "eventClass": "monitor",
+        "opening": {
+          "trigger": {
+            "type": "manual",
+            "occurrenceField": "OperatorMonitorRequest",
+            "qualification": {
+              "observationCount": 1,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "clearEvents"
+        },
+        "onOpen": {
+          "assignments": [
+            {
+              "target": "OperatingMode",
+              "value": "Monitor",
+              "ownership": "whileOpen"
+            }
+          ],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": false,
+          "notifyOnClose": false,
+          "openMessage": "",
+          "closeMessage": ""
+        }
+      },
+      {
+        "id": "H001",
+        "systemName": "ElectricalSourceInvalid",
+        "displayName": "Electrical source invalid",
+        "severity": "Red",
+        "enabled": true,
+        "eventClass": "monitor",
+        "opening": {
+          "trigger": {
+            "type": "internal",
+            "occurrenceField": "ShellyEMUnavailable",
+            "qualification": {
+              "observationCount": 1,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "ShellyEMAvailable",
+                "operator": "eq",
+                "value": true
+              }
+            ],
+            "observationCount": 1,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [
+            {
+              "target": "OperatingMode",
+              "value": "Monitor",
+              "ownership": "whileOpen"
+            }
+          ],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": false,
+          "notifyOnClose": false,
+          "openMessage": "",
+          "closeMessage": ""
+        }
+      },
+      {
+        "id": "E002",
+        "systemName": "PumpUnderload",
+        "displayName": "Pump running underload",
+        "severity": "Red",
+        "enabled": false,
+        "eventClass": "latched",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "ContactorFlag",
+                  "operator": "eq",
+                  "value": true
+                },
+                {
+                  "field": "PumpEnable",
+                  "operator": "eq",
+                  "value": true
+                },
+                {
+                  "field": "PumpWatts",
+                  "operator": "lt",
+                  "value": 500
+                },
+                {
+                  "field": "ShellyEMAvailable",
+                  "operator": "eq",
+                  "value": true
+                },
+                {
+                  "field": "Shelly1Available",
+                  "operator": "eq",
+                  "value": true
+                }
+              ],
+              "observationCount": 4,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "clearEvents"
+        },
+        "onOpen": {
+          "assignments": [
+            {
+              "target": "PumpEnable",
+              "value": false,
+              "ownership": "whileOpen"
+            }
+          ],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": false,
+          "notifyOnClose": false,
+          "openMessage": "",
+          "closeMessage": ""
+        }
+      },
+      {
+        "id": "S010",
+        "systemName": "PumpRelayEnabledDuringShellyLockout",
+        "displayName": "Pump Relay Enabled During Shelly Lockout",
+        "enabled": true,
+        "severity": "Info",
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "PumpEnable",
+                  "operator": "eq",
+                  "value": true
+                },
+                {
+                  "field": "IsLocked",
+                  "operator": "neq",
+                  "value": 0
+                }
+              ],
+              "observationCount": 2,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "PumpEnable",
+                "operator": "eq",
+                "value": true
+              },
+              {
+                "field": "IsLocked",
+                "operator": "eq",
+                "value": 0
+              }
+            ],
+            "observationCount": 2,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": false,
+          "notifyOnClose": false,
+          "openMessage": "",
+          "closeMessage": ""
+        }
+      },
+      {
+        "id": "S020",
+        "systemName": "ShellyOffline",
+        "displayName": "Shelly Offline",
+        "enabled": true,
+        "severity": "Info",
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "Shelly1Available",
+                  "operator": "eq",
+                  "value": false
+                }
+              ],
+              "observationCount": 2,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "Shelly1Available",
+                "operator": "eq",
+                "value": true
+              }
+            ],
+            "observationCount": 2,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": false,
+          "notifyOnClose": false,
+          "openMessage": "",
+          "closeMessage": ""
+        }
+      }
+    ]
+  }
+}

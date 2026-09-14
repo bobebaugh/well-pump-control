@@ -6,7 +6,8 @@
   <meta name="theme-color" content="#09111f">
   <title>Rules Engine — Well Pump Pilot</title>
   <link rel="stylesheet" href="/styles.css?v=20260911-config">
-  <script src="/rules-engine.js?v=20260911-config" defer></script>
+  <script src="/rules-engine-analysis.js?v=20260914-analysis" defer></script>
+  <script src="/rules-engine.js?v=20260914-analysis" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -96,6 +97,21 @@
     <section id="validation-panel" class="panel validation-panel" hidden>
       <div class="panel-heading"><div><p class="kicker">PACKAGE REVIEW</p><h2>Validation findings</h2></div></div>
       <div id="validation-findings"></div>
+    </section>
+
+    <nav class="engine-tiles analysis-tiles" aria-label="Package analysis">
+      <button class="engine-tile" type="button" id="engine-analyze">
+        <span class="tile-step">5</span><strong>Analyze package</strong>
+        <small id="analysis-count">Not analyzed. Runs in the browser, before validation.</small>
+      </button>
+    </nav>
+
+    <section id="analysis-panel" class="panel validation-panel" hidden>
+      <div class="panel-heading"><div><p class="kicker">CONSEQUENCE ANALYSIS</p><h2 id="analysis-title">Analysis findings</h2></div></div>
+      <p class="analysis-intro">Validation asks whether Tab5 will accept this package. This asks what happens if it runs it — which events can hold the pump off, and how each one lets go.</p>
+      <div id="analysis-findings"></div>
+      <div id="analysis-holds"></div>
+      <details class="analysis-limits"><summary>What this does not check</summary><ul id="analysis-limits"></ul></details>
     </section>
   </main>
 </body>

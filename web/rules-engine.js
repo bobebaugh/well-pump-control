@@ -639,7 +639,37 @@ function addItem() {
 }
 
 
+// Consequence analysis. Entirely client-side and deliberately runnable before
+// validation: a package that Tab5 would reject can still be worth reasoning
+// about, and the questions this answers are not the ones validation answers.
+function runAnalysis() {
+  captureCurrent();
+  const panel = document.querySelector('#analysis-panel');
+  const result = analyzeAuthoringPackage(authoringDraft());
+  const counts = { error: 0, warning: 0, info: 0 };
+  for (const item of result.findings) counts[item.level] += 1;
+  panel.hidden = false;
+  document.querySelector('#analysis-findings').innerHTML = result.findings.length
+    ? result.findings.map(item => `<div class="validation-finding ${item.level}"><strong>${escapeHtml(item.path || 'package')}</strong><span>${escapeHtml(item.message)}</span><code>${escapeHtml(item.code)}</code></div>`).join('')
+    : '<div class="validation-success">No hazards matched. That is not proof — see what this does not check.</div>';
+  document.querySelector('#analysis-holds').innerHTML = result.holds.length
+    ? `<div class="analysis-holds-heading"><p class="kicker">WHAT HOLDS THE HARDWARE, AND HOW EACH LETS GO</p></div>` +
+      result.holds.map(hold => `<div class="validation-finding ${hold.enabled ? '' : 'warning'}"><strong>${escapeHtml(hold.eventId)} — ${escapeHtml(hold.eventLabel || '')}</strong><span>${escapeHtml(`Drives ${hold.target} to ${JSON.stringify(hold.value)} (${hold.ownership}). ${hold.escape.text}`)}</span><code>${hold.enabled ? 'enabled' : 'disabled'}</code></div>`).join('')
+    : '';
+  document.querySelector('#analysis-limits').innerHTML =
+    result.limits.map(text => `<li>${escapeHtml(text)}</li>`).join('');
+  document.querySelector('#analysis-title').textContent =
+    `${counts.error} blocking · ${counts.warning} to review · ${counts.info} noted`;
+  document.querySelector('#analysis-count').textContent =
+    `${counts.error} blocking · ${counts.warning} to review · ${result.holds.length} hardware hold(s)`;
+  setStatus(counts.error
+    ? `Analysis found ${counts.error} way(s) this package can leave the well off. Validation does not check these.`
+    : 'Analysis found nothing blocking. Review the hardware holds before publishing.',
+  counts.error ? 'error' : 'ok');
+}
+
 function syncButtons() {
+  document.querySelector('#engine-analyze').disabled = !state.draft;
   document.querySelector('#engine-validate').disabled = !state.draft;
   document.querySelector('#engine-publish').disabled = !state.draft;
   document.querySelector('#engine-backup').disabled = !state.draft;
@@ -732,6 +762,7 @@ document.querySelector('#refresh-device-state').addEventListener('click',()=>run
 window.addEventListener('beforeunload',e=>{if(state.dirty.size){e.preventDefault();e.returnValue='';}});
 document.querySelector("#engine-load").addEventListener("click", () => runBusy(openLoad));
 document.querySelector("#engine-save").addEventListener("click", () => runBusy(async () => { try { const sections = await saveAll(); setStatus(`Saved ${sections.join(", ")} draft section(s).`, "ok"); } catch (error) { reportError(error,"Save"); } }));
+document.querySelector("#engine-analyze").addEventListener("click", runAnalysis);
 document.querySelector("#engine-validate").addEventListener("click", () => runBusy(validatePackage));
 document.querySelector("#engine-publish").addEventListener("click", () => runBusy(publishPackage));
 document.querySelector("#engine-deliver").addEventListener("click", () => runBusy(deliverPackage));
