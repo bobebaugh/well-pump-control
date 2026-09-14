@@ -74,12 +74,20 @@ device-wide count, that `switch:0` and `input:0` carry `status.output` and
 `status.state` in the components envelope, and that components are not returned in
 the requested order. Acceptance remains presence-checked and consults no count.
 
-Acceptance evidence still to be captured, none of it fabricated here: a reply
-showing `Tab5IsLocked` as a `boolean:<id>` component with `config.name` and a
-Boolean `status.value`; how the device answers a filtered request naming a key that
-does not exist; a `Boolean.Set` HTTP GET reply confirming the bare `null`
-acknowledgement; and observed relay behavior across a Shelly reboot with an
-inhibition outstanding.
+Two further captures closed the remaining acquisition questions. A filtered request
+naming a key the device does not have returns that key **silently omitted** - no RPC
+error, four components and `total` 4 for a five-key request - so an unknown key is
+indistinguishable from a truncated page by the reply alone, which is why acceptance
+presence-checks every requested key and consults no count. And
+`GET /rpc/Number.Set?id=201&value=0` answered a bare JSON `null` on the device,
+corroborating the acknowledgement the dispatcher requires from the sibling
+`Boolean.Set`.
+
+Acceptance evidence still to be captured, none of it fabricated here: a reply showing
+`Tab5IsLocked` as a `boolean:<id>` component with `config.name` and a Boolean
+`status.value`, and a `Boolean.Set` reply confirming the bare `null` for that exact
+method; and observed relay behavior across a Shelly reboot with an inhibition
+outstanding.
 
 The owner accepts that pump permission may be interrupted during the maintenance
 interval: a Shelly reboot physically drops its relay, and between stopping the old

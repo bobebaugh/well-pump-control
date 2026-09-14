@@ -323,6 +323,32 @@ class V3IntegratedApplicationTests(unittest.TestCase):
         self.assertEqual(self.logic["normalize_shelly1_filtered"](wrong_total, routing),
                          record, "a reply without total is still acceptable")
 
+    def test_an_unknown_key_is_omitted_silently_and_rejects_the_acquisition(self):
+        """Captured behavior: the device omits a key it does not have.
+
+        No RPC error and no placeholder - four components and total 4 for a
+        five-key request. `total` reports what the filter matched, so the reply
+        alone cannot distinguish an unknown key from a truncated page. Presence
+        checking every requested key is the only rule that is safe under both.
+        """
+        ids = self.routing_ids()
+        captured = copy.deepcopy(SHELLY_DOC["capturedFilteredResponse"])
+        # The owner requested five keys and received these four, total 4.
+        self.assertEqual(len(captured["components"]), 4)
+        self.assertEqual(captured["total"], 4)
+
+        routing = dict(ids, IsLocked=201, loCntr=202)
+        self.assertIsNone(
+            self.logic["normalize_shelly1_filtered"](captured, routing),
+            "the absent component must reject the whole acquisition")
+
+        # And the mapping is discarded, so the next cycle rediscovers by name
+        # rather than asking for an id the device has already declined to answer.
+        sample, next_routing = self.logic["read_shelly1"](
+            lambda _url: copy.deepcopy(captured), routing=routing)
+        self.assertIsNone(sample)
+        self.assertIsNone(next_routing)
+
     def test_transport_failure_keeps_the_mapping_but_a_contradiction_discards_it(self):
         ids = self.routing_ids()
         # A timeout proves nothing about the components; the mapping survives.

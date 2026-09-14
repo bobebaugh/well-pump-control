@@ -181,13 +181,18 @@ captured the unfiltered call paginating — `offset` 0, `total` 20, twelve
 components returned, `switch:0` absent from the first page — which is why the keys
 filter is required rather than merely faster.
 
-A captured filtered reply now establishes the rest: the filter works and does
-return `switch:0`; `total` under a keys filter is the number of **matched**
-components, not the device-wide count; `switch:0` carries `status.output` and
-`input:0` carries `status.state` inside the components envelope; and the device
-does **not** return components in the requested order, so lookup is by key rather
-than by position. Acceptance still does not consult `total` — presence-checking is
-correct whatever it counts, and a reply without it is still acceptable.
+Captured filtered replies now establish the rest: the filter works and does return
+`switch:0`; `total` under a keys filter is the number of **matched** components,
+not the device-wide count; `switch:0` carries `status.output` and `input:0` carries
+`status.state` inside the components envelope; and the device does **not** return
+components in the requested order, so lookup is by key rather than by position.
+
+A key the device does not have is **silently omitted** — no RPC error, no
+placeholder, and `total` simply counts what matched. A five-key request for a
+component that does not exist returns four components and `total` 4. So the reply
+alone cannot distinguish an unknown key from a truncated page, which is exactly why
+acceptance requires every requested key to be present and consults no count. A
+reply without `total` is still acceptable.
 
 One response reduces latency but is not a guaranteed simultaneous hardware
 snapshot. Read-to-write races remain possible; later cycles reconcile them.
@@ -213,6 +218,12 @@ evidence from the supported transport.
 
 Shelly's documented HTTP GET example returns `null`:
 https://shelly-api-docs.shelly.cloud/gen2/DynamicComponents/Virtual/Boolean/
+
+`GET /rpc/Number.Set?id=<id>&value=0` was captured on the installed device over
+this same transport and answered a bare JSON `null`. `Number.Set` and `Boolean.Set`
+are sibling setters on one virtual-component RPC surface, so that corroborates the
+acknowledgement this dispatcher requires. It is not literally `Boolean.Set`, which
+stays an acceptance check until the declaring script is installed.
 
 Discovery matches a `boolean:<id>` entry whose `config.name` is exactly
 `Tab5IsLocked`, requires `status.value` to be a Boolean, and takes the id from the
