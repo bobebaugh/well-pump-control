@@ -112,23 +112,23 @@
       <p class="analysis-intro">Validation asks whether Tab5 will accept this package. This asks what happens if it runs it — which events can hold the pump off, and how each one lets go.</p>
 
       <div class="sim-block">
-        <p class="kicker">SCENARIO — WHAT FAILS, AND WHEN</p>
-        <div class="sim-controls">
-          <label>What fails<select id="sim-disruption"></select></label>
-          <label>At cycle <output id="sim-at-value">10</output><input id="sim-at" type="range" min="1" max="30" value="10"></label>
-          <label>Run for <output id="sim-cycles-value">30</output> cycles<input id="sim-cycles" type="range" min="4" max="60" value="30"></label>
-          <label>Supply volts <output id="sim-volts-value">245</output><input id="sim-volts" type="range" min="200" max="290" value="245"></label>
-          <label>Shelly lock <output id="sim-lock-value">0</output><input id="sim-lock" type="range" min="-1" max="120" value="0"></label>
+        <p class="kicker">SCENARIO — EVERYTHING STARTS NORMAL UNTIL YOU INJECT SOMETHING</p>
+        <p class="sim-note">Models the target design: Tab5 writes <code>Tab5Lock</code>, the Shelly script owns RLY0 and closes it only when <code>IsLocked</code> and <code>Tab5Lock</code> are both zero. Time is in cycles.</p>
+        <div class="sim-inject">
+          <label>Inject<select id="sim-kind"></select></label>
+          <label>at cycle<input id="sim-kind-at" type="number" min="1" max="120" value="5"></label>
+          <button class="secondary-button compact-button" id="sim-add" type="button">Add</button>
+          <button class="secondary-button compact-button" id="sim-clear" type="button">Clear all</button>
         </div>
-        <div class="sim-toggles">
-          <label><input id="sim-power" type="checkbox" checked> Utility power on</label>
-          <label><input id="sim-pressure" type="checkbox" checked> Pressure switch calling</label>
-          <label><input id="sim-hand" type="checkbox"> HAND selected</label>
-          <label><input id="sim-freeze" type="checkbox"> Monitor stops event processing (proposed, not built)</label>
+        <div id="sim-injections" class="sim-injections"></div>
+        <div class="sim-controls">
+          <label>Run for <output id="sim-cycles-value">60</output> cycles<input id="sim-cycles" type="range" min="10" max="120" value="60"></label>
+          <label>Transient releases after <output id="sim-transient-value">30</output> cycles<input id="sim-transient" type="range" min="1" max="90" value="30"></label>
+          <label>Seconds per cycle <output id="sim-seconds-value">2</output><input id="sim-seconds" type="range" min="1" max="10" value="2"></label>
         </div>
         <div id="sim-verdict" class="sim-verdict">Load a package to simulate.</div>
         <div id="sim-timeline" class="sim-timeline" aria-label="Pump state per cycle"></div>
-        <label class="sim-scrub">Inspect cycle <output id="sim-inspect-value">1</output><input id="sim-inspect" type="range" min="1" max="30" value="1"></label>
+        <label class="sim-scrub">Inspect cycle <output id="sim-inspect-value">1</output><input id="sim-inspect" type="range" min="1" max="60" value="1"></label>
         <div id="sim-detail" class="sim-detail"></div>
       </div>
 

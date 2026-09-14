@@ -662,6 +662,9 @@ function runAnalysis() {
     `${counts.error} blocking · ${counts.warning} to review · ${counts.info} noted`;
   document.querySelector('#analysis-count').textContent =
     `${counts.error} blocking · ${counts.warning} to review · ${result.holds.length} hardware hold(s)`;
+  document.querySelector('#sim-kind').innerHTML = simKindOptions()
+    .map(([value, label]) => `<option value="${value}">${escapeHtml(label)}</option>`).join('');
+  renderSimInjections();
   renderSimulation();
   setStatus(counts.error
     ? `Analysis found ${counts.error} way(s) this package can leave the well off. Validation does not check these.`
@@ -669,23 +672,39 @@ function runAnalysis() {
   counts.error ? 'error' : 'ok');
 }
 
+const simState = { injections: [] };
+
 function simScenarioFromForm() {
   const value = id => Number(document.querySelector(id).value);
   return {
-    disruption: document.querySelector('#sim-disruption').value,
-    disruptionAt: value('#sim-at'), cycles: value('#sim-cycles'),
-    supplyVoltage: value('#sim-volts'), shellyLock: value('#sim-lock'),
-    utilityPower: document.querySelector('#sim-power').checked,
-    pressureCalling: document.querySelector('#sim-pressure').checked,
-    hand: document.querySelector('#sim-hand').checked,
-    monitorStopsProcessing: document.querySelector('#sim-freeze').checked
+    cycles: value('#sim-cycles'), transientRelease: value('#sim-transient'),
+    secondsPerCycle: value('#sim-seconds'), injections: simState.injections
   };
+}
+
+function simKindOptions() {
+  const events = typeof simInjectableEvents === "function" && state.draft
+    ? simInjectableEvents(state.draft) : [];
+  const faults = simFaultKinds().map(([value, label]) => [`fault:${value}`, label]);
+  const eventOptions = events.map(item =>
+    [`event:${item.id}`, `${item.id} ${item.label} — ${item.eventClass}`]);
+  return eventOptions.concat(faults);
+}
+
+function renderSimInjections() {
+  const labels = Object.fromEntries(simKindOptions());
+  document.querySelector('#sim-injections').innerHTML = simState.injections.length
+    ? simState.injections.map((item, index) => {
+      const key = item.kind === "event" ? `event:${item.eventId}` : `fault:${item.kind}`;
+      return `<button class="sim-chip" type="button" data-sim-remove="${index}">cycle ${item.atCycle} · ${escapeHtml(labels[key] || key)} <span>&times;</span></button>`;
+    }).join('')
+    : '<span class="sim-empty">Nothing injected. The well runs normally for the whole run.</span>';
 }
 
 function renderSimulation() {
   if (!state.draft || typeof simulateScenario !== "function") return;
-  for (const [range, out] of [['#sim-at', '#sim-at-value'], ['#sim-cycles', '#sim-cycles-value'],
-    ['#sim-volts', '#sim-volts-value'], ['#sim-lock', '#sim-lock-value'], ['#sim-inspect', '#sim-inspect-value']]) {
+  for (const [range, out] of [['#sim-cycles', '#sim-cycles-value'], ['#sim-transient', '#sim-transient-value'],
+    ['#sim-seconds', '#sim-seconds-value'], ['#sim-inspect', '#sim-inspect-value']]) {
     document.querySelector(out).textContent = document.querySelector(range).value;
   }
   const { steps } = simulateScenario(authoringDraft(), simScenarioFromForm());
@@ -696,29 +715,31 @@ function renderSimulation() {
 
   const ran = steps.filter(step => step.pumpRuns).length;
   const last = steps[steps.length - 1];
-  const settled = last.pumpRuns ? 'PUMP RUNS' : 'PUMP DOES NOT RUN';
   document.querySelector('#sim-verdict').className = `sim-verdict ${last.pumpRuns ? 'ok' : 'stopped'}`;
   document.querySelector('#sim-verdict').textContent =
-    `After ${steps.length} cycles: ${settled}. Ran in ${ran} of ${steps.length} cycles.` +
-    (last.mute ? ' Tab5 cannot write the relay; it is frozen where it was.' : '') +
-    (last.cloud ? '' : ' The cloud is unreachable, so Monitor, Restart Tab5 and Restart Shelly 1 are unavailable.');
+    `After ${steps.length} cycles: ${last.pumpRuns ? 'PUMP RUNS' : 'PUMP DOES NOT RUN'}. Ran in ${ran} of ${steps.length}.` +
+    (last.isLocked === -1 ? ' The Shelly lock is permanent; only a reboot clears it.' : '') +
+    (last.mute ? ' Tab5 cannot reach Shelly 1, so Tab5Lock is stuck where it was.' : '') +
+    (last.cloud ? '' : ' The cloud is unreachable, so no online control can help.');
 
   document.querySelector('#sim-timeline').innerHTML = steps.map(step =>
-    `<span class="sim-cell ${step.pumpRuns ? 'runs' : 'stopped'}${step.mute ? ' mute' : ''}" title="${escapeHtml(`Cycle ${step.cycle}: ${step.pumpRuns ? 'runs' : 'stopped'}`)}">${step.cycle}</span>`).join('');
+    `<span class="sim-cell ${step.pumpRuns ? 'runs' : 'stopped'}${step.mute ? ' mute' : ''}" title="${escapeHtml(`Cycle ${step.cycle}: ${step.pumpRuns ? 'runs' : 'stopped'} · Tab5Lock ${step.tab5Lock} · IsLocked ${step.isLocked}`)}">${step.cycle}</span>`).join('');
 
   const step = steps[Number(inspect.value) - 1];
   const flag = (on, text) => `<span class="sim-flag ${on ? 'on' : ''}">${escapeHtml(text)}</span>`;
   document.querySelector('#sim-detail').innerHTML = `
     <div class="sim-flags">
-      ${flag(step.pumpRuns, 'pump running')}${flag(step.relayClosed, 'RLY0 closed')}
-      ${flag(step.blind, 'Tab5 blind')}${flag(step.mute, 'Tab5 mute')}
-      ${flag(!step.cloud, 'cloud down')}${flag(step.monitor, 'Monitor')}${flag(step.frozen, 'processing stopped')}
+      ${flag(step.pumpRuns, 'pump running')}${flag(step.tab5Lock === 1, `Tab5Lock ${step.tab5Lock}`)}
+      ${flag(step.isLocked !== 0, `IsLocked ${step.isLocked}`)}${flag(step.loCntr > 0, `loCntr ${step.loCntr}`)}
+      ${flag(step.rly0, `RLY0 ${step.rly0 ? 'closed' : 'open'}`)}
+      ${flag(step.blind, 'Tab5 blind')}${flag(step.mute, 'Tab5 mute')}${flag(!step.cloud, 'cloud down')}
+      ${flag(step.monitor, 'Monitor')}${flag(step.hand, 'HAND')}${flag(!step.demand, 'no demand')}
     </div>
     <dl class="sim-state">
       <dt>Open events</dt><dd>${escapeHtml(step.openEvents.join(', ') || 'none')}</dd>
-      <dt>Holding ${escapeHtml(SIM_PUMP_TARGET)}</dt><dd>${escapeHtml(step.owners.join(', ') || 'nobody')}</dd>
+      <dt>Requesting an inhibit</dt><dd>${escapeHtml(step.holders.join(', ') || 'nobody')}</dd>
       <dt>Counters</dt><dd>${escapeHtml(Object.entries(step.counters).map(([k, v]) => `${k}=${v}`).join(', ') || 'none declared')}</dd>
-      <dt>Tab5 wrote</dt><dd>${step.wrote === null ? 'nothing — already where it wanted it' : escapeHtml(`relay ${step.wrote ? 'closed' : 'open'} — ${step.landed ? 'landed' : 'did not land'}`)}</dd>
+      <dt>Tab5 wrote</dt><dd>${step.wrote === null ? 'nothing — Tab5Lock already matches intent' : escapeHtml(`Tab5Lock = ${step.wrote} — ${step.landed ? 'landed' : 'did not land'}`)}</dd>
       <dt>Why</dt><dd>${escapeHtml(step.reasons.join(' '))}</dd>
     </dl>
     ${step.notes.length ? `<ul class="sim-notes">${step.notes.map(note => `<li>${escapeHtml(note)}</li>`).join('')}</ul>` : ''}`;
@@ -821,13 +842,27 @@ document.querySelector("#engine-save").addEventListener("click", () => runBusy(a
 document.querySelector("#engine-analyze").addEventListener("click", runAnalysis);
 // The simulator is a separate script. Guard the wiring so the editor still
 // loads and works if it is absent, rather than taking the page down with it.
-if (typeof simDisruptions === "function") {
-  document.querySelector('#sim-disruption').innerHTML = simDisruptions()
-    .map(([value, label]) => `<option value="${value}">${escapeHtml(label)}</option>`).join('');
-  for (const id of ['#sim-disruption', '#sim-at', '#sim-cycles', '#sim-volts', '#sim-lock',
-    '#sim-power', '#sim-pressure', '#sim-hand', '#sim-freeze', '#sim-inspect']) {
+if (typeof simFaultKinds === "function") {
+  for (const id of ['#sim-cycles', '#sim-transient', '#sim-seconds', '#sim-inspect']) {
     document.querySelector(id).addEventListener('input', renderSimulation);
   }
+  document.querySelector('#sim-add').addEventListener('click', () => {
+    const [group, rest] = document.querySelector('#sim-kind').value.split(/:(.*)/);
+    const atCycle = Math.max(1, Number(document.querySelector('#sim-kind-at').value) || 1);
+    simState.injections.push(group === 'event'
+      ? { kind: 'event', eventId: rest, atCycle } : { kind: rest, atCycle });
+    simState.injections.sort((a, b) => a.atCycle - b.atCycle);
+    renderSimInjections(); renderSimulation();
+  });
+  document.querySelector('#sim-clear').addEventListener('click', () => {
+    simState.injections = []; renderSimInjections(); renderSimulation();
+  });
+  document.querySelector('#sim-injections').addEventListener('click', event => {
+    const button = event.target.closest('[data-sim-remove]');
+    if (!button) return;
+    simState.injections.splice(Number(button.dataset.simRemove), 1);
+    renderSimInjections(); renderSimulation();
+  });
 }
 document.querySelector("#engine-validate").addEventListener("click", () => runBusy(validatePackage));
 document.querySelector("#engine-publish").addEventListener("click", () => runBusy(publishPackage));

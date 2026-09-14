@@ -445,6 +445,17 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(67,168,255,.
 .analysis-limits li { margin: 4px 0; }
 
 .sim-block { margin: 4px 0 18px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); }
+.sim-note { color: var(--muted); font-size: .66rem; margin: 6px 0 10px; }
+.sim-note code { color: var(--text); }
+.sim-inject { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin-bottom: 10px; }
+.sim-inject label { display: grid; gap: 4px; font-size: .66rem; color: var(--muted); }
+.sim-inject select { min-width: 260px; }
+.sim-inject input { width: 80px; }
+.sim-injections { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; min-height: 22px; }
+.sim-chip { padding: 3px 9px; border-radius: 999px; border: 1px solid rgba(67,168,255,.5); background: rgba(67,168,255,.12); color: var(--text); font-size: .62rem; cursor: pointer; }
+.sim-chip span { color: var(--muted); margin-left: 4px; }
+.sim-chip:hover { border-color: var(--red); }
+.sim-empty { color: var(--muted); font-size: .64rem; }
 .sim-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px 16px; margin: 10px 0; }
 .sim-controls label, .sim-scrub { display: grid; gap: 4px; font-size: .68rem; color: var(--muted); }
 .sim-controls output, .sim-scrub output { color: var(--text); font-weight: 600; }
