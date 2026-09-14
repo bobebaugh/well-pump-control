@@ -9,10 +9,21 @@ overlay on a well that worked without it. Every line added is a line that can
 fail in the garage. Where a choice exists between reusing something proven and
 building something better, this design reuses.
 
-Four changes. `D` is a deletion and lands first; `A`, `B` and `C` are the
-behaviour. All in `tab5/pilot.py` and `shelly1/anti-chatter.js` except one
-editor control. **No new field type, no counter, no schema version bump, no
-rules-package migration.**
+**Revision 2**, after review. Seven findings accepted; the corrections are
+marked **[R2]** where they change what was proposed. The largest are: the
+support gate rejects the new write outright and was missed entirely; A8's
+reconcile as written would have broken one-shot `transition` assignments; and
+`H001` cannot fire on the device at all, because nothing produces internal
+occurrences.
+
+Three changes: `A`, `B`, `C`. Dead-code removal has been **[R2]** moved out of
+this plan into its own unit — it is not a prerequisite, and one file proposed
+for deletion holds live V3 coverage.
+
+All in `tab5/pilot.py` and `shelly1/anti-chatter.js` except one editor control
+and one rules-package edit. **No new field type, no counter, no schema version
+bump.** A package edit **is** required, and existing packages will be rejected
+after this lands — see §7.
 
 ---
 
@@ -93,10 +104,51 @@ Same GET-only shape as the proven `Switch.Set` path, same timeout, same
 `observed-desired-state` short-circuit against `values.shelly1_tab5lock`. The
 existing lock-evidence guard at 1299 applies to the relay only and is untouched.
 
+### A5a. The support gate — **[R2]**, and the real blocker
+
+`_rules_v3_runtime_supported` (2830) rejects a package before it resolves if any
+`readWrite` field is not exactly:
+
+```python
+write.get('method') != 'Switch.Set' or
+write.get('parameters') != {'id': 0, 'valueParameter': 'on'} or
+write.get('normalValue') is not True
+```
+
+A boolean flag fails all three: different method, different parameters, and its
+normal value is **false**. This gate, not the binding table, is what would have
+stopped the change; the earlier revision missed it.
+
+Add a second accepted shape rather than loosening the first:
+
+| | Relay | Flag |
+| --- | --- | --- |
+| object | `RLY(0)` | `UDF(Tab5IsLocked)` |
+| method | `Switch.Set` | `Boolean.Set` |
+| parameters | `{"id": 0, "valueParameter": "on"}` | `{"valueParameter": "value"}` |
+| normalValue | `true` | `false` |
+
+**No component id appears in the authored package.** Ids are assigned at
+creation and are not stable across a rebuild, so authoring one would be a latent
+fault. The id comes from the name in the object string, resolved by this cycle's
+discovery, and the dispatcher substitutes it. That is the whole answer to "how
+does the discovered id replace the authored parameters": the package never
+carries one.
+
+**Acknowledgment is method-specific — [R2].** `issue_rules_v3_action`
+(1312) accepts a write only when the reply carries `was_on`, which is a
+`Switch.Set` reply field. `Boolean.Set` does not return it. The success test
+must branch on method, and must not treat "no recognised field" as success.
+
+**Pilot must mirror this.** The publication and support validation in
+`cloud/netlify/lib/rules-engine-v3-*.js` carries the same constraint and has to
+accept the second shape, or a package that Tab5 can run will not publish.
+
 ### A6. Editor
 
 The write method is greyed to `Switch.Set`. Allow `Boolean.Set` when the object
-matches `UDF(...)` and the type is boolean. One dropdown.
+matches `UDF(...)` and the type is boolean, and populate the parameter and
+normal-value defaults from the table above rather than leaving them free text.
 
 ### A7. Shelly script
 
@@ -107,26 +159,79 @@ becomes the two-input function from the proposal:
 relay closed  ⟺  IsLocked == 0  AND  Tab5IsLocked == false
 ```
 
-The script becomes the sole writer of RLY0. That is safe **only because** Tab5
-stops writing it, which is the whole point of A.
+A missing or unreadable `Tab5IsLocked` reads as `false` and the relay closes,
+matching how `hasHandle()` already degrades for the other two. Fail-open applies
+to the script's own faults as well as everything else's.
 
-### A8. Ownership dispatch for non-pump device targets
+#### Sole writer must be enforced, not intended — **[R2]**
+
+The earlier revision said the script becomes the sole writer of RLY0 and, two
+sections later, that `PumpEnable` "stays declared and functional". Those cannot
+both hold. Any surviving or newly authored `PumpEnable` assignment recreates
+exactly the two-writer conflict that `016ba5a`'s open-only rule was built to
+avoid, and the script would now fight back once per second.
+
+**Make `RLY(0)` read-only in the binding table.** Change its entry in
+`RUNTIME_DIRECT_BINDINGS['shelly-gen4-switch']` from `readWrite` to `read`.
+
+The support gate then rejects any package that assigns `PumpEnable`, at adopt,
+with no new check to write. Enforcement falls out of machinery that already
+exists, which is the whole reason to do it there.
+
+This is a **hard cutover**, and it is the reason §7 exists: every currently
+published package assigns `PumpEnable`, so every one of them stops adopting the
+moment this Tab5 build runs. There is no overlap window and no fallback path.
+That is deliberate — a soft cutover is precisely the state in which two writers
+can coexist.
+
+#### What the power-on default does and does not guarantee — **[R2]**
+
+`switch:0` power-on state stays **ON**, per proposal §1. That covers one case
+only: the device powers up and the script never runs, so nothing opens the
+relay.
+
+It does **not** guarantee that a relay already held open closes when the script
+stops. The power-on default applies at power-on. A script that opens RLY0 and
+then dies leaves it open until the device is power-cycled, and no configuration
+setting changes that.
+
+Proposal §8 test 8 asserts this behaviour and has **not been run on hardware**.
+Until it has, "the script dying releases the relay" is an assumption, not an
+escape path, and the sanctioned clear paths remain the breaker and the online
+restart.
+
+### A8. Ownership dispatch for the lock flag
 
 `whileOpen` on a device target records an owner and emits nothing. The only
 thing that turns ownership into a write is bespoke code keyed to `pump_target`,
 which is the hardcoded name `PumpEnable`.
 
 Add a per-cycle reconcile in `advance_rules_v3_kernel`, after the event loop,
-for writable **device** targets that are not the pump target:
+**for `UDF(Tab5IsLocked)` alone**:
 
 ```
-for each such target:
-    emit an action with the owned value if an event owns it,
-    otherwise with its normalValue
+if any event owns the flag:  emit true
+otherwise:                   emit false
 ```
 
 Roughly ten lines, purely additive. All pump and `releasePending` machinery is
-untouched, so nothing existing changes behaviour.
+untouched.
+
+**Scoped to the one target, not to every writable device field — [R2].** The
+general form is wrong, not merely broader. Reconciling any unowned writable
+target back to its normal value would silently undo a one-shot `transition`
+assignment on the very next cycle: the write lands, no owner exists, and the
+reconcile writes the normal value back over it. That breaks `transition`
+semantics for every target it touches, which is a behaviour change dressed as a
+generalisation. This answers the earlier open question — **named, not general.**
+
+Two cases the implementation must handle explicitly, both testable without
+hardware:
+
+- **Multiple owners.** Two events holding the flag is one `true`. The flag stays
+  true while any owner remains.
+- **Last-owner release.** `false` is emitted on the cycle after the last owner
+  is removed, not on the removal of the first.
 
 #### The I/O contract this must obey — owner-specified, normative
 
@@ -147,9 +252,13 @@ on the implementation rather than a hope:
 - **Only on disagreement.** `issue_rules_v3_action` (1296) already returns
   `observed-desired-state` without touching the device when the observed value
   equals the desired one. Steady state costs zero writes, in either state.
-- **From the loop read, so a stale write is impossible.** If the acquisition was
-  rejected this cycle, `shelly1_available` is false and nothing is issued at
-  all.
+- **From the loop read — [R2], which narrows the claim.** The decision uses this
+  cycle's observation, and if the acquisition was rejected `shelly1_available` is
+  false and nothing is issued. That is not the same as "a stale write is
+  impossible": the device can change between the read and the write, so the
+  guarantee is only that Tab5 never acts on an *older* cycle's evidence. A write
+  racing a concurrent change is still possible and is corrected on the next
+  cycle by the same reconcile.
 
 A Shelly reboot that zeroes `Tab5IsLocked` is therefore repaired on the next
 cycle with exactly one write, which is proposal test 7.
@@ -159,8 +268,24 @@ calls `Shelly.GetStatus` then `Shelly.GetComponents`, measured at 708 ms
 together. Proposal §6.1 covers collapsing them into one `Shelly.GetComponents`
 with a `keys` filter — `dynamic_only=true` is what currently excludes
 `switch:0`, which is why two calls were needed. That consolidation is a
-prerequisite for "one read per cycle" and should land with this work, not
-after it.
+prerequisite for "one read per cycle".
+
+Three qualifications the earlier revision skipped — **[R2]**:
+
+- **One response is not a simultaneous snapshot.** The device assembles the
+  reply field by field; two values in one response were not necessarily true at
+  the same instant. The reconcile must not assume a coherent cross-component
+  state, which it does not: it compares one field.
+- **Pagination.** `Shelly.GetComponents` returns `total` alongside the array,
+  and an owner-run query has already been observed returning 12 of 20. The
+  reader must compare `total` against the returned length and reject the
+  acquisition when they disagree rather than treating a short page as absence —
+  otherwise a truncated reply reads as a missing component, which under A7's
+  fail-open rule closes the relay.
+- **"One read" is a steady-state goal, not an invariant.** Component discovery
+  after a Shelly reboot, and recovery from a rejected acquisition, may cost an
+  extra call. Those exceptions should be named and bounded rather than pretended
+  away.
 
 ### Authoring shape
 
@@ -171,9 +296,11 @@ onOpen:  Tab5IsLocked = true,  while open
 No `onClose` assignment. The owner is dropped at close and the reconcile writes
 `false` on the next cycle.
 
-`PumpEnable` stays declared and functional. Rules move their assignment from it
-to `Tab5IsLocked`. Nothing is deleted, so the change is reversible by editing
-the package.
+`PumpEnable` becomes **read-only telemetry — [R2]**. It stays declared so the
+relay's observed state is still read, logged and testable in conditions, but it
+can no longer be an assignment target. Rules move their assignment to
+`Tab5IsLocked`. Reverting means reverting the Tab5 build, not editing the
+package.
 
 ---
 
@@ -270,27 +397,77 @@ When a System Monitor clears, the skipped events are still open and still owned,
 so the reconcile re-asserts on the very next cycle. Nothing is lost across the
 excursion, which is the failure mode a one-shot release would have.
 
-### C3. Delete the pump-action filter
+### C3. Suppress on entry — **[R2]**, replacing "delete the filter"
 
-`advance_rules_v3_kernel` 3534-3535 is now redundant — nothing produces pump
-actions while frozen. Remove it.
+Removing the pump-action filter at 3534-3535 is not enough on its own, and the
+earlier revision was wrong to present it as a tidy-up.
 
-### User versus System needs no new concept
+**Ordering.** Resolve the effective mode **once, at the top of the cycle, from
+kernel state carried in**, before any event is evaluated. Do not recompute it
+mid-loop. Otherwise whether an event is processed depends on whether it happens
+to sit before or after the Monitor event in package order, which is not a
+property anyone should have to reason about.
 
-It is already expressed in the package, and both events already exist:
+**Scope on entry.** On the Normal → Monitor boundary, suppress *both*:
+
+- the ownership reconcile of A8, so the flag is released rather than re-asserted;
+- any inhibit actions already emitted this cycle, before collapse, so an event
+  that opened earlier in the same cycle cannot leave a write behind it.
+
+The existing filter at 3534 stays until `RLY(0)` is read-only, because until
+then a legacy package can still emit a pump action. Delete it in the same change
+that makes the binding read-only, not before.
+
+### C4. System Monitor now releases the inhibition — **[R2]**, a deliberate change
+
+Under the earlier design System Monitor explicitly did **not** clear existing
+latched lockouts; unavailable telemetry merely stopped the affected rules
+evaluating. Under C it does clear them, because the freeze plus the A8 reconcile
+releases the flag regardless of which Monitor engaged.
+
+That is a real reversal and is called out rather than absorbed. It is the right
+one under the fail-open posture — an inhibit whose evidence has gone is an
+assertion Tab5 can no longer support — but it means a brief telemetry excursion
+now releases a hold that previously persisted. The counter-argument from the
+earlier review, that a short excursion should not release a real lockout, is not
+answered by this design; it is accepted as the cost of not hanging.
+
+### User versus System — the shape is right, `H001` is not — **[R2]**
+
+The distinction needs no new concept. It is `clearEvents` versus a closing
+condition, and no mode enum, user/system flag or second code path is required.
+
+But **`H001` cannot fire on the device**, and the earlier revision assumed it
+could. The loop builds exactly one occurrence map, from the manual operator
+Monitor request (`pilot.py` 5309, passed in at 5362). **Nothing anywhere
+produces an internal occurrence.** An internal-trigger event can never open.
+
+So System Monitor does not exist today in any form, and this design cannot lean
+on it. The fix is a **rules-package edit**, not code: give `H001` an ordinary
+condition trigger on availability, with a recovery close.
 
 | | Trigger | Closing policy | Exit |
 | --- | --- | --- | --- |
 | `M001` Operator Monitor | manual occurrence | `clearEvents` | never closes → **Restart Tab5** |
-| `H001` Electrical source invalid | internal occurrence | condition on `ShellyEMAvailable` | closes when the EM returns |
+| `H001` Electrical source invalid | **condition** on `Shelly1Available == false` — was internal | condition on availability restored | closes when the device returns |
 
-"User Monitor is a locked version of the same thing" is exactly `clearEvents`
-versus `condition`. No mode enum, no user/system flag, no second code path.
+Two consequences:
+
+- The package edit is part of this change, not a follow-on. Until it is made,
+  engaging Monitor is only possible by operator request.
+- The simulator on `pilot-working` modelled internal triggers as firing on
+  device loss, which made a LAN failure appear to suspend the controller by
+  itself. That was fiction and has been corrected (`f5e6afc`); the test now
+  asserts the device's actual behaviour and says why.
 
 ### Consequence to accept
 
-While Monitor is engaged no new events are recorded. A leak or an excessive
-runtime starting during Monitor produces no event, only logged observations.
+While Monitor is engaged **no new non-monitor events are recorded — [R2]**. A
+leak or an excessive runtime starting during Monitor produces no event, only
+logged observations. Monitor-class events are exempt from the freeze and keep
+running, so the logging-only flags of C1a continue to mark condition sets
+throughout — which is the whole reason they are exempt.
+
 Protection continues at the layers below: Shelly chatter and short-cycle, the
 3-second on-delay, the 6-minute runtime limit, and HAND.
 
@@ -304,54 +481,41 @@ Protection continues at the layers below: Shelly chatter and short-cycle, the
 - Removing `PumpEnable` / RLY0 writing from Tab5. Left working and unused.
 - A schema version bump. Nothing in the authoring contract changes.
 - A boot-without-rules escape hatch. Worth doing; not this change.
-
-Change D below is in scope, and is the largest single item by line count.
+- Dead-code removal. **[R2]** Moved out — see §5a.
 
 ---
 
-## 5a. Change D — delete the superseded engines
+## 5a. Dead code (deferred) — a finding, not part of this change — **[R2]**
 
-`tab5/pilot.py` is 5528 lines. A reachability walk from module scope finds
-**47 top-level functions, 852 lines, that the running application never
-reaches.** Every one of them is referenced by a test, which is why they have
-survived: the tests are the only callers, so nothing looked unused.
+The earlier revision made deletion `Change D` and landed it first. **Withdrawn
+as a prerequisite**, on two grounds, both correct:
 
-That is the worst state for old code to be in. It reads as maintained, it is
-covered, and it is wrong to trust — three of these functions are earlier
-versions of code the loop still runs, and a reader cannot tell which is live
-without the reachability walk.
+- **It is not a prerequisite.** Unreachable code cannot affect A, B or C. The
+  argument for going first was reviewer convenience, which is not worth
+  coupling a 900-line deletion to a behaviour change.
+- **One proposed deletion was wrong.** `tests/test_tab5_observation_selection.py`
+  is not V2-only. It holds **current V3 coverage** — staging pointer identity,
+  closed-schema rejection, atomic staging and offline reload without V2 state,
+  the checkpoint-1 fixture, and the running/staged/execution state report. That
+  file must be trimmed, never deleted. `test_tab5_event_engine.py` (157 lines,
+  V1) is the only wholesale candidate.
 
-| Group | Functions | What replaced it |
-| --- | --- | --- |
-| **V2 rules runtime** | `advance_runtime_event`, `new_runtime_event_state`, `_runtime_qualified`, `evaluate_runtime_events`, `runtime_condition_value`, `runtime_stop_only_action`, `issue_runtime_stop`, `clear_runtime_event_board`, `evaluate_runtime_calculations`, `runtime_direct_field_values`, `runtime_logging_change_details` | the V3 kernel |
-| **V2 delivery and validation** | `load_runtime_package`, `adopt_runtime_release`, `validate_runtime_release`, `_runtime_package_valid`, `_runtime_field_valid`, `_valid_runtime_release_id`, `_valid_integral_nonnegative`, `validate_runtime_pointer`, `_check_runtime_pointer`, `runtime_pointer_rejection_reason`, `runtime_pointer_key_summary`, and the `RULES_RUNTIME_FILE` / `RULES_RUNTIME_TEMP_FILE` constants | the V3 staged-release path |
-| **V1 event engine** | `advance_rule_event`, `new_rule_event_state`, `_event_rule_latched`, `_valid_event_rule_timing`, `event_history_values`, `build_rules_audit_record` | superseded twice over |
-| **Superseded durable selection** | `build_durable_observation`, `durable_observation_reason`, `material_change_details`, `_material_change_detail`, `_numeric_material_change`, `_observation_path_value`, `_record_timestamp_prefix` | `build_durable_observation_v2`, `durable_field_states`, `durable_trigger_reasons` |
-| **Superseded Shelly availability confirmation** | `new_shelly_availability_confirmation`, `shelly_availability_change_pending`, `acknowledge_shelly_availability_change` | `$availability` in the V3 acquisition |
-| **Superseded ADC microvolt path** | `read_ads1110_microvolts`, `_read_ads1110_microvolts_once`, `trimmed_mean_microvolts`, `summarize_adc_samples`, `estimated_flow_gpm` | `read_ads1110_filtered_raw_count`; calibration moved from microvolts to raw counts |
-| **Orphans** | `_finite_number`, `_v3_scalar`, `_wait_until`, `rules_v3_field_values` | — |
+The finding stands and is worth its own unit: a reachability walk from module
+scope reports **47 top-level functions, 852 of 5528 lines**, that the running
+application never reaches — the V2 rules runtime and its delivery path, the V1
+event engine, superseded durable selection, the old Shelly availability
+confirmation, and the ADC microvolt path left behind when calibration moved to
+raw counts. Every one is referenced by a test, which is why none looked unused.
 
-`rules_v3_field_values` is the odd one: it is V3, not old, and still unreachable.
-Worth a second look before deleting in case it was written for something not yet
-wired up.
+**The walk is evidence, not proof — [R2].** A static AST walk cannot see a call
+made through a callback, a dispatch table, `getattr`, or a string. It is a
+candidate list that each entry must be argued off individually, not a licence to
+bulk-delete. `rules_v3_field_values` is the standing example: unreachable, but
+current V3 rather than old, so it may have been written for something still
+pending.
 
-**Tests go with the code.** `tests/test_tab5_observation_selection.py` (908
-lines) is almost entirely V2 coverage; `tests/test_tab5_event_engine.py` (157
-lines) is entirely V1. Both are candidates for deletion outright. The V2
-references inside `test_tab5_v3_integration.py`, `test_tab5_v3_semantic_kernel.py`,
-`test_tab5_hmi.py` and `test_tab5_pressure_flow.py` are narrower and need
-trimming rather than removal.
-
-**Method, so this is verifiable and not a judgement call.** The reachability
-walk is a dozen lines of `ast`; it should be committed as
-`tests/test_tab5_no_dead_code.py` and asserted to return empty. Then the
-deletion is checkable, and the condition cannot silently return.
-
-**Sequence.** D lands *before* A, B and C. Deleting first means the three
-behaviour changes are made against a smaller file, and no reviewer wastes time
-reading a V2 evaluator to decide whether A8 affects it. It is also the only
-change here with no behavioural risk: unreachable code cannot alter behaviour,
-and the walk proves unreachability rather than asserting it.
+Recorded here so the inventory is not lost. It should move to its own document
+and its own branch.
 
 ---
 
@@ -369,54 +533,109 @@ Host suites, no hardware, no emulator.
 5. A Shelly reboot zeroing the flag is repaired on the next cycle.
 6. An unreachable Shelly issues nothing and reports it.
 
-**Change B**
+**Change B** — **[R2]** fully populated fixtures are not sufficient evidence
 7. Every existing fixture package evaluates identically when all fields present.
 8. `all` with one false and one absent → false, not unknown.
 9. `any` with one true and one absent → true, not unknown.
-10. `all`/`any` with only absent and true/false-inconclusive clauses → unknown.
-11. E007 with an `any` close and the EM absent closes after its ten observations.
+10. `all`/`any` with only absent and inconclusive clauses → unknown.
+11. **Clause order does not matter**: the absent field first, last, and in the
+    middle all give the same result.
+12. **Unknown transitions**: true → unknown → true, and false → unknown → false,
+    across cycles.
+13. **Qualification counts**: an unknown neither advances nor resets an open or
+    close count, and a definite result resumes from where it left off.
+14. **Guards**: a guarded group whose guard goes unknown contributes no
+    assignments, and does not fail the phase.
+15. E007 with an `any` close and the EM absent closes after its ten observations.
 
 **Change C**
-12. In Monitor, a non-monitor event neither opens nor closes.
-13. In Monitor, a monitor-class event still closes when its condition qualifies.
-14. Entering Monitor writes `Tab5IsLocked` false within one cycle.
-15. Leaving a System Monitor with a still-open owner re-asserts within one cycle.
-16. `M001` never closes; only a restart clears it.
-17. The event board keeps showing events opened before Monitor engaged.
+16. In Monitor, a non-monitor event neither opens nor closes.
+17. In Monitor, a monitor-class event still closes when its condition qualifies.
+18a. Entering Monitor writes `Tab5IsLocked` false within one cycle.
+19a. Leaving a System Monitor with a still-open owner re-asserts within one cycle.
+20a. `M001` never closes; only a restart clears it.
+21a. The event board keeps showing events opened before Monitor engaged.
 
-**Change D**
-18. The reachability walk returns empty, committed as a test so the condition
-    cannot silently return.
-19. The full host suite passes with the deleted tests removed, and no remaining
-    test imports a deleted name.
-
-**Both branches promoted together.** Change A spans `tab5/pilot.py`,
-`shelly1/anti-chatter.js` and the Pilot editor, so `tab5-working` and
-`pilot-working` must move as a pair.
+**Integration — [R2], the cases the earlier revision had no tests for**
+18. A package assigning `PumpEnable` is rejected by the support gate once
+    `RLY(0)` is `read`, and the rejection names the field.
+19. A package with the `Boolean.Set` shape passes the gate; one with
+    `normalValue: true`, or a method the gate does not know, does not.
+20. A `Boolean.Set` reply without `was_on` is treated as success; a reply with
+    an `error` is not, and neither is a reply with no recognised field.
+21. Two events owning the flag write `true` once; releasing one keeps it `true`;
+    releasing the last writes `false` on the following cycle.
+22. A one-shot `transition` assignment to any other target is **not** undone on
+    the next cycle.
+23. `GetComponents` returning fewer entries than `total` rejects the whole
+    acquisition rather than reading as a missing component.
+24. Entering Monitor in the same cycle an inhibit opened leaves no pending write.
+25. Mode is resolved once per cycle: reordering the events in the package does
+    not change which events are processed.
 
 ---
 
-## 7. Questions for review
+## 7. Rollout — **[R2]**, promotion is not installation
 
-1. **A8 scope.** Reconciling every non-pump writable device target is more
-   general than reconciling `Tab5IsLocked` by name. The general form is the same
-   size and avoids a second hardcoded name, but it changes behaviour for any
-   future `readWrite` device field. General, or named?
-2. **B risk.** Three-valued logic is the only change here that touches every
-   condition in the engine. Is a same-behaviour-when-present test across all
-   fixtures sufficient evidence, or does it want its own release?
-3. **C2 and the frozen board.** Owners are retained but not acted on. Is that
-   the right reading of "retain event and ownership evidence", or should
-   entering Monitor close the non-monitor events so the durable log records why?
-4. **H001.** Under C it becomes a self-clearing System Monitor, which is safe.
-   The Pilot analyser currently warns about any non-manual Monitor. That warning
-   should be re-scoped to non-manual **and** `clearEvents`. Agreed?
-5. **Boolean versus number.** A boolean flag is minimal. A number would leave
-   room for a future hold count without another contract change. Worth the extra
-   now, or add it when needed?
-6. **Deletion scope.** Is 852 lines in one commit acceptable, or should D split
-   by group so a bisect can land on one engine? My preference is one commit,
-   because the groups are not independent — the V2 evaluator and its validation
-   path only become unreachable together.
-7. **`rules_v3_field_values`.** Unreachable but current. Delete, or was it
-   written for something still pending?
+Promoting two branches does not coordinate three installations. Making `RLY(0)`
+read-only is a hard cutover: the moment the new Tab5 build runs, every currently
+published package fails the support gate and does not adopt.
+
+There is no configuration in which old and new are both correct, so the sequence
+matters and every step is a person doing something:
+
+1. **Publish the revised package first, do not deliver it.** It assigns
+   `Tab5IsLocked`, not `PumpEnable`, and carries `H001` on a condition trigger.
+   The current Tab5 build will not adopt it — the object is unknown to it —
+   which is the intended interlock, not a failure.
+2. **Install the Shelly script.** It declares `Tab5IsLocked` and takes sole
+   ownership of RLY0. Until Tab5 writes the flag it stays false, so the relay
+   closes exactly as before. This step is independently safe and reversible.
+3. **Verify the component exists and reads back**, by name, before going further.
+   Tab5 rejects the whole acquisition if it is missing.
+4. **Install the Tab5 build, then restart.** Adoption is restart-only. The new
+   package now adopts; the old one would not.
+5. **Confirm `values.shelly1_tab5lock` is present** in the observation and that
+   a deliberate inhibit moves it, once, and moves it back.
+
+**Between steps 2 and 4 the system is unprotected by Tab5** — the flag exists,
+nothing writes it, and the old package no longer adopts. Mechanical protection
+is unaffected throughout: pressure switch, 3-second on-delay, 6-minute limit,
+HAND, and the Shelly's own chatter lock. Keep the window short and do it in
+daylight.
+
+**Rollback** is reinstalling the previous Tab5 build and re-delivering the
+previous package. The Shelly script can stay: with nothing writing `Tab5IsLocked`
+it holds false and the relay behaves as it does today.
+
+Both branches still promote together — Change A spans `tab5/pilot.py`,
+`shelly1/anti-chatter.js` and the Pilot editor — but promotion is step zero, not
+the deployment.
+
+---
+
+## 8. Review outcomes
+
+Settled in review; recorded so they are not reopened.
+
+| Question | Outcome |
+| --- | --- |
+| Reconcile general or named | **Named.** The general form breaks `transition` semantics — §A8. |
+| Three-valued truth tables | **Agreed.** No separate release needed, but fully populated fixtures are not sufficient evidence: clause order, unknown transitions, qualification counts and guards all need cases — tests 7-15. |
+| Boolean versus number | **Boolean.** No speculative counter. |
+| Frozen board | **Retain** events and ownership evidence, as proposed. |
+| Analyser warning | **Distinguish** automatic-recoverable Monitor from restart-only. Do not call a recoverable configuration safe without checking that its recovery condition can actually qualify — a condition that reads the device it is recovering from cannot, which is Change B's whole point. |
+| Deletion scope | **Out of this change.** Separate unit; one file proposed for deletion holds live V3 coverage — §5a. |
+| `rules_v3_field_values` | Deferred with the rest of §5a. Unreachable but current, so argue it individually. |
+
+## 9. Still open
+
+1. **Proposal §8 test 8 is unrun.** "Script stopped → relay stays closed" has
+   never been executed on hardware, and the power-on default does not imply it.
+   Until it is run, treat script death as leaving the relay wherever it was.
+2. **The step 2-4 window.** Whether the unprotected interval is acceptable as
+   written, or wants a staged package that assigns neither target so the gap
+   closes from both ends.
+3. **Short-excursion release.** §C4 accepts that a brief telemetry loss now
+   releases a hold that previously persisted. If that is wrong for the leak
+   classes specifically, it needs a mechanism this design does not contain.
