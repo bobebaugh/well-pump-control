@@ -66,12 +66,20 @@ Owner review of the coordinated M6.38 source and test sequence, then the cutover
 deployment, package delivery/adoption and branch promotion remain separate
 synchronized owner actions.
 
-Acceptance evidence still to be captured from the device, none of it fabricated
-here: a `Shelly.GetComponents` reply showing `Tab5IsLocked` as a `boolean:<id>`
-component with `config.name` and a Boolean `status.value`; a filtered `keys=[...]`
-reply, which also settles what `total` means under that filter; a `Boolean.Set`
-HTTP GET reply confirming the bare `null` acknowledgement; and observed relay
-behavior across a Shelly reboot with an inhibition outstanding.
+A filtered `keys=[...]` reply has now been captured from the device and is
+recorded in `tests/fixtures/shelly1-getcomponents-documentation.json` as
+`capturedFilteredResponse`. It establishes that the filter works and returns
+`switch:0`, that `total` under the filter is the matched count rather than the
+device-wide count, that `switch:0` and `input:0` carry `status.output` and
+`status.state` in the components envelope, and that components are not returned in
+the requested order. Acceptance remains presence-checked and consults no count.
+
+Acceptance evidence still to be captured, none of it fabricated here: a reply
+showing `Tab5IsLocked` as a `boolean:<id>` component with `config.name` and a
+Boolean `status.value`; how the device answers a filtered request naming a key that
+does not exist; a `Boolean.Set` HTTP GET reply confirming the bare `null`
+acknowledgement; and observed relay behavior across a Shelly reboot with an
+inhibition outstanding.
 
 The owner accepts that pump permission may be interrupted during the maintenance
 interval: a Shelly reboot physically drops its relay, and between stopping the old

@@ -274,6 +274,55 @@ class V3IntegratedApplicationTests(unittest.TestCase):
         self.assertIsNone(accept("bad", ids))
         self.assertIsNone(accept(self.filtered(), None))
 
+    def test_the_captured_device_response_parses(self):
+        """Against the owner-captured filtered reply, not a description of one.
+
+        The device returned the components in a different order from the one
+        requested, so acceptance is keyed rather than positional, and reported
+        total 4 - the number matched by the filter, not the device-wide 20.
+        """
+        captured = copy.deepcopy(SHELLY_DOC["capturedFilteredResponse"])
+        requested = ["switch:0", "input:0", "number:201", "number:202"]
+        returned = [item["key"] for item in captured["components"]]
+        self.assertEqual(sorted(returned), sorted(requested))
+        self.assertNotEqual(returned, requested, "order is not the requested order")
+        self.assertEqual(captured["total"], 4, "total is the matched count")
+        self.assertEqual(captured["offset"], 0)
+
+        routing = {"IsLocked": 201, "loCntr": 202, "Tab5IsLocked": 250}
+        # Tab5IsLocked does not exist on the device yet, so this exact reply must
+        # be rejected rather than partially accepted.
+        self.assertIsNone(
+            self.logic["normalize_shelly1_filtered"](captured, routing),
+            "a requested component that is absent rejects the whole acquisition")
+
+        # With the flag present, the same captured envelope is accepted.
+        complete = copy.deepcopy(captured)
+        complete["components"].append({
+            "key": "boolean:250",
+            "status": {"value": False, "source": "rpc", "last_update_ts": 1789329464},
+            "config": {"id": 250, "name": "Tab5IsLocked", "persisted": False,
+                       "default_value": False, "owner": "script:1", "access": "Crw"},
+            "attrs": {"owner": "script:1", "role": "tab5IsLocked"}})
+        complete["total"] = 5
+        record = self.logic["normalize_shelly1_filtered"](complete, routing)
+        self.assertEqual(record, {
+            "sw0": False, "rly0": True, "is_locked": 0, "lockout_count": 0,
+            "tab5_is_locked": False, "flag_id": 250})
+
+        # Order must not matter, and acceptance must not depend on total.
+        reversed_order = copy.deepcopy(complete)
+        reversed_order["components"].reverse()
+        self.assertEqual(self.logic["normalize_shelly1_filtered"](reversed_order, routing),
+                         record)
+        wrong_total = copy.deepcopy(complete)
+        wrong_total["total"] = 20
+        self.assertEqual(self.logic["normalize_shelly1_filtered"](wrong_total, routing),
+                         record)
+        del wrong_total["total"]
+        self.assertEqual(self.logic["normalize_shelly1_filtered"](wrong_total, routing),
+                         record, "a reply without total is still acceptable")
+
     def test_transport_failure_keeps_the_mapping_but_a_contradiction_discards_it(self):
         ids = self.routing_ids()
         # A timeout proves nothing about the components; the mapping survives.

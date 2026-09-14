@@ -178,10 +178,16 @@ so a transport failure keeps the mapping while a contradicting reply discards it
 **Acceptance is presence-checked, not derived from `total`.** Every requested key
 must be present and verified; anything missing rejects the acquisition. The owner
 captured the unfiltered call paginating — `offset` 0, `total` 20, twelve
-components returned, `switch:0` absent from the first page — which is why the
-keys filter is required rather than merely faster. What `total` means under that
-filter is not yet established by a captured response, and presence-checking is
-correct under either meaning, so no acceptance rule depends on it.
+components returned, `switch:0` absent from the first page — which is why the keys
+filter is required rather than merely faster.
+
+A captured filtered reply now establishes the rest: the filter works and does
+return `switch:0`; `total` under a keys filter is the number of **matched**
+components, not the device-wide count; `switch:0` carries `status.output` and
+`input:0` carries `status.state` inside the components envelope; and the device
+does **not** return components in the requested order, so lookup is by key rather
+than by position. Acceptance still does not consult `total` — presence-checking is
+correct whatever it counts, and a reply without it is still acceptable.
 
 One response reduces latency but is not a guaranteed simultaneous hardware
 snapshot. Read-to-write races remain possible; later cycles reconcile them.
