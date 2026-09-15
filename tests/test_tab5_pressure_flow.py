@@ -14,7 +14,6 @@ FUNCTIONS = {
     '_read_ads1110_fresh_raw_once',
     'average_raw_adc_counts',
     'calibrated_psi_from_raw_count',
-    'calibrated_psi_from_microvolts',
     'raw_count_regression_slope',
     'pressure_flow_evidence',
     'estimated_flow_gpm',
@@ -70,9 +69,6 @@ class PressureFlowTests(unittest.TestCase):
         convert = self.logic['calibrated_psi_from_raw_count']
         self.assertAlmostEqual(convert(count_at_40), 40.0)
         self.assertAlmostEqual(convert(count_at_60), 60.0)
-        self.assertAlmostEqual(
-            self.logic['calibrated_psi_from_microvolts'](
-                count_at_60 * self.logic['ADC_UV_PER_COUNT']), 60.0)
         self.assertIsNone(convert(True))
 
     def test_operational_flow_window_defaults_to_ten_seconds(self):
@@ -136,7 +132,7 @@ class PressureFlowTests(unittest.TestCase):
         self.assertIn('pressure_slope_psi_per_min', fill_source)
         self.assertIn('estimated_flow_gpm', fill_source)
         self.assertIn("batch = _acquire_calibration_batch()", fill_source)
-        self.assertNotIn('read_ads1110_microvolts()', fill_source)
+        self.assertNotIn('read_ads1110_filtered_raw_count()', fill_source)
 
     def test_regression_uses_irregular_actual_timestamps(self):
         slope = self.logic['raw_count_regression_slope']([

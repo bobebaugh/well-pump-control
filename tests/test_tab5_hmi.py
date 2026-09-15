@@ -10,7 +10,6 @@ PILOT_PATH = pathlib.Path(__file__).parents[1] / "tab5" / "pilot.py"
 FUNCTIONS = {
     "_is_number",
     "calibrated_psi_from_raw_count",
-    "calibrated_psi_from_microvolts",
     "operational_pump_state",
     "pressure_hmi_value",
     "enabled_rule_count",
@@ -102,7 +101,7 @@ def observation(power=2920.0, shelly_available=True, shelly_age_ms=250,
         "values": {
             "power": power,
             "voltage": 241.2,
-            "adc_microvolts": 3073125,
+            "adc_raw": 16390,
             "battery_voltage": 7.58,
             "battery_current": 0.218,
             "battery_percent": 78,
@@ -161,8 +160,8 @@ class HmiFoundationTests(unittest.TestCase):
 
     def test_pressure_is_not_presented_before_explicit_commissioning(self):
         pressure = self.logic["pressure_hmi_value"]
-        self.assertEqual(pressure(3073125), (None, "NOT COMMISSIONED"))
-        value, status = pressure(3073125, commissioned=True)
+        self.assertEqual(pressure(16390), (None, "NOT COMMISSIONED"))
+        value, status = pressure(16390, commissioned=True)
         self.assertEqual(status, "VALID")
         self.assertIsInstance(value, float)
         self.assertEqual(pressure(None, commissioned=True),
@@ -301,7 +300,7 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertIsNone(arm("restart-tab5", 2000, action, until, True)[2])
 
     def test_release_is_m636(self):
-        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.39")
+        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.40")
 
     def test_touch_service_is_not_limited_to_remaining_cycle_sleep(self):
         source = PILOT_PATH.read_text(encoding="utf-8")
@@ -313,13 +312,11 @@ class HmiFoundationTests(unittest.TestCase):
                         item.name == name)
             return ast.get_source_segment(source, node)
 
+        # The microvolt read stack was removed in M6.40; counts are the only
+        # ADC representation. The filtered reader is what services touch now.
         self.assertIn(
             "read_ads1110_fresh_raw_count(service)",
-            function_source("_read_ads1110_microvolts_once"),
-        )
-        self.assertIn(
-            "_read_ads1110_microvolts_once(service)",
-            function_source("read_ads1110_microvolts"),
+            function_source("read_ads1110_filtered_raw_count"),
         )
         service_source = function_source("service_navigation")
         self.assertIn("M5.update()", service_source)

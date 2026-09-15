@@ -25,6 +25,7 @@ FUNCTIONS = {
     "_rules_v3_add_owner", "_rules_v3_remove_owner", "_rules_v3_has_owner",
     "rules_v3_effective_mode", "_rules_v3_action", "_rules_v3_append_action",
     "advance_rules_v3_kernel", "restart_rules_v3_kernel",
+    "rules_v3_acquisition_availability",
 }
 CONSTANTS = {"RULES_V3_SCHEMA_VERSION", "RULES_V3_PACKAGE_KIND",
              "RULES_V3_INHIBITION_OBJECT", "RULES_V3_WRITE_SHAPES",
@@ -498,6 +499,129 @@ class V3SemanticKernelReplayTests(unittest.TestCase):
                          [("PumpEnable", False)])
         self.assertEqual([(a["target"], a["value"]) for a in dropped],
                          [("PumpEnable", True)])
+
+
+
+class AcquisitionReadinessGateTests(unittest.TestCase):
+    """Reboot sequence: CPU B holds network traffic while CPU A is already cycling.
+
+    With the polls skipped, the observation reported the Shelly devices as
+    unavailable rather than not-yet-attempted, and V3 evaluated that immediately
+    against a fresh kernel. Availability events could open on every reboot and
+    close again once polling began - newly generated events, not restored ones.
+
+    The gate is narrow on purpose. Cycles before the first PERMITTED acquisition
+    present availability as unknown, so qualification neither advances nor
+    resets. Every protective event still begins evaluating on the first real
+    acquisition, so lock reassertion stays as timely as it was.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.kernel = load_kernel()
+        package = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        cls.resolved = cls.kernel["resolve_rules_v3_package"](package)
+        assert cls.resolved is not None
+        cls.names = []
+        for device in cls.resolved["devices"].values():
+            if device.get("enabled") is not True:
+                continue
+            for field in device.get("fields", []):
+                if field.get("object") == "$availability":
+                    cls.names.append(field["systemName"])
+
+    def availability(self, accepted, begun):
+        return self.kernel["rules_v3_acquisition_availability"](
+            self.resolved, accepted, begun)
+
+    def test_before_the_first_attempt_availability_is_absent_not_false(self):
+        self.assertTrue(self.names, "the fixture must declare $availability fields")
+        values = self.availability({}, False)
+        for name in self.names:
+            self.assertNotIn(name, values,
+                             "absent reads as unknown; False would be a claim")
+
+    def test_after_the_first_attempt_a_missing_device_is_definitely_false(self):
+        values = self.availability({}, True)
+        for name in self.names:
+            self.assertIs(values.get(name), False)
+
+    def test_real_evidence_outranks_the_gate(self):
+        # A device that answered is available whatever the startup flag says.
+        device_id = next(iter(self.resolved["devices"]))
+        values = self.availability({device_id: {}}, False)
+        for field in self.resolved["devices"][device_id].get("fields", []):
+            if field.get("object") == "$availability":
+                self.assertIs(values.get(field["systemName"]), True)
+
+    def test_the_default_preserves_the_pre_gate_behaviour(self):
+        # An observation carrying no startup evidence must behave as before.
+        plain = self.kernel["rules_v3_acquisition_availability"](self.resolved, {})
+        for name in self.names:
+            self.assertIs(plain.get(name), False)
+
+    def test_an_unknown_availability_clause_is_unknown_not_false(self):
+        clause = {"field": self.names[0], "operator": "eq", "value": False}
+        evaluate = self.kernel["_rules_v3_clause_value"]
+        self.assertIs(evaluate(clause, self.availability({}, False), {}, {}),
+                      self.kernel["RULES_V3_UNKNOWN"])
+        self.assertIs(evaluate(clause, self.availability({}, True), {}, {}), True)
+
+    def test_unknown_freezes_qualification_rather_than_advancing_or_resetting(self):
+        # The point of the gate: a held-traffic cycle must neither open an event
+        # nor clear progress an earlier cycle made toward opening one.
+        advance = self.kernel["advance_rules_v3_kernel"]
+        copy_kernel = self.kernel["_copy_rules_v3_kernel"]
+        event = next(e for e in self.resolved["events"]
+                     if e["enabled"] is True
+                     and e["opening"]["trigger"]["type"] == "condition")
+        fresh = self.kernel["new_rules_v3_kernel"](self.resolved)
+
+        held, _actions, _records = advance(self.resolved, fresh, {}, 1000)
+        self.assertEqual(held["events"][event["id"]]["openCount"], 0)
+        self.assertIsNot(held["events"][event["id"]].get("active"), True)
+
+        primed = copy_kernel(held, self.resolved)
+        primed["events"][event["id"]]["openCount"] = 1
+        primed["events"][event["id"]]["openSinceMs"] = 500
+        after, _actions, _records = advance(self.resolved, primed, {}, 2000)
+        state = after["events"][event["id"]]
+        self.assertEqual(state["openCount"], 1, "unknown must not advance the count")
+        self.assertEqual(state["openSinceMs"], 500, "nor reset the qualification clock")
+        self.assertIsNot(state.get("active"), True, "and must never open the event")
+
+    def test_a_definite_false_still_resets_so_the_gate_broke_nothing(self):
+        advance = self.kernel["advance_rules_v3_kernel"]
+        copy_kernel = self.kernel["_copy_rules_v3_kernel"]
+        event = next(e for e in self.resolved["events"]
+                     if e["enabled"] is True
+                     and e["opening"]["trigger"]["type"] == "condition")
+        clauses = event["opening"]["trigger"]["condition"]["clauses"]
+        mode = event["opening"]["trigger"]["condition"]["mode"]
+        if mode != "all":
+            self.skipTest("needs an all-mode opening trigger to force one false")
+        # Make the first clause definitely false while leaving the rest unknown;
+        # for 'all' that is decisive, so the count must reset rather than freeze.
+        clause = clauses[0]
+        opposite = {"eq": "neq", "neq": "eq"}.get(clause["operator"])
+        if opposite is None:
+            fields = {clause["field"]: clause["value"]}
+            if clause["operator"] in ("gt", "gte"):
+                fields = {clause["field"]: clause["value"] - 1000}
+            elif clause["operator"] in ("lt", "lte"):
+                fields = {clause["field"]: clause["value"] + 1000}
+            else:
+                self.skipTest("clause operator not trivially falsifiable")
+        else:
+            fields = {clause["field"]: clause["value"]
+                      if clause["operator"] == "neq" else "\x00not-it"}
+        primed = copy_kernel(self.kernel["new_rules_v3_kernel"](self.resolved),
+                             self.resolved)
+        primed["events"][event["id"]]["openCount"] = 2
+        primed["events"][event["id"]]["openSinceMs"] = 500
+        after, _actions, _records = advance(self.resolved, primed, fields, 2000)
+        self.assertEqual(after["events"][event["id"]]["openCount"], 0)
+        self.assertIsNone(after["events"][event["id"]]["openSinceMs"])
 
 
 if __name__ == "__main__":

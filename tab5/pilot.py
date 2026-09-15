@@ -1,4 +1,4 @@
-# Release: 2026-09-15 M6.39 — 2s observation cadence, three ADC conversions.
+# Release: 2026-09-15 M6.40 — counts-only ADC, startup acquisition gate.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -69,7 +69,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.39'
+SOFTWARE_RELEASE = 'M6.40'
 OPERATOR_COMMAND_LIFETIME_MS = 45000
 OPERATOR_CONFIRM_WINDOW_MS = 8000
 SHELLY_RESTART_CONFIRM_MS = 60000
@@ -91,7 +91,9 @@ ADC_FILTER_SAMPLE_COUNT = 3
 MATERIAL_NUMERIC_THRESHOLDS = {
     'values.power': 50.0,
     'values.voltage': 2.0,
-    'values.adc_microvolts': 25000.0,
+    # 133 counts is 25000 uV at 187.5 uV/count, the threshold this replaced,
+    # and about 0.63 PSI at 211.492 counts/PSI.
+    'values.adc_raw': 133.0,
     'values.battery_voltage': 0.1,
     'values.battery_current': 0.1,
     'values.battery_percent': 1.0,
@@ -112,7 +114,7 @@ MATERIAL_EXACT_CHANGE_PATHS = (
 MATERIAL_CHANGE_LABELS = {
     'values.power': 'Shelly EM',
     'values.voltage': 'Shelly EM',
-    'values.adc_microvolts': 'pressure ADC',
+    'values.adc_raw': 'pressure ADC',
     'values.battery_voltage': 'Tab5 battery',
     'values.battery_current': 'Tab5 battery',
     'values.battery_percent': 'Tab5 battery',
@@ -392,42 +394,6 @@ def read_ads1110_fresh_raw_count(service=None):
             else:
                 log('ADS1110 fresh read failed after reinit: {}'.format(e))
     return None
-
-
-def _read_ads1110_microvolts_once(service=None):
-    """Return one fresh ADS1110 terminal-voltage conversion in microvolts."""
-    raw = read_ads1110_fresh_raw_count(service)
-    return None if raw is None else int(raw * ADC_UV_PER_COUNT)
-
-
-def trimmed_mean_microvolts(samples):
-    """Discard one high and one low value, then average what is left.
-
-    At ADC_FILTER_SAMPLE_COUNT == 3 exactly one value survives the trim, so this
-    returns the median. The arithmetic is unchanged and deliberately general: it
-    stays correct if the count is raised again.
-    """
-    if (not isinstance(samples, list) or
-            len(samples) != ADC_FILTER_SAMPLE_COUNT):
-        raise ValueError('expected exactly {} ADC samples'.format(
-            ADC_FILTER_SAMPLE_COUNT))
-    for value in samples:
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError('ADC samples must be integer microvolts')
-    ordered = list(samples)
-    ordered.sort()
-    return sum(ordered[1:-1]) // (ADC_FILTER_SAMPLE_COUNT - 2)
-
-
-def read_ads1110_microvolts(service=None):
-    """Use ADC_FILTER_SAMPLE_COUNT fresh 15-SPS conversions, trimmed, as one reading."""
-    samples = []
-    for index in range(ADC_FILTER_SAMPLE_COUNT):
-        value = _read_ads1110_microvolts_once(service)
-        if value is None:
-            return None
-        samples.append(value)
-    return trimmed_mean_microvolts(samples)
 
 
 def read_ads1110_filtered_raw_count(service=None):
@@ -1074,7 +1040,7 @@ def sample_age_ms(reference_ticks_ms, sample_ticks_ms):
 def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
                       shelly_is_available, shelly_poll_was_attempted,
                       shelly_last_valid_ticks_ms,
-                      ads_microvolts, adc_last_valid_ticks_ms,
+                      adc_last_valid_ticks_ms,
                       battery_voltage, battery_current,
                       battery_percent, battery_is_charging, battery_is_valid,
                       battery_charge_is_enabled, battery_sample_ticks_ms,
@@ -1083,7 +1049,8 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
                       shelly1=None, shelly1_is_available=False,
                       shelly1_poll_was_attempted=False,
                       shelly1_last_valid_ticks_ms=None,
-                      shelly1_failures=0, ads_raw_count=None):
+                      shelly1_failures=0, ads_raw_count=None,
+                      acquisition_begun=True):
     """Build the variable-sized record whose ownership transfers to CPU B."""
     return {
         'schemaVersion': 1,
@@ -1102,14 +1069,15 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
             'is_valid': shelly.get('is_valid'),
             'total': shelly.get('total'),
             'total_returned': shelly.get('total_returned'),
-            # The runtime contract uses native filtered ADC counts.  The
-            # microvolt field is retained only as pilot diagnostic evidence.
+            # Native filtered ADC counts, and the only ADC representation.
+            # A microvolt field was published alongside this until M6.40; it was
+            # converted straight back to counts by every consumer, so it was a
+            # lossy intermediate that existed only to be undone.
             'adc_raw': ads_raw_count,
-            'adc_microvolts': ads_microvolts,
             # Preserve the M6.17 end-to-end calculation as separate evidence.
             # pressure_valid below prevents an uncommissioned input from being
             # presented as an operational measurement.
-            'pressure_psi': calibrated_psi_from_microvolts(ads_microvolts),
+            'pressure_psi': calibrated_psi_from_raw_count(ads_raw_count),
             'battery_voltage': battery_voltage,
             'battery_current': battery_current,
             'battery_percent': battery_percent,
@@ -1126,17 +1094,21 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
         },
         'status': {
             'shelly_available': shelly_is_available,
+            # Latched once the first acquisition attempt is permitted, and never
+            # cleared. Distinct from shelly_poll_attempted, which is per cycle:
+            # this says whether ANY attempt has yet been allowed to happen.
+            'acquisition_begun': acquisition_begun,
             'shelly_poll_attempted': shelly_poll_was_attempted,
             'shelly_last_valid_ticks_ms': shelly_last_valid_ticks_ms,
             'shelly_age_ms': sample_age_ms(
                 observed_ticks_ms, shelly_last_valid_ticks_ms),
-            'adc_available': ads_microvolts is not None,
+            'adc_available': ads_raw_count is not None,
             'adc_last_valid_ticks_ms': adc_last_valid_ticks_ms,
             'adc_age_ms': sample_age_ms(
                 observed_ticks_ms, adc_last_valid_ticks_ms),
             'pressure_sensor_commissioned': PRESSURE_SENSOR_COMMISSIONED,
             'pressure_valid': (PRESSURE_SENSOR_COMMISSIONED and
-                               ads_microvolts is not None),
+                               ads_raw_count is not None),
             'battery_available': battery_is_valid,
             'battery_sample_ticks_ms': battery_sample_ticks_ms,
             'shelly_failure_count': shelly_failures,
@@ -3441,15 +3413,38 @@ def collect_rules_v3_device_records(resolved, observation):
     return accepted, unavailable
 
 
-def rules_v3_acquisition_availability(resolved, accepted_records):
-    """Tab5's acquisition result survives rejection of device measurements."""
+def rules_v3_acquisition_availability(resolved, accepted_records,
+                                      acquisition_begun=True):
+    """Tab5's acquisition result survives rejection of device measurements.
+
+    Before the first PERMITTED acquisition attempt there is no evidence either
+    way, so availability is left ABSENT rather than reported False. An absent
+    field reads as unknown, and unknown neither advances nor resets an event's
+    qualification - it freezes it. That is the whole correction: CPU B holds
+    network traffic for a quiet period after boot while CPU A is already
+    cycling, and reporting "unavailable" during that hold is a claim the device
+    has not earned. It let availability events open on a reboot and close again
+    once polling started.
+
+    A blanket delay of event processing would be less safe. This leaves every
+    protective event evaluating from the first real acquisition, so a lock is
+    reasserted as promptly as before.
+
+    acquisition_begun defaults True so an observation carrying no startup
+    evidence behaves exactly as it did before this gate existed.
+    """
     values = {}
     for device_id, device in resolved.get('devices', {}).items():
         if device.get('enabled') is not True:
             continue
         for field in device.get('fields', []):
             if field.get('object') == '$availability' and field.get('type') == 'boolean':
-                values[field['systemName']] = device_id in accepted_records
+                accepted = device_id in accepted_records
+                # Real evidence always wins: a device that answered is available
+                # whatever the startup flag says.
+                if not accepted and acquisition_begun is not True:
+                    continue
+                values[field['systemName']] = accepted
     return values
 
 
@@ -3587,7 +3582,11 @@ def run_rules_v3_cycle(runtime, observation, now_ms, occurrences=None,
     resolved = runtime['resolved']
     device_records, unavailable = collect_rules_v3_device_records(resolved, observation)
     inputs = freeze_rules_v3_snapshot(resolved, device_records)
-    inputs.update(rules_v3_acquisition_availability(resolved, device_records))
+    # Absent means "no startup evidence recorded", which is the pre-gate
+    # behaviour; only an explicit False holds availability at unknown.
+    inputs.update(rules_v3_acquisition_availability(
+        resolved, device_records,
+        observation.get('status', {}).get('acquisition_begun') is not False))
     calculated, calculation_state = evaluate_rules_v3_calculations(
         resolved, inputs, runtime.get('calculations'), now_ms)
     snapshot = dict(calculated)  # one cycle image shared by every event
@@ -4039,13 +4038,13 @@ def operational_pump_state(power_w, shelly_available, shelly_age_ms):
     return 'RUNNING' if power_w >= PUMP_RUNNING_THRESHOLD_W else 'STOPPED'
 
 
-def pressure_hmi_value(ads_microvolts, commissioned=PRESSURE_SENSOR_COMMISSIONED):
+def pressure_hmi_value(ads_raw_count, commissioned=PRESSURE_SENSOR_COMMISSIONED):
     """Gate displayed PSI on explicit sensor commissioning, not ADC presence."""
     if not commissioned:
         return None, 'NOT COMMISSIONED'
-    if not _is_number(ads_microvolts):
+    if not _is_number(ads_raw_count):
         return None, 'UNAVAILABLE'
-    pressure_psi = calibrated_psi_from_microvolts(ads_microvolts)
+    pressure_psi = calibrated_psi_from_raw_count(ads_raw_count)
     if (pressure_psi is None or pressure_psi < 0 or
             pressure_psi > PRESSURE_SENSOR_SPAN_PSI):
         return None, 'UNAVAILABLE'
@@ -4203,7 +4202,7 @@ def build_now_hmi_model(observation, transport_status=None,
         status, 'adc_last_valid_ticks_ms', 'adc_age_ms',
         current_ticks_ms)
     pressure_psi, pressure_status = pressure_hmi_value(
-        values.get('adc_microvolts'))
+        values.get('adc_raw'))
     shelly1_available = status.get('shelly1_available') is True
     sw0 = values.get('shelly1_sw0')
     rly0 = values.get('shelly1_rly0')
@@ -4854,8 +4853,8 @@ def summarize_adc_samples(samples):
     valid.sort()
     return {
         'count': len(valid),
-        'representativeMicrovolts': valid[len(valid) // 2],
-        'spreadMicrovolts': valid[-1] - valid[0],
+        'representativeCounts': valid[len(valid) // 2],
+        'spreadCounts': valid[-1] - valid[0],
     }
 
 
@@ -4893,13 +4892,6 @@ def calibrated_psi_from_raw_count(raw_count):
         return None
     return ((raw_count - PRESSURE_CALIBRATION_COUNT_INTERCEPT) /
             PRESSURE_CALIBRATION_COUNTS_PER_PSI)
-
-
-def calibrated_psi_from_microvolts(microvolts):
-    """Apply the count-domain fit while preserving raw microvolts separately."""
-    if isinstance(microvolts, bool) or not isinstance(microvolts, (int, float)):
-        return None
-    return calibrated_psi_from_raw_count(microvolts / ADC_UV_PER_COUNT)
 
 
 def raw_count_regression_slope(history, reference_ticks_ms, window_seconds,
@@ -5417,7 +5409,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.39: 2s cadence; Tab5IsLocked inhibition; V3 authority')
+log('CPU A release M6.40: counts-only ADC; startup acquisition gate; V3 authority')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.
@@ -5482,6 +5474,11 @@ last_valid_adc_ms = None
 last_valid_shelly1 = None
 last_valid_shelly1_ms = None
 shelly1_failure_count = 0
+# Latched true on the first cycle permitted to reach the network, and never
+# cleared. CPU B holds traffic for a quiet period after boot while CPU A is
+# already cycling; until an attempt has been allowed, "unavailable" would be a
+# claim about the devices that this application has not earned.
+acquisition_begun = False
 hmi_page = HMI_PAGE_NOW
 navigation_pressed = False
 last_observation = None
@@ -5600,11 +5597,9 @@ while True:
     # detection to whatever sleep time happens to remain afterward.
     adc_started_ms = time.ticks_ms()
     ads_raw_count = read_ads1110_filtered_raw_count(service_navigation)
-    ads_uv = (None if ads_raw_count is None
-              else int(ads_raw_count * ADC_UV_PER_COUNT))
     adc_completed_ms = time.ticks_ms()
     adc_acquisition_ms = elapsed_ticks_ms(adc_started_ms, adc_completed_ms)
-    if ads_uv is not None:
+    if ads_raw_count is not None:
         last_valid_adc_ms = adc_completed_ms
 
     if (time.ticks_diff(now, last_battery_diagnostic_ms) >=
@@ -5640,6 +5635,7 @@ while True:
     shelly_em_acquisition_ms = None
     shelly1_acquisition_ms = None
     if wifi_connected and network_traffic_allowed:
+        acquisition_begun = True   # latched before the reads it authorises
         shelly_poll_attempted = True
         service_navigation()
         shelly_em_started_ms = time.ticks_ms()
@@ -5678,7 +5674,7 @@ while True:
     observation = build_observation(
         observation_sequence, observation_ticks_ms, clock_synced,
         sample if sample is not None else {}, sample is not None,
-        shelly_poll_attempted, last_valid_sample_ms, ads_uv,
+        shelly_poll_attempted, last_valid_sample_ms,
         last_valid_adc_ms,
         battery_v, battery_a, battery_level, battery_charging,
         battery_valid, charge_enable, battery_sample_ms,
@@ -5686,7 +5682,8 @@ while True:
         wifi_ip, wifi_disconnect_events, sample_failure_count,
         shelly1_sample, shelly1_sample is not None,
         shelly1_poll_attempted, last_valid_shelly1_ms,
-        shelly1_failure_count, ads_raw_count=ads_raw_count)
+        shelly1_failure_count, ads_raw_count=ads_raw_count,
+        acquisition_begun=acquisition_begun)
     transport_status = cloud.transport_status_snapshot()
     add_transport_evidence(observation, transport_status, observation_ticks_ms)
     observation['status']['rules_runtime_state'] = rules_runtime_state

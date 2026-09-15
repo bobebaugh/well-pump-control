@@ -17,13 +17,12 @@ FUNCTIONS = {
     "_numeric_material_change",
     "_material_change_detail",
     "material_change_details",
-    "trimmed_mean_microvolts",
     "normalize_shelly1_status",
     "summarize_adc_samples",
     "qualification_pump_running",
     "qualification_midpoint_ticks",
     "calibrated_psi_from_raw_count",
-    "calibrated_psi_from_microvolts",
+    "read_ads1110_filtered_raw_count",
     "sample_age_ms",
     "build_observation",
     "new_event_history",
@@ -220,7 +219,7 @@ class ObservationSelectionTests(unittest.TestCase):
             shelly_is_available=False,
             shelly_poll_was_attempted=True,
             shelly_last_valid_ticks_ms=6000,
-            ads_microvolts=7000000,
+            ads_raw_count=16390,
             adc_last_valid_ticks_ms=7900,
             battery_voltage=7.8,
             battery_current=0.0,
@@ -243,7 +242,7 @@ class ObservationSelectionTests(unittest.TestCase):
         self.assertIsNone(unavailable["values"]["power"])
         self.assertAlmostEqual(
             unavailable["values"]["pressure_psi"],
-            self.logic["calibrated_psi_from_microvolts"](7000000),
+            self.logic["calibrated_psi_from_raw_count"](16390),
         )
         self.assertFalse(unavailable["status"]["pressure_sensor_commissioned"])
         self.assertFalse(unavailable["status"]["pressure_valid"])
@@ -251,24 +250,32 @@ class ObservationSelectionTests(unittest.TestCase):
         self.assertIsNone(self.reason(unavailable, previous, 1000))
 
     def test_adc_trim_discards_one_high_and_one_low_sample(self):
+        # The trim lives INLINE in read_ads1110_filtered_raw_count, which is the
+        # only path production uses. A separate trimmed_mean_microvolts helper
+        # used to hold a second copy of this arithmetic, reachable only from a
+        # dead entry point - so editing it changed nothing while every test
+        # still passed. Drive the real reader instead.
         count = self.logic["ADC_FILTER_SAMPLE_COUNT"]
-        trim = self.logic["trimmed_mean_microvolts"]
-        # At a count of three the trim leaves one value, so this is a median.
-        # Built from the count so the case stays honest if the count changes.
-        rising = [4800000 + 10000 * index for index in range(count)]
-        self.assertEqual(trim(rising), rising[count // 2])
-        # A single wild sample must not reach the result, high or low.
-        for outlier in (99999999, -99999999):
+        read = self.logic["read_ads1110_filtered_raw_count"]
+
+        def feed(values):
+            queue = list(values)
+            self.logic["read_ads1110_fresh_raw_count"] = lambda service=None: (
+                queue.pop(0) if queue else None)
+            return read()
+
+        rising = [4800 + 10 * index for index in range(count)]
+        self.assertEqual(feed(rising), rising[count // 2],
+                         "at a count of three the trim leaves the median")
+        for outlier in (999999, -999999):
             spiked = list(rising)
             spiked[0] = outlier
-            self.assertNotEqual(trim(spiked), outlier)
-            self.assertGreaterEqual(trim(spiked), min(rising[1:]))
-            self.assertLessEqual(trim(spiked), max(rising[1:]))
-        # The count is a contract: a batch of any other size is rejected.
-        with self.assertRaises(ValueError):
-            trim(rising + [4900000])
-        with self.assertRaises(ValueError):
-            trim(rising[:-1])
+            result = feed(spiked)
+            self.assertNotEqual(result, outlier)
+            self.assertGreaterEqual(result, min(rising[1:]))
+            self.assertLessEqual(result, max(rising[1:]))
+        # One unreadable conversion rejects the whole reading.
+        self.assertIsNone(feed(rising[:-1]))
 
     def test_shelly1_status_normalizes_only_gen4_rpc_boolean_state(self):
         normalize = self.logic["normalize_shelly1_status"]
@@ -286,8 +293,8 @@ class ObservationSelectionTests(unittest.TestCase):
         summarize = self.logic["summarize_adc_samples"]
         self.assertEqual(summarize([4010000, 3990000, None, 4000000, 4020000]), {
             "count": 4,
-            "representativeMicrovolts": 4010000,
-            "spreadMicrovolts": 30000,
+            "representativeCounts": 4010000,
+            "spreadCounts": 30000,
         })
         self.assertIsNone(summarize([None, True]))
 
@@ -317,7 +324,6 @@ class ObservationSelectionTests(unittest.TestCase):
             shelly_is_available=False,
             shelly_poll_was_attempted=True,
             shelly_last_valid_ticks_ms=None,
-            ads_microvolts=3073125,
             adc_last_valid_ticks_ms=8950,
             battery_voltage=None,
             battery_current=None,
@@ -335,13 +341,14 @@ class ObservationSelectionTests(unittest.TestCase):
             ads_raw_count=16390,
         )
         self.assertEqual(built["values"]["adc_raw"], 16390)
-        self.assertEqual(built["values"]["adc_microvolts"], 3073125)
+        # A microvolt value is no longer published at all: it was converted
+        # straight back to counts by every consumer.
+        self.assertNotIn("adc_microvolts", built["values"])
         self.assertEqual(built["status"]["adc_last_valid_ticks_ms"], 8950)
         self.assertEqual(built["status"]["adc_age_ms"], 50)
-        expected_count = 3073125 / self.logic["ADC_UV_PER_COUNT"]
         self.assertAlmostEqual(
             built["values"]["pressure_psi"],
-            (expected_count - self.logic["PRESSURE_CALIBRATION_COUNT_INTERCEPT"]) /
+            (16390 - self.logic["PRESSURE_CALIBRATION_COUNT_INTERCEPT"]) /
             self.logic["PRESSURE_CALIBRATION_COUNTS_PER_PSI"],
         )
         self.assertFalse(built["status"]["pressure_sensor_commissioned"])

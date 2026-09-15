@@ -1,12 +1,37 @@
 # Current status — Tab5 line
 
-## Now — M6.39 cadence and ADC reduction, awaiting upload
+## Now — M6.40 counts-only ADC and startup acquisition gate, awaiting upload
 
 **M6.38 is live.** The coordinated inhibition unit is deployed: the cloud side
 from `pilot-working`, a new rules package published and running, `anti-chatter.js`
 installed on the Shelly, and M6.38 `pilot.py` on Tab5.
 
-**M6.39 is on `tab5-working` and not yet uploaded.** It is `pilot.py` only. It
+**M6.40 is on `tab5-working` and not yet uploaded.** It is `pilot.py` only, and
+supersedes M6.39, which was delivered as a file but whose upload was not
+confirmed. Two changes on top of M6.39.
+
+*Counts are the only ADC representation.* A microvolt value was published as
+`values.adc_microvolts` and then converted straight back to counts by every
+consumer, so it was a lossy intermediate that existed only to be undone. It is
+gone, along with the dead `read_ads1110_microvolts` stack and the second copy of
+the trim arithmetic that only that dead path reached - editing that copy changed
+nothing while every test still passed. `values.adc_raw` was already the bound
+object; `values.adc_microvolts` was never in `DRIVER_BINDINGS` at all and appears
+on the Pilot side only as an example of an invalid binding. The publish-on-change
+threshold moved with it: `values.adc_raw: 133.0` is the same physical change as
+the 25000 uV it replaced.
+
+*A startup acquisition gate.* CPU B holds network traffic for a quiet period
+after boot while CPU A is already cycling. The skipped polls were reported as
+"unavailable" rather than "not attempted", and a fresh kernel evaluated that
+immediately, so availability events opened on every reboot and closed again once
+polling began. Cycles before the first permitted attempt now present availability
+as absent, which reads as unknown, and unknown freezes qualification rather than
+advancing or resetting it. Deliberately not a blanket delay of event processing:
+every protective event still evaluates from the first real acquisition, so lock
+reassertion is as timely as before.
+
+M6.39, carried forward: it
 moves the observation cadence to 2000ms and derives `STALE_AFTER_MS` and the
 regression `SAMPLE_GAP` limit from it rather than leaving them as literals that
 silently change meaning; cuts the ADC filter from five conversions to three, a
