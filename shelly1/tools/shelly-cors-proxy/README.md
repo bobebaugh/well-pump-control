@@ -17,6 +17,17 @@ Go cross-compiles, so no Windows machine is needed:
 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o shelly_cors_proxy.exe .
 ```
 
+The binary is not committed. It is a build artifact and the page is baked into it,
+so every page change would add another six megabytes to history. Rebuild it, or ask
+for a fresh one. Verified for the current page on 2026-09-15 with Go 1.24.7: PE32+
+x86-64 console executable, 6.05 MB.
+
+Before a build ships, the same source is built for Linux and run against a mock
+device to confirm the `/proxy/` path parsing and the response relay - including
+that a setter's bare `null` survives byte-for-byte - and that an unknown path, a
+missing host, a POST and an unreachable device return 404, 400, 405 and a JSON
+error.
+
 `-ldflags="-s -w"` strips debug symbols, giving roughly 5.8 MB. `//go:embed
 index.html` bakes the page into the binary at compile time — the compiler reads
 the file during the build and copies its bytes into the executable, so the `.exe`
