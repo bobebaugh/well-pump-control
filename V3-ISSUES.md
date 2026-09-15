@@ -192,9 +192,37 @@ Review this as part of the generic Functions/history design in the consolidation
 simple calculations use the current frozen snapshot; history-dependent logic belongs in
 approved bounded Functions with explicit history consumers and reset boundaries.
 
+### TAB5-13 — A calculation cannot be switched off, and none is cadence-aware · OPEN, DEFERRED
+Calculated fields are not events. They carry no `enabled` flag - devices, events and
+rules all do - so every calculation in a package is compiled into `calculation_plan`
+and evaluated every cycle regardless of whether any enabled event consumes its
+outputs. Deleting the field is the only way to stop it running, and that loses its
+calibration unless it was captured outside the package first.
+
+Two consequences, both live:
+
+- `calc-tank` runs every cycle today and discards the result. Cheap, but not free,
+  and not dormant. An earlier note in this session wrongly described it as disabled
+  and costing nothing; it is neither.
+- A regression window is filled in wall-clock time but gated on a sample COUNT, so it
+  is silently starved when the cadence slows. At M6.39's 2000ms cycle the shipped
+  `calc-tank` wants 8 samples in 10s and can get 6, so `TankFlowQuality` pins at
+  `INSUFFICIENT_HISTORY` indefinitely. `rules_v3_cadence_warnings()` reports this at
+  adoption rather than rejecting the package, because every other rule still runs.
+  The package-side fix is a 20s window keeping 8 samples, which also improves the
+  fit; nothing in `pilot.py` can fix it.
+
+The general form is dead-code elimination in the authoring compiler: decide whether a
+calculation's outputs reach an enabled event, and drop it if not. The owner's
+assessment, 2026-09-15, is that this is a version-10 concern and not beta 1. Recorded
+so the reasoning is not rediscovered rather than as a work item. A cadence-awareness
+check at authoring time - warning on a window the target cycle cannot fill - is the
+cheaper half and could land much earlier.
+
 ### TAB5-7 — Executor retries are unbounded · OPEN
 A failed write is retried every cycle with no backoff and no attempt ceiling. If the
-Shelly is unreachable this is one HTTP attempt per second indefinitely.
+Shelly is unreachable this is one HTTP attempt per observation cycle indefinitely -
+per second before M6.39, per two seconds after it.
 
 Fix belongs in the generic executor: bounded retry/backoff and clear failure status,
 without blocking the one-second semantic cycle.

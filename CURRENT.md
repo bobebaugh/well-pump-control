@@ -18,9 +18,14 @@ logged as a generic `Shelly.read` with no reason classified.
 **Open against M6.39:** the shipped `calc-tank` asks for 8 samples in a 10s
 window, which a 2000ms cadence cannot supply. It needs a wider window (20s keeps
 8 samples and improves the fit) or a lower count, and that is a `pilot-working`
-republish. Tab5 logs `V3 CADENCE STARVED` at adoption until it is done. The
-calculation is not in use yet, and there is no way to deactivate a calculated
-field without deleting it and losing its calibration, so it stays.
+republish. Tab5 logs `V3 CADENCE STARVED` at adoption until it is done.
+
+Note what that costs, because it is easy to get wrong: a calculated field is not
+an event and carries no `enabled` flag. Every calculation in a package is
+compiled into the plan and **evaluated every cycle** whether or not any event
+reads its outputs. So `calc-tank` is not dormant - it runs each cycle and
+discards the result at `INSUFFICIENT_HISTORY`. Deleting it is the only way to
+stop that, and deletion loses its calibration, so it stays. See V3-ISSUES TAB5-13.
 
 The unit itself, as designed: Tab5 no longer writes
 RLY0. It publishes its own inhibition as the `Tab5IsLocked` Boolean on the Shelly 1,
