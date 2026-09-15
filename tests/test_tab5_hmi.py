@@ -31,6 +31,7 @@ FUNCTIONS = {
     "arm_operator_control",
 }
 CONSTANTS = {
+    "SAMPLE_PERIOD_MS",
     "STALE_AFTER_MS",
     "CLOUD_TELEMETRY_FRESH_MS",
     "CLOUD_RTDB_FRESH_MS",
@@ -150,7 +151,12 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertEqual(state(2920.0, True, 500), "RUNNING")
         self.assertEqual(state(12.3, True, 500), "STOPPED")
         self.assertEqual(state(2920.0, False, 500), "UNAVAILABLE")
-        self.assertEqual(state(2920.0, True, 3001), "UNAVAILABLE")
+        # Derived, not a literal: the staleness horizon scales with the sample
+        # cadence, so a hard-coded age silently stops testing the boundary.
+        stale = self.logic["STALE_AFTER_MS"]
+        self.assertEqual(state(2920.0, True, stale), "RUNNING",
+                         "the horizon itself is still fresh")
+        self.assertEqual(state(2920.0, True, stale + 1), "UNAVAILABLE")
         self.assertEqual(state(True, True, 500), "UNAVAILABLE")
 
     def test_pressure_is_not_presented_before_explicit_commissioning(self):

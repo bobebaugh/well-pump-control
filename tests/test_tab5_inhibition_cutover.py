@@ -31,11 +31,12 @@ FUNCTIONS = {
     "advance_rules_v3_kernel", "restart_rules_v3_kernel",
     "rules_v3_collapse_actions", "operator_monitor_event_id",
     "operator_monitor_occurrence_field", "user_monitor_instance",
+    "_is_number", "rules_v3_cadence_warnings",
 }
 CONSTANTS = {
     "RULES_V3_SCHEMA_VERSION", "RULES_V3_PACKAGE_KIND", "RUNTIME_DIRECT_BINDINGS",
     "RULES_V3_INHIBITION_OBJECT", "RULES_V3_WRITE_SHAPES", "RULES_V3_SUPPORTED_WRITES",
-    "RULES_V3_UNKNOWN",
+    "RULES_V3_UNKNOWN", "SAMPLE_PERIOD_MS",
 }
 
 
@@ -608,6 +609,65 @@ class DocumentedRpcCommandTests(unittest.TestCase):
         # The dispatcher accepts only a bare null; a reference that omitted this
         # would let a wrong-but-successful-looking reply pass unnoticed.
         self.assertIn("bare JSON `null`", self.README)
+
+
+
+class CadenceStarvationTests(unittest.TestCase):
+    """A regression window is filled in wall-clock time but gated on a sample count.
+
+    Slowing the observation loop therefore starves it silently: the quality
+    output pins at INSUFFICIENT_HISTORY and the calculation never produces a
+    value again. Nothing in the schema or the runtime-support gate catches it,
+    because neither knows the cadence.
+    """
+
+    def setUp(self):
+        self.kernel = load_kernel()
+        self.warn = self.kernel["rules_v3_cadence_warnings"]
+
+    def _package(self, window_seconds, minimum_samples):
+        return {"calculations": [{
+            "id": "C001", "kind": "function", "functionId": "boyle_tank",
+            "parameters": {"regressionWindowSeconds": window_seconds,
+                           "minimumSamples": minimum_samples}}]}
+
+    def test_the_shipped_window_is_fine_at_a_one_second_cycle(self):
+        self.assertEqual(self.warn(self._package(10, 8), 1000), [])
+
+    def test_the_shipped_window_is_starved_at_a_two_second_cycle(self):
+        warnings = self.warn(self._package(10, 8), 2000)
+        self.assertEqual(len(warnings), 1, warnings)
+        self.assertIn("C001", warnings[0])
+        self.assertIn("needs 8 samples", warnings[0])
+        self.assertIn("yields 6", warnings[0])
+
+    def test_the_boundary_is_not_off_by_one(self):
+        # A 10s window at 2000ms yields samples at 0,2,4,6,8,10 - six, not five.
+        self.assertEqual(self.warn(self._package(10, 6), 2000), [])
+        self.assertEqual(len(self.warn(self._package(10, 7), 2000)), 1)
+
+    def test_the_current_cadence_is_reported_against_the_shipped_package(self):
+        # Guards the pairing that actually ships, not a constructed one.
+        package = json.loads(REVISED_PATH.read_text(encoding="utf-8"))
+        warnings = self.warn(package, self.kernel["SAMPLE_PERIOD_MS"])
+        for warning in warnings:
+            self.assertIn("needs", warning)
+
+    def test_expression_calculations_and_malformed_parameters_are_ignored(self):
+        self.assertEqual(self.warn({"calculations": [
+            {"id": "C002", "kind": "expression", "output": {"type": "number"}}]}, 2000), [])
+        for parameters in ({}, {"regressionWindowSeconds": "10", "minimumSamples": 8},
+                           {"regressionWindowSeconds": 10, "minimumSamples": True},
+                           {"regressionWindowSeconds": 10}):
+            package = {"calculations": [
+                {"id": "C003", "kind": "function", "parameters": parameters}]}
+            self.assertEqual(self.warn(package, 2000), [], parameters)
+
+    def test_a_nonsense_period_or_package_yields_nothing_rather_than_throwing(self):
+        for period in (0, -1, None, "2000"):
+            self.assertEqual(self.warn(self._package(10, 8), period), [])
+        for package in (None, {}, {"calculations": None}, {"calculations": [None, 7]}):
+            self.assertEqual(self.warn(package, 2000), [])
 
 
 if __name__ == "__main__":

@@ -47,9 +47,19 @@ SHELLY_1_RESTART_URL = 'http://192.168.50.201/rpc/Shelly.Reboot'
 SHELLY_1_LOCK_NAME = 'IsLocked'
 SHELLY_1_COUNT_NAME = 'loCntr'
 SHELLY_1_FLAG_NAME = 'Tab5IsLocked'
-SAMPLE_PERIOD_MS = 1000
+# The observation cadence. Five ADS1110 conversions at 15 SPS already cost about
+# 335ms of this before any network I/O, and two Shelly reads may each spend up to
+# SHELLY_TIMEOUT_S. Anything below derived from this constant must stay derived:
+# a count-based threshold silently changes meaning when the cadence changes.
+SAMPLE_PERIOD_MS = 2000
 SHELLY_TIMEOUT_S = 1  # requests has whole-second granularity; C++ used 750ms
-STALE_AFTER_MS = 3000
+# Three cycles. Derived, not literal: at a 2000ms cadence a fixed 3000ms would
+# call a source stale after a single missed read.
+STALE_AFTER_MS = SAMPLE_PERIOD_MS * 3
+# A regression sample gap wider than this ends the window. Two cycles plus a
+# margin, so one late cycle is tolerated and a real stall is still caught. This
+# was a bare 2500 while the cadence was 1000ms; the arithmetic preserves it.
+SAMPLE_GAP_LIMIT_MS = SAMPLE_PERIOD_MS * 2 + 500
 CLOUD_TELEMETRY_FRESH_MS = 90000
 CLOUD_RTDB_FRESH_MS = 45000
 CLOUD_FAILED_RED_MS = 180000
@@ -3200,6 +3210,43 @@ def _rules_v3_runtime_supported(package):
     return True
 
 
+def rules_v3_cadence_warnings(package, period_ms):
+    """Name regression windows this sample cadence cannot fill.
+
+    A window is collected in wall-clock time but gated on a sample COUNT, so
+    slowing the loop starves it: the quality output pins at INSUFFICIENT_HISTORY
+    and the calculation never produces a value again. Nothing rejects such a
+    package and nothing should - every other rule in it still runs - so this is
+    reported loudly rather than enforced. It exists because the failure is
+    otherwise completely silent.
+    """
+    warnings = []
+    if not isinstance(package, dict) or not _is_number(period_ms) or period_ms <= 0:
+        return warnings
+    calculations = package.get('calculations')
+    if not isinstance(calculations, list):
+        return warnings
+    for calculation in calculations:
+        if not isinstance(calculation, dict) or calculation.get('kind') != 'function':
+            continue
+        parameters = calculation.get('parameters')
+        if not isinstance(parameters, dict):
+            continue
+        window_s = parameters.get('regressionWindowSeconds')
+        minimum = parameters.get('minimumSamples')
+        if not _is_number(window_s) or not _v3_integer(minimum):
+            continue
+        # Best case is one sample per cycle across the window, plus the one taken
+        # at this instant. The collector's tolerance is ignored on purpose: a
+        # window that only fills because of it has no margin left.
+        available = int(window_s * 1000 // period_ms) + 1
+        if available < minimum:
+            warnings.append('{} needs {} samples but a {}ms cycle yields {} in {}s'.format(
+                calculation.get('id') or 'calculation', minimum,
+                int(period_ms), available, window_s))
+    return warnings
+
+
 def resolve_rules_v3_package(package):
     """Resolve one validated V3 package for the pure kernel; perform no I/O."""
     if isinstance(package, str):
@@ -3462,7 +3509,7 @@ def _rules_v3_boyle_outputs(calculation, fields, state, now_ms):
         result[names[4]] = 'INSUFFICIENT_HISTORY'
         return result
     forward = ordered
-    if any(time.ticks_diff(forward[index][0], forward[index - 1][0]) > 2500
+    if any(time.ticks_diff(forward[index][0], forward[index - 1][0]) > SAMPLE_GAP_LIMIT_MS
            for index in range(1, len(forward))):
         result[names[4]] = 'SAMPLE_GAP'
         return result
@@ -5385,6 +5432,9 @@ if rules_v3_runtime is not None:
     log('V3 ENGINE RUNNING: release={} version={} hash={}'.format(
         active_rules_reference['releaseId'], active_rules_reference['packageVersion'],
         active_rules_reference['contentHash'][:12]))
+    for _cadence_warning in rules_v3_cadence_warnings(active_rules, SAMPLE_PERIOD_MS):
+        log('V3 CADENCE STARVED: {}; its quality output stays INSUFFICIENT_HISTORY'.format(
+            _cadence_warning))
 else:
     rules_v3_rejected = {'reason': _rules_v3_error}
     log('V3 ENGINE UNAVAILABLE: {}'.format(_rules_v3_error))
