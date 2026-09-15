@@ -33,7 +33,8 @@
   <h1>Shelly 1 Gen4 bench test</h1>
   <p>Test apparatus only. It discovers the script-declared <code>IsLocked</code>,
   <code>loCntr</code> and <code>Tab5IsLocked</code> by name, reads
-  <code>input:0</code> and <code>switch:0</code>, and <strong>never writes the
+  <code>input:0</code> and <code>switch:0</code> through the same keys-filtered
+  <code>Shelly.GetComponents</code> that Tab5 uses, and <strong>never writes the
   relay</strong>. Served locally by shelly_cors_proxy.exe, which relays requests to
   the Shelly so the browser never has to cross origins.</p>
 
@@ -145,6 +146,7 @@
 
     let endpoint = null;
     let components = null;
+    let staticComponents = {};
     let inputConfig = null;
     let refreshTimer = null;
     let timerTicker = null;
@@ -245,7 +247,7 @@
       }
     }
 
-    function renderState(status) {
+    function renderState() {
       const locked = named(components, "IsLocked");
       const count = named(components, "loCntr");
       const tab5 = named(components, "Tab5IsLocked");
@@ -257,21 +259,39 @@
       output.tab5.textContent = tab5
         ? (tab5.status?.value === true ? "TRUE" : tab5.status?.value === false ? "false" : "—")
         : "absent";
-      output.input.textContent = status["input:0"]?.state === true ? "ON" : status["input:0"]?.state === false ? "OFF" : "—";
-      output.relay.textContent = status["switch:0"]?.output === true ? "CLOSED" : status["switch:0"]?.output === false ? "open" : "—";
+      const inputState = staticComponents["input:0"]?.status?.state;
+      const relayState = staticComponents["switch:0"]?.status?.output;
+      output.input.textContent = inputState === true ? "ON" : inputState === false ? "OFF" : "—";
+      output.relay.textContent = relayState === true ? "CLOSED" : relayState === false ? "open" : "—";
       output.invert.textContent = inputConfig?.invert === true ? "invert is ON" : "";
       renderRunTimer();
     }
 
+    // input:0 and switch:0 come from a keys-filtered Shelly.GetComponents, the same
+    // request Tab5 makes and the only shape captured from this device. The page
+    // used Shelly.GetStatus, whose response was never captured here and which did
+    // not carry a usable input:0 in practice.
+    async function readStatic() {
+      const result = await rpc("Shelly.GetComponents", {
+        keys: ["switch:0", "input:0"], include: ["config", "status"]
+      });
+      const byKey = {};
+      for (const entry of result.components || []) {
+        if (entry && typeof entry.key === "string") byKey[entry.key] = entry;
+      }
+      return byKey;
+    }
+
     async function refresh() {
-      const [componentResult, status, config] = await Promise.all([
+      const [componentResult, staticByKey, config] = await Promise.all([
         rpc("Shelly.GetComponents", { dynamic_only: true, include: ["config", "status"] }),
-        rpc("Shelly.GetStatus"),
+        readStatic(),
         rpc("Input.GetConfig", { id: 0 }).catch(() => null)
       ]);
       components = componentResult.components || [];
+      staticComponents = staticByKey;
       inputConfig = config;
-      renderState(status || {});
+      renderState();
       setMessage(pollingActive ? "Connected. Refreshing once per second." : "Read once. Polling is stopped.", "ok");
     }
 
@@ -324,9 +344,15 @@
     // whatever is being reported now.
     async function setPumpInput(wanted) {
       try {
-        const status = await rpc("Shelly.GetStatus");
-        const reported = status["input:0"]?.state;
-        if (typeof reported !== "boolean") throw new Error("input:0 did not report a boolean state.");
+        const staticByKey = await readStatic();
+        const reported = staticByKey["input:0"]?.status?.state;
+        if (typeof reported !== "boolean") {
+          throw new Error(staticByKey["input:0"]
+            ? "input:0 was returned but carried no boolean status.state. Paste the reply from " +
+              "Shelly.GetComponents?keys=[\"input:0\"]&include=[\"config\",\"status\"] to diagnose."
+            : "input:0 was not returned by the keys-filtered Shelly.GetComponents. The device " +
+              "omits keys it does not have, so check the input exists and is enabled.");
+        }
         const config = await rpc("Input.GetConfig", { id: 0 });
         const currentInvert = config?.invert === true;
         const physical = reported !== currentInvert;      // XOR

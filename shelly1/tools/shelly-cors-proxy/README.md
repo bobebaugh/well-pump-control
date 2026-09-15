@@ -25,7 +25,8 @@ and recommit whenever `index.html` changes**, or the exe will silently serve an 
 page.
 
 The committed build: 2026-09-15, Go 1.24.7, PE32+ x86-64 console executable,
-6.05 MB, embedding the page as of commit c8800b5. It is unsigned, so Windows will
+6.05 MB, embedding the page as of commit a3eb663; rebuilt for the
+components-envelope change. It is unsigned, so Windows will
 warn on first run.
 
 Before a build ships, the same source is built for Linux and run against a mock
@@ -50,7 +51,12 @@ Read-only unless a button is pressed:
   `Tab5IsLocked` by name. Ids are assigned at creation and are not stable across a
   rebuild, so nothing here hard-codes one; the id travels in `config.id`, so the
   key is never parsed either.
-- `Shelly.GetStatus`, for `input:0` and `switch:0`.
+- `Shelly.GetComponents` with a `keys` filter, for `input:0` and `switch:0`. The
+  page used `Shelly.GetStatus` and it did not yield a usable `input:0` on this
+  device. That reply has never been captured here, while the components envelope
+  has — `status.state` on the input, `status.output` on the switch — and it is the
+  request Tab5 itself makes. The unfiltered call is known to truncate on this
+  device, which is the likeliest reason a whole-status read came back short.
 - `Input.GetConfig`, to show whether `invert` has been left flipped.
 
 Writes only what a button asks for, and **never the relay**. Move that from the

@@ -53,6 +53,22 @@ function makePage(respond) {
 function device(state) {
   return (method, params) => {
     if (method === "Shelly.GetComponents") {
+      // The device answers a keys filter with exactly the matching components, in
+      // no guaranteed order, and silently omits a key it does not have.
+      if (params.keys) {
+        const wanted = JSON.parse(params.keys);
+        const available = {
+          // The envelope shape captured from the device: state on the input,
+          // output on the switch, both under status.
+          "input:0": { key: "input:0", config: { id: 0, type: "switch", invert: state.invert },
+                       status: { id: 0, state: state.physical !== state.invert } },
+          "switch:0": { key: "switch:0", config: { id: 0, initial_state: "off" },
+                        status: { id: 0, output: state.relay, source: "loopback" } },
+        };
+        if (state.noInput) delete available["input:0"];
+        const matched = wanted.map(k => available[k]).filter(Boolean).reverse();
+        return { components: matched, offset: 0, total: matched.length };
+      }
       const components = [
         { key: "number:201", config: { id: 201, name: "IsLocked" }, status: { value: state.locked ?? 0 } },
         { key: "number:202", config: { id: 202, name: "loCntr" }, status: { value: 0 } },
@@ -61,7 +77,7 @@ function device(state) {
       return { components: state.noFlag ? components.filter(c => c.config.name !== "Tab5IsLocked") : components };
     }
     if (method === "Shelly.GetStatus") {
-      return { "input:0": { state: state.physical !== state.invert }, "switch:0": { output: state.relay } };
+      throw new Error("the page must not call Shelly.GetStatus; its reply was never captured from this device");
     }
     if (method === "Input.GetConfig") return { id: 0, invert: state.invert };
     if (method === "Input.SetConfig") { state.invert = JSON.parse(params.config).invert; return null; }
@@ -178,4 +194,27 @@ test("clear invert puts the input config back", async () => {
   await nodes["invert-clear"].click();
   assert.equal(state.invert, false);
   assert.equal(nodes["input-value"].textContent, "OFF");
+});
+
+test("input and switch are read from the keys-filtered components call", async () => {
+  // Shelly.GetStatus was never captured from this device and did not carry a
+  // usable input:0 in practice. The components envelope is the captured shape and
+  // the one Tab5 itself reads.
+  const state = freshState({ physical: true, relay: true });
+  const { nodes, calls } = makePage(device(state));
+  await nodes.connect.click();
+  assert.equal(nodes["input-value"].textContent, "ON");
+  assert.equal(nodes["relay-value"].textContent, "CLOSED");
+  assert.ok(!calls.some(c => c.includes("Shelly.GetStatus")), "no GetStatus call");
+  assert.ok(calls.some(c => c.includes("keys=") && c.includes("switch%3A0")),
+    "asked for the static components by key");
+});
+
+test("a missing input:0 is reported plainly instead of as a type error", async () => {
+  const state = freshState({ noInput: true });
+  const { nodes } = makePage(device(state));
+  await nodes.connect.click();
+  assert.equal(nodes["input-value"].textContent, "—");
+  await nodes["pump-on"].click();
+  assert.match(nodes.message.textContent, /not returned by the keys-filtered/);
 });
