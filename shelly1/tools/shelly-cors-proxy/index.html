@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shelly 1 Gen4 lock-state test</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0b1220; color: #e9efff; }
+    body { max-width: 760px; margin: 0 auto; padding: 28px 18px 48px; }
+    h1 { margin-bottom: 4px; } p { line-height: 1.45; color: #b9c8e5; }
+    .panel { background: #121d31; border: 1px solid #2c4165; border-radius: 10px; padding: 18px; margin: 16px 0; }
+    .row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+    label { display: grid; gap: 6px; color: #cdd9ef; font-size: .92rem; }
+    input { min-width: 150px; box-sizing: border-box; padding: 9px; border: 1px solid #4b638e; border-radius: 6px; background: #09111f; color: #fff; font: inherit; }
+    button { padding: 9px 13px; border: 0; border-radius: 6px; background: #42a5f5; color: #07111e; font-weight: 700; cursor: pointer; font: inherit; }
+    button.secondary { background: #334b73; color: #e9efff; }
+    .values { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+    .value { padding: 14px; background: #09111f; border-radius: 7px; }
+    .value span { display: block; color: #aebeda; font-size: .85rem; }
+    .value strong { font-size: 1.8rem; }
+    #message { min-height: 1.4em; color: #ffd37a; } .ok { color: #86efac !important; } .error { color: #fda4af !important; }
+    code { color: #b7ddff; }
+  </style>
+</head>
+<body>
+  <h1>Shelly 1 Gen4 lock-state test</h1>
+  <p>Test apparatus only. It discovers the script-owned <code>IsLocked</code> and <code>loCntr</code> values by name, reads <code>input:0</code>, and never writes the relay or input. Served locally by shelly_cors_proxy.exe, which relays requests to the Shelly so the browser never has to cross origins.</p>
+
+  <section class="panel">
+    <div class="row">
+      <label>Shelly IP address or hostname
+        <input id="host" autocomplete="off" placeholder="192.168.x.x">
+      </label>
+      <button id="connect" type="button">Connect</button>
+      <button id="toggle-polling" class="secondary" type="button" disabled>Stop Polling</button>
+      <button id="read-once" class="secondary" type="button" disabled>Read Once</button>
+    </div>
+    <p id="message">Enter the Shelly 1 Gen4 address, then connect.</p>
+  </section>
+
+  <section class="panel">
+    <div class="values">
+      <div class="value"><span>IsLocked</span><strong id="is-locked-value">—</strong><small> <span id="is-locked-unit"></span></small></div>
+      <div class="value"><span>loCntr</span><strong id="lockout-count-value">—</strong></div>
+      <div class="value"><span>Input(0)</span><strong id="input-value">—</strong></div>
+      <div class="value"><span>Relay(0)</span><strong id="relay-value">—</strong></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <label>Set IsLocked
+        <input id="is-locked-input" type="number" min="-1" max="86400" step="1" value="0">
+      </label>
+      <button id="set-is-locked" type="button" disabled>Set IsLocked</button>
+      <label>Set loCntr
+        <input id="lockout-count-input" type="number" min="0" max="3" step="1" value="0">
+      </label>
+      <button id="set-lockout-count" type="button" disabled>Set loCntr</button>
+      <button id="clear-both" class="secondary" type="button" disabled>Set both to 0</button>
+    </div>
+    <p><code>IsLocked = -1</code> remains sticky. <code>0</code> is clear. A positive integer decrements once each second to zero. <code>loCntr</code> is an independent test value from 0 through 3.</p>
+  </section>
+
+  <script>
+    const hostInput = document.querySelector("#host");
+    const connectButton = document.querySelector("#connect");
+    const togglePollingButton = document.querySelector("#toggle-polling");
+    const readOnceButton = document.querySelector("#read-once");
+    const setLockedButton = document.querySelector("#set-is-locked");
+    const setCountButton = document.querySelector("#set-lockout-count");
+    const clearBothButton = document.querySelector("#clear-both");
+    const message = document.querySelector("#message");
+    const output = {
+      locked: document.querySelector("#is-locked-value"),
+      lockedUnit: document.querySelector("#is-locked-unit"),
+      count: document.querySelector("#lockout-count-value"),
+      input: document.querySelector("#input-value"),
+      relay: document.querySelector("#relay-value")
+    };
+
+    let endpoint = null;
+    let components = null;
+    let refreshTimer = null;
+    let pollingActive = false;
+
+    function setMessage(text, state = "") {
+      message.textContent = text;
+      message.className = state;
+    }
+
+    function setControls(enabled) {
+      togglePollingButton.disabled = !enabled;
+      readOnceButton.disabled = !enabled;
+      setLockedButton.disabled = !enabled;
+      setCountButton.disabled = !enabled;
+      clearBothButton.disabled = !enabled;
+    }
+
+    function updatePollingButtonLabel() {
+      togglePollingButton.textContent = pollingActive ? "Stop Polling" : "Start Polling";
+    }
+
+    function startPolling() {
+      clearInterval(refreshTimer);
+      refreshTimer = setInterval(() => refresh().catch(error => setMessage(error.message, "error")), 1000);
+      pollingActive = true;
+      updatePollingButtonLabel();
+    }
+
+    function stopPolling() {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+      pollingActive = false;
+      updatePollingButtonLabel();
+      setMessage("Polling stopped. Values are static — use Read Once to check them, or the Set controls below.", "ok");
+    }
+
+    function normalizeEndpoint() {
+      let host = hostInput.value.trim().replace(/^https?:\/\//i, "").replace(/\/$/, "");
+      if (!host) throw new Error("Enter the Shelly address first.");
+      // Routed through this exe's own /proxy/<host>/rpc relay, so the
+      // browser only ever talks to its own origin — no CORS involved.
+      return `/proxy/${host}/rpc`;
+    }
+
+    async function rpc(method, params = {}) {
+      const url = new URL(`${endpoint}/${method}`, location.href);
+      for (const [key, value] of Object.entries(params)) {
+        url.searchParams.set(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+      }
+      const response = await fetch(url, { cache: "no-store" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error?.message || payload.error || `RPC ${method} failed (${response.status})`);
+      }
+      return Object.prototype.hasOwnProperty.call(payload, "result") ? payload.result : payload;
+    }
+
+    function namedNumber(list, name) {
+      return list.find(component => component.key?.startsWith("number:") && component.config?.name === name) || null;
+    }
+
+    function componentId(component) {
+      const match = /^number:(\d+)$/.exec(component?.key || "");
+      if (!match) throw new Error("The discovered component did not have a usable numeric ID.");
+      return Number(match[1]);
+    }
+
+    function renderState(status) {
+      const locked = namedNumber(components, "IsLocked");
+      const count = namedNumber(components, "loCntr");
+      if (!locked || !count) throw new Error("IsLocked and loCntr were not found. Save and start the supplied Shelly script first.");
+
+      output.locked.textContent = locked.status?.value ?? "—";
+      output.lockedUnit.textContent = locked.status?.value > 0 ? "seconds remaining" : "";
+      output.count.textContent = count.status?.value ?? "—";
+      output.input.textContent = status["input:0"]?.state === true ? "ON" : status["input:0"]?.state === false ? "OFF" : "—";
+      output.relay.textContent = status["switch:0"]?.output === true ? "ON" : status["switch:0"]?.output === false ? "OFF" : "—";
+    }
+
+    async function refresh() {
+      const [componentResult, status] = await Promise.all([
+        rpc("Shelly.GetComponents", { dynamic_only: true, include: ["config", "status"] }),
+        rpc("Shelly.GetStatus")
+      ]);
+      components = componentResult.components || [];
+      renderState(status || {});
+      setMessage(pollingActive ? "Connected. Refreshing once per second." : "Read once. Polling is stopped.", "ok");
+    }
+
+    async function connect() {
+      try {
+        endpoint = normalizeEndpoint();
+        localStorage.setItem("shelly1Gen4TestHost", hostInput.value.trim());
+        pollingActive = true; // set before the initial read so its status message is accurate
+        await refresh();
+        setControls(true);
+        startPolling();
+      } catch (error) {
+        pollingActive = false;
+        setControls(false);
+        setMessage(error.message + " Check the Shelly's IP address and that it's reachable on this network.", "error");
+      }
+    }
+
+    async function setNumber(name, input) {
+      try {
+        const component = namedNumber(components || [], name);
+        if (!component) throw new Error(`${name} is not available; connect first.`);
+        const value = Number(input.value);
+        if (!Number.isInteger(value)) throw new Error(`${name} must be an integer.`);
+        if (name === "IsLocked" && (value < -1 || value > 86400)) throw new Error("IsLocked must be -1 through 86400.");
+        if (name === "loCntr" && (value < 0 || value > 3)) throw new Error("loCntr must be 0 through 3.");
+        await rpc("Number.Set", { id: componentId(component), value });
+        await refresh();
+      } catch (error) {
+        setMessage(error.message, "error");
+      }
+    }
+
+    connectButton.addEventListener("click", connect);
+    togglePollingButton.addEventListener("click", () => {
+      if (pollingActive) {
+        stopPolling();
+      } else {
+        startPolling();
+        setMessage("Polling resumed.", "ok");
+      }
+    });
+    readOnceButton.addEventListener("click", () => refresh().catch(error => setMessage(error.message, "error")));
+    setLockedButton.addEventListener("click", () => setNumber("IsLocked", document.querySelector("#is-locked-input")));
+    setCountButton.addEventListener("click", () => setNumber("loCntr", document.querySelector("#lockout-count-input")));
+    clearBothButton.addEventListener("click", async () => {
+      await setNumber("IsLocked", Object.assign(document.querySelector("#is-locked-input"), { value: 0 }));
+      await setNumber("loCntr", Object.assign(document.querySelector("#lockout-count-input"), { value: 0 }));
+    });
+
+    hostInput.value = localStorage.getItem("shelly1Gen4TestHost") || "";
+  </script>
+</body>
+</html>
