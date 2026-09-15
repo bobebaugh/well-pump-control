@@ -60,8 +60,9 @@ function device(state) {
         const available = {
           // The envelope shape captured from the device: state on the input,
           // output on the switch, both under status.
-          "input:0": { key: "input:0", config: { id: 0, type: "switch", invert: state.invert },
-                       status: { id: 0, state: state.physical !== state.invert } },
+          "input:0": state.inputEntry || {
+            key: "input:0", config: { id: 0, type: "switch", invert: state.invert },
+            status: { id: 0, state: state.physical !== state.invert } },
           "switch:0": { key: "switch:0", config: { id: 0, initial_state: "off" },
                         status: { id: 0, output: state.relay, source: "loopback" } },
         };
@@ -77,8 +78,14 @@ function device(state) {
       return { components: state.noFlag ? components.filter(c => c.config.name !== "Tab5IsLocked") : components };
     }
     if (method === "Shelly.GetStatus") {
-      throw new Error("the page must not call Shelly.GetStatus; its reply was never captured from this device");
+      // Only the Diagnose panel may ask for this: its reply was never captured
+      // from this device, so no display path is allowed to depend on it.
+      if (!state.allowGetStatus) {
+        throw new Error("the page must not call Shelly.GetStatus outside Diagnose");
+      }
+      return { sys: {}, "switch:0": { id: 0, output: state.relay } };
     }
+    if (method === "Input.GetStatus") return { id: 0, state: state.physical !== state.invert };
     if (method === "Input.GetConfig") return { id: 0, invert: state.invert };
     if (method === "Input.SetConfig") { state.invert = JSON.parse(params.config).invert; return null; }
     if (method === "Boolean.Set") { state.flag = params.value === "true"; return null; }
@@ -217,4 +224,76 @@ test("a missing input:0 is reported plainly instead of as a type error", async (
   assert.equal(nodes["input-value"].textContent, "—");
   await nodes["pump-on"].click();
   assert.match(nodes.message.textContent, /not returned by the keys-filtered/);
+});
+
+test("a stateless input:0 is named, not silently dashed", async () => {
+  // A button-type input reports state null and emits events instead. The invert
+  // trick cannot drive it, so the page has to say that rather than retry.
+  const state = freshState({
+    inputEntry: { key: "input:0", config: { id: 0, type: "button", enable: true },
+                  status: { id: 0, state: null } },
+  });
+  const { nodes } = makePage(device(state));
+  await nodes.connect.click();
+  assert.equal(nodes["input-value"].textContent, "\u2014");
+  assert.match(nodes["invert-note"].textContent, /type "button" reports no steady state/);
+
+  await nodes["pump-on"].click();
+  assert.equal(nodes.message.className, "error");
+  assert.match(nodes.message.textContent, /type "button", not "switch"/);
+  assert.match(nodes["diagnose-output"].textContent, /"state": null/,
+    "the entry itself is dumped, so the device's own words are available");
+});
+
+test("a disabled input:0 is reported as disabled", async () => {
+  const state = freshState({
+    inputEntry: { key: "input:0", config: { id: 0, enable: false }, status: { id: 0 } },
+  });
+  const { nodes } = makePage(device(state));
+  await nodes.connect.click();
+  await nodes["pump-on"].click();
+  assert.match(nodes.message.textContent, /disabled in its config/);
+});
+
+test("an absent input:0 is distinguished from a stateless one", async () => {
+  const state = freshState({ noInput: true });
+  const { nodes } = makePage(device(state));
+  await nodes.connect.click();
+  assert.match(nodes["invert-note"].textContent, /not returned by the device/);
+});
+
+test("Diagnose dumps each reply against the exact URL that fetched it", async () => {
+  const state = freshState({ allowGetStatus: true });
+  const { nodes, calls } = makePage(device(state));
+  await nodes.connect.click();
+  await nodes.diagnose.click();
+  const dump = nodes["diagnose-output"].textContent;
+
+  // The point of the panel is that the URL shown is the page's own encoding,
+  // not a hand-typed one, so it has to be the string actually fetched.
+  const filtered = calls.filter(c => c.includes("keys=")).pop();
+  assert.ok(dump.includes(`GET ${filtered}`), `missing the filtered URL:\n${dump}`);
+  assert.ok(dump.includes("input%3A0"), "the URL is shown percent-encoded as sent");
+  assert.ok(dump.includes("Shelly.GetStatus"), "GetStatus is included only for comparison");
+  assert.match(dump, /"key": "input:0"/, "the components reply is verbatim");
+  assert.ok(!dump.includes("undefined"), dump);
+});
+
+test("Diagnose keeps going when one call fails, and the relay is still never written", async () => {
+  const state = freshState();   // Shelly.GetStatus throws in this fake
+  const { nodes, calls } = makePage(device(state));
+  await nodes.connect.click();
+  await nodes.diagnose.click();
+  const dump = nodes["diagnose-output"].textContent;
+  assert.match(dump, /Shelly\.GetStatus[\s\S]*FAILED/, dump);
+  assert.match(dump, /"key": "input:0"/, "the calls before the failure are still reported");
+  assert.ok(!calls.some(c => c.includes("Set")), "Diagnose only reads");
+});
+
+test("Copy falls back to a message when there is no clipboard", async () => {
+  const state = freshState();
+  const { nodes } = makePage(device(state));   // the sandbox has no navigator
+  await nodes.connect.click();
+  await nodes["diagnose-copy"].click();
+  assert.match(nodes.message.textContent, /copy it manually/);
 });

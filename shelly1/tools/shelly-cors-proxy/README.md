@@ -25,9 +25,8 @@ and recommit whenever `index.html` changes**, or the exe will silently serve an 
 page.
 
 The committed build: 2026-09-15, Go 1.24.7, PE32+ x86-64 console executable,
-6.05 MB, embedding the page as of commit a3eb663; rebuilt for the
-components-envelope change. It is unsigned, so Windows will
-warn on first run.
+6.05 MB, rebuilt for the Diagnose panel. It is unsigned, so Windows will warn on
+first run.
 
 Before a build ships, the same source is built for Linux and run against a mock
 device to confirm the `/proxy/` path parsing and the response relay - including
@@ -94,6 +93,26 @@ writes back what it wants. Stop Tab5, or run it with no adopted package, to driv
 the flag by hand. `IsLocked` and `loCntr` are different: nothing in Tab5 writes
 them, so a value set here stays until a script changes it.
 
+## Diagnose
+
+*Dump raw replies* issues the page's own requests and prints each reply verbatim
+under the exact URL that fetched it. The URL matters: the page builds its query
+through `URLSearchParams`, so a `keys` filter goes out percent-encoded, and a
+hand-typed URL is not necessarily the same request. Six calls are made, all reads:
+`Shelly.GetComponents` with `dynamic_only`, the same call filtered to
+`switch:0` and `input:0`, that call filtered to `input:0` alone,
+`Input.GetConfig`, `Input.GetStatus`, and `Shelly.GetStatus` — the last only so
+its reply can be compared against the components envelope, never as a display
+source. A call that fails is reported as `FAILED` and the dump continues.
+
+The panel exists because `input:0` came back from the filtered call without a
+boolean `status.state`, which the captured device response does carry. Two shapes
+now explain themselves without the dump: an input whose `config.type` is not
+`switch` holds no steady state (a button emits events instead, and flipping
+`invert` cannot drive it), and an input with `enable: false` reports nothing.
+Either way the entry is dumped as well, and a dash on Input(0) is labelled with
+which of the three cases it is — absent, stateless, or simply inverted.
+
 ## Tests
 
 ```
@@ -104,8 +123,10 @@ Executes the page's real JavaScript against a fake Shelly with a DOM shim, drivi
 real button clicks and asserting on real fetch calls. It covers activate and
 deactivate from every starting combination of terminal position and `invert`, the
 run timer's short-cycle verdict, a bare-null reply not being reported as a failure,
-a device without the boolean, discovery by name, and that no control ever writes
-the relay.
+a device without the boolean, discovery by name, that no control ever writes the
+relay, and the Diagnose panel: that the URL it prints is the string actually
+fetched, that a failing call does not abort the dump, and that a button-type or
+disabled `input:0` is explained rather than dashed.
 
 ## Original verification
 

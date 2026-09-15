@@ -99,6 +99,18 @@
   </section>
 
   <section class="panel">
+    <h2>Diagnose</h2>
+    <div class="row">
+      <button id="diagnose" class="secondary" type="button" disabled>Dump raw replies</button>
+      <button id="diagnose-copy" class="secondary" type="button" disabled>Copy</button>
+    </div>
+    <p class="note">Issues the page's own requests and shows the replies verbatim,
+    with the exact URL each one used. This is what the page sees, which is not
+    necessarily what a hand-typed URL returns — encoding differs.</p>
+    <pre id="diagnose-output" style="white-space:pre-wrap;word-break:break-all;background:#09111f;border-radius:7px;padding:12px;font-size:.82rem;color:#b9c8e5;max-height:380px;overflow:auto"></pre>
+  </section>
+
+  <section class="panel">
     <h2>Play the Shelly lock</h2>
     <div class="row">
       <label>Set IsLocked
@@ -131,6 +143,9 @@
     const pumpOffButton = document.querySelector("#pump-off");
     const invertClearButton = document.querySelector("#invert-clear");
     const minRuntimeInput = document.querySelector("#min-runtime");
+    const diagnoseButton = document.querySelector("#diagnose");
+    const diagnoseCopyButton = document.querySelector("#diagnose-copy");
+    const diagnoseOutput = document.querySelector("#diagnose-output");
     const message = document.querySelector("#message");
     const output = {
       locked: document.querySelector("#is-locked-value"),
@@ -153,6 +168,7 @@
     let pollingActive = false;
     let runStartedAt = null;
     let lastRunSeconds = null;
+    const lastRequests = [];
 
     function setMessage(text, state = "") {
       message.textContent = text;
@@ -163,7 +179,7 @@
       for (const button of [togglePollingButton, readOnceButton, setLockedButton,
                             setCountButton, clearBothButton, tab5SetButton,
                             tab5ClearButton, pumpOnButton, pumpOffButton,
-                            invertClearButton]) {
+                            invertClearButton, diagnoseButton, diagnoseCopyButton]) {
         button.disabled = !enabled;
       }
     }
@@ -200,6 +216,8 @@
       for (const [key, value] of Object.entries(params)) {
         url.searchParams.set(key, typeof value === "object" ? JSON.stringify(value) : String(value));
       }
+      lastRequests.push(url.pathname + url.search);
+      if (lastRequests.length > 12) lastRequests.shift();
       const response = await fetch(url, { cache: "no-store" });
       // A virtual-component setter answers a bare JSON null, which parses to
       // null rather than to an object. Reading .error off that throws, so every
@@ -259,11 +277,17 @@
       output.tab5.textContent = tab5
         ? (tab5.status?.value === true ? "TRUE" : tab5.status?.value === false ? "false" : "—")
         : "absent";
-      const inputState = staticComponents["input:0"]?.status?.state;
+      const inputEntry = staticComponents["input:0"];
+      const inputState = inputEntry?.status?.state;
       const relayState = staticComponents["switch:0"]?.status?.output;
       output.input.textContent = inputState === true ? "ON" : inputState === false ? "OFF" : "—";
       output.relay.textContent = relayState === true ? "CLOSED" : relayState === false ? "open" : "—";
-      output.invert.textContent = inputConfig?.invert === true ? "invert is ON" : "";
+      // A dash on Input(0) is ambiguous on its own, so say which of the three
+      // reasons it is: absent, present but stateless, or simply inverted.
+      output.invert.textContent =
+        typeof inputState === "boolean" ? (inputConfig?.invert === true ? "invert is ON" : "")
+        : !inputEntry ? "not returned by the device"
+        : `type "${inputEntry.config?.type ?? "?"}" reports no steady state`;
       renderRunTimer();
     }
 
@@ -347,11 +371,29 @@
         const staticByKey = await readStatic();
         const reported = staticByKey["input:0"]?.status?.state;
         if (typeof reported !== "boolean") {
-          throw new Error(staticByKey["input:0"]
-            ? "input:0 was returned but carried no boolean status.state. Paste the reply from " +
-              "Shelly.GetComponents?keys=[\"input:0\"]&include=[\"config\",\"status\"] to diagnose."
-            : "input:0 was not returned by the keys-filtered Shelly.GetComponents. The device " +
-              "omits keys it does not have, so check the input exists and is enabled.");
+          const entry = staticByKey["input:0"];
+          if (!entry) {
+            throw new Error("input:0 was not returned by the keys-filtered Shelly.GetComponents. " +
+              "The device omits keys it does not have, so check the input exists and is enabled.");
+          }
+          diagnoseOutput.textContent =
+            "input:0 came back without a boolean status.state. This is the entry, verbatim:\n\n" +
+            JSON.stringify(entry, null, 2);
+          // Only a switch-type input holds a steady state. A button reports
+          // state null and emits events instead, so flipping invert cannot
+          // drive it and no amount of retrying will help.
+          const type = entry.config?.type;
+          if (typeof type === "string" && type !== "switch") {
+            throw new Error(`input:0 is configured as type "${type}", not "switch". ` +
+              "Only a switch input holds a steady state, so the invert trick cannot drive it. " +
+              "Set the input type back to Switch in the Shelly web panel, then Connect again.");
+          }
+          if (entry.config?.enable === false) {
+            throw new Error("input:0 is disabled in its config, so it reports no state. " +
+              "Enable the input in the Shelly web panel, then Connect again.");
+          }
+          throw new Error("input:0 was returned but carried no boolean status.state. " +
+            "The entry is dumped under Diagnose below — copy it here.");
         }
         const config = await rpc("Input.GetConfig", { id: 0 });
         const currentInvert = config?.invert === true;
@@ -398,7 +440,62 @@
       }
     }
 
+    async function diagnose() {
+      const lines = [];
+      const show = (label, value) => {
+        lines.push(`--- ${label} ---`);
+        lines.push(typeof value === "string" ? value : JSON.stringify(value, null, 2));
+        lines.push("");
+      };
+      try {
+        lines.push(`page built for: keys-filtered Shelly.GetComponents`);
+        lines.push(`endpoint: ${endpoint}`);
+        lines.push("");
+
+        const dynamic = await rpc("Shelly.GetComponents", { dynamic_only: true, include: ["config", "status"] });
+        show(`GET ${lastRequests[lastRequests.length - 1]}`, dynamic);
+
+        const filtered = await rpc("Shelly.GetComponents", { keys: ["switch:0", "input:0"], include: ["config", "status"] });
+        show(`GET ${lastRequests[lastRequests.length - 1]}`, filtered);
+
+        const inputOnly = await rpc("Shelly.GetComponents", { keys: ["input:0"], include: ["config", "status"] });
+        show(`GET ${lastRequests[lastRequests.length - 1]}`, inputOnly);
+
+        try {
+          const config = await rpc("Input.GetConfig", { id: 0 });
+          show(`GET ${lastRequests[lastRequests.length - 1]}`, config);
+        } catch (error) { show("Input.GetConfig", `FAILED: ${error.message}`); }
+
+        try {
+          const status = await rpc("Input.GetStatus", { id: 0 });
+          show(`GET ${lastRequests[lastRequests.length - 1]}`, status);
+        } catch (error) { show("Input.GetStatus", `FAILED: ${error.message}`); }
+
+        try {
+          const whole = await rpc("Shelly.GetStatus");
+          show(`GET ${lastRequests[lastRequests.length - 1]} (only to compare)`,
+            { "input:0": whole["input:0"], "switch:0": whole["switch:0"],
+              keys: Object.keys(whole).length });
+        } catch (error) { show("Shelly.GetStatus", `FAILED: ${error.message}`); }
+
+        diagnoseOutput.textContent = lines.join("\n");
+        setMessage("Diagnostics captured. Copy the block below.", "ok");
+      } catch (error) {
+        lines.push(`ABORTED: ${error.message}`);
+        diagnoseOutput.textContent = lines.join("\n");
+        setMessage(error.message, "error");
+      }
+    }
+
     connectButton.addEventListener("click", connect);
+    diagnoseButton.addEventListener("click", diagnose);
+    diagnoseCopyButton.addEventListener("click", () => {
+      const clipboard = typeof navigator === "undefined" ? null : navigator.clipboard;
+      if (!clipboard) { setMessage("Select the text below and copy it manually.", ""); return; }
+      clipboard.writeText(diagnoseOutput.textContent)
+        .then(() => setMessage("Diagnostics copied.", "ok"))
+        .catch(() => setMessage("Select the text below and copy it manually.", ""));
+    });
     togglePollingButton.addEventListener("click", () => {
       if (pollingActive) {
         stopPolling();
