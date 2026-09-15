@@ -192,6 +192,30 @@ Review this as part of the generic Functions/history design in the consolidation
 simple calculations use the current frozen snapshot; history-dependent logic belongs in
 approved bounded Functions with explicit history consumers and reset boundaries.
 
+### TAB5-14 — Calibration data is duplicated between device source and package · OPEN
+Every calibration constant this project has exists twice: once in device source and
+once hard-coded in the rules package the Pilot authors. Nothing reconciles them.
+
+| constant | device | package |
+| --- | --- | --- |
+| sensor fit intercept | `main.py` 3732.02 | `calc-pressure` expression 3732.02 |
+| sensor fit counts/PSI | `main.py` 211.492 | `calc-pressure` expression 211.492 |
+| effective tank gallons | `pressure_qualification.py` 79.3 | `calc-tank` 79.3 |
+| tank precharge psig | `pressure_qualification.py` 38.0 | `calc-tank` 38 |
+| **site atmosphere psi** | **`pressure_qualification.py` 13.1** | **`calc-tank` 13.07** |
+
+The atmosphere pair already disagrees. The effect is about 0.1% on
+`dvol_dpressure`, so nothing is wrong today and this is not urgent - it is
+recorded because a recalibration has to update both sides and there is no check
+that it did. A gauge calibration that changed the fit and reached only `main.py`
+would leave `PressurePSI` from the package silently reading the old curve while
+the HMI read the new one, with both looking plausible.
+
+Cheapest fix when someone is next in the authoring code: have the Pilot emit the
+fit from a single declared source rather than inlining it into an expression
+string, so the package carries a reference instead of a copy. Until then, treat
+"recalibrate" as a two-file operation and check the pair.
+
 ### TAB5-13 — A calculation cannot be switched off, and none is cadence-aware · OPEN, DEFERRED
 Calculated fields are not events. They carry no `enabled` flag - devices, events and
 rules all do - so every calculation in a package is compiled into `calculation_plan`

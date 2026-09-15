@@ -17,6 +17,10 @@ def log(msg):
 
 
 # --- board hardware owned by the launcher ---
+# This restores the original intent: one-time initialisation that UIFlow needs
+# belongs here, in the launcher, not scattered through the application. It had
+# drifted into pilot.py over time, which is what made the converter impossible
+# to share with a utility that cannot import pilot.
 # main.py already owns M5.begin(), so it owns the converter too. Exactly one
 # ADS1110 configuration exists on this device, and BOTH applications reach it:
 # pilot.py through __main__, and the pressure-qualification utility the same

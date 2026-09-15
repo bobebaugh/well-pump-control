@@ -474,6 +474,13 @@ def run_pressure_calibration():
         time.sleep_ms(20)
 
 
+# DESIGN NOTE, owner 2026-09-15, deferred and not planned: this run reads the
+# Shelly EM only to tell a running pump from a stopped one, and it does not need
+# to. It could start its clock on the first significant PSI change and let the
+# operator tap to end it - pressure takes a while to stabilise, so a human call
+# on "settled" is better evidence than a wattage threshold anyway. That would
+# drop the network dependency entirely and give the fill test cleaner samples.
+# Recorded rather than built: no further fill runs are planned.
 def run_pressure_fill():
     """Append an uninterrupted local ADC + Shelly EM fill trace at about 1 Hz."""
     _qual_wait_release()
