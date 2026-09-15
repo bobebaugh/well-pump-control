@@ -8,6 +8,7 @@ import unittest
 
 
 PILOT_PATH = pathlib.Path(__file__).parents[1] / 'tab5' / 'pilot.py'
+MAIN_PATH = PILOT_PATH.parent / "main.py"
 FUNCTIONS = {
     'ads1110_signed_raw_count',
     '_read_ads1110_reply',
@@ -35,7 +36,8 @@ CONSTANTS = {
 
 
 def load_pressure_logic():
-    tree = ast.parse(PILOT_PATH.read_text(encoding='utf-8'))
+    tree = ast.parse(PILOT_PATH.read_text(encoding='utf-8') + '\n' +
+                     MAIN_PATH.read_text(encoding='utf-8'))
     nodes = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in FUNCTIONS:
@@ -102,7 +104,8 @@ class PressureFlowTests(unittest.TestCase):
         self.assertEqual(len(service_calls), 1)
 
     def test_adc_initialization_keeps_continuous_15sps_gain_two(self):
-        tree = ast.parse(PILOT_PATH.read_text(encoding='utf-8'))
+        tree = ast.parse(PILOT_PATH.read_text(encoding='utf-8') + '\n' +
+                     MAIN_PATH.read_text(encoding='utf-8'))
         init_node = next(node for node in tree.body
                          if isinstance(node, ast.FunctionDef) and node.name == 'init_adc')
         settings = []

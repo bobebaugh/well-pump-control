@@ -156,7 +156,7 @@ class OperatorControlTests(unittest.TestCase):
         launcher = (PILOT_PATH.parent / "main.py").read_text(encoding="utf-8")
         self.assertIn("cloud.start()", launcher)
         self.assertIn("_thread.start_new_thread(_pilot_worker", launcher)
-        self.assertIn("Release M6.37 launcher", launcher)
+        self.assertIn("Release M6.41 launcher", launcher)
         self.assertIn("cloud.prepare_tab5_restart(selected_command)", loop)
 
 

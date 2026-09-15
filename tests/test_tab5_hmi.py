@@ -7,6 +7,7 @@ import unittest
 
 
 PILOT_PATH = pathlib.Path(__file__).parents[1] / "tab5" / "pilot.py"
+MAIN_PATH = PILOT_PATH.parent / "main.py"
 FUNCTIONS = {
     "_is_number",
     "calibrated_psi_from_raw_count",
@@ -64,7 +65,8 @@ CONSTANTS = {
 
 
 def load_hmi_logic():
-    tree = ast.parse(PILOT_PATH.read_text(encoding="utf-8"))
+    tree = ast.parse(PILOT_PATH.read_text(encoding="utf-8") + "\n" +
+                     MAIN_PATH.read_text(encoding="utf-8"))
     nodes = []
 
     def assigned_names(target):
@@ -299,11 +301,14 @@ class HmiFoundationTests(unittest.TestCase):
                          "restart-tab5")
         self.assertIsNone(arm("restart-tab5", 2000, action, until, True)[2])
 
-    def test_release_is_m636(self):
-        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.40")
+    def test_release_matches_the_stamped_software_release(self):
+        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.41")
 
     def test_touch_service_is_not_limited_to_remaining_cycle_sleep(self):
-        source = PILOT_PATH.read_text(encoding="utf-8")
+        # The ADS1110 stack moved to main.py, which owns board init; the touch
+        # servicing it must not starve is still pilot.py's. Read both.
+        source = (PILOT_PATH.read_text(encoding="utf-8") + "\n" +
+                  MAIN_PATH.read_text(encoding="utf-8"))
         tree = ast.parse(source)
 
         def function_source(name):

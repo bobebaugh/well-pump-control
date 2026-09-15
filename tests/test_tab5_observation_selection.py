@@ -11,6 +11,7 @@ import unittest
 
 
 PILOT_PATH = pathlib.Path(__file__).parents[1] / "tab5" / "pilot.py"
+MAIN_PATH = PILOT_PATH.parent / "main.py"
 FUNCTIONS = {
     "format_observed_at",
     "_observation_path_value",
@@ -132,7 +133,8 @@ CONSTANTS = {
 
 
 def load_selection_logic():
-    tree = ast.parse(PILOT_PATH.read_text(encoding="utf-8"))
+    tree = ast.parse(PILOT_PATH.read_text(encoding="utf-8") + "\n" +
+                     MAIN_PATH.read_text(encoding="utf-8"))
     nodes = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in FUNCTIONS:
