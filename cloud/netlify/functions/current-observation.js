@@ -10,6 +10,22 @@
 // one record so they are the same instant rather than assembled from two reads.
 
 const { _approvedRtdbUrl } = require("../lib/rules-store");
+const { OPERATOR_UID } = require("../lib/operator-control-store");
+
+// The RTDB rules grant read on currentObservation to exactly one cloud identity:
+//
+//   .read = auth.uid == 'netlify-operator-control'
+//        && auth.token.purpose == 'operator-control'
+//
+// so this endpoint mints that identity rather than one of its own. A dedicated
+// reader uid would be tidier, but it would need a hand-deployed rules change
+// (ONLINE-5) and would be denied until that happened. The grant already exists
+// to let the cloud read live device state, which is exactly what this does.
+const READER_CLAIMS = {
+  siteId: "well-main",
+  deviceId: "tab5-well-main",
+  purpose: "operator-control"
+};
 
 const jsonHeaders = {
   "Content-Type": "application/json; charset=utf-8",
@@ -37,9 +53,7 @@ function createHandler(dependencies = {}) {
   async function readerToken() {
     const { auth, projectId } = firebase.getPilotAuth();
     if (projectId !== "well-pump-control") throw new Error("configuration_missing");
-    const customToken = await auth.createCustomToken("netlify-observation-reader", {
-      siteId: "well-main", deviceId: "tab5-well-main", purpose: "current-observation"
-    });
+    const customToken = await auth.createCustomToken(OPERATOR_UID, READER_CLAIMS);
     const reply = await fetchImpl(
       `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(env.FIREBASE_WEB_API_KEY)}`,
       { method: "POST", headers: { "Content-Type": "application/json" },

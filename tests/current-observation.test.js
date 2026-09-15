@@ -106,6 +106,31 @@ test("configuration and transport failures are distinguished", async () => {
   assert.equal(failed.code, "rtdb_read_failed");
 });
 
+test("it authenticates as the identity the RTDB rules actually permit", async () => {
+  // currentObservation grants read to netlify-operator-control with
+  // purpose operator-control and nothing else. A reader identity of this
+  // endpoint's own invention is denied until the rules are hand-deployed, so
+  // this pins the pairing rather than trusting it.
+  const { OPERATOR_UID } = require("../cloud/netlify/lib/operator-control-store");
+  let minted = null;
+  const handler = createHandler({
+    env: { FIREBASE_WEB_API_KEY: "key", FIREBASE_RTDB_URL:
+             "https://well-pump-control-default-rtdb.firebaseio.com" },
+    firebase: { getPilotAuth: () => ({
+      projectId: "well-pump-control",
+      auth: { async createCustomToken(uid, claims) { minted = { uid, claims }; return "custom"; } } }) },
+    fetch: async url => String(url).includes("identitytoolkit")
+      ? { ok: true, async json() { return { idToken: "t" }; } }
+      : { ok: true, async json() { return observation(); } },
+    now: () => NOW
+  });
+  await handler({ httpMethod: "GET" });
+  assert.equal(minted.uid, OPERATOR_UID);
+  assert.equal(minted.claims.purpose, "operator-control");
+  assert.equal(minted.claims.siteId, "well-main");
+  assert.equal(minted.claims.deviceId, "tab5-well-main");
+});
+
 test("it reads the path Tab5 writes, and only answers GET", async () => {
   const { handler, calls } = handlerFor(observation());
   await handler({ httpMethod: "GET" });
