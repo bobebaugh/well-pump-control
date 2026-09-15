@@ -70,15 +70,20 @@ H001 opened at `observationCount: 1` and drove Monitor on each boot.
 
 ## Follow-ups
 
-Collected in [issue #10](https://github.com/bobebaugh/well-pump-control/issues/10).
+General unit follow-ups are collected in
+[issue #10](https://github.com/bobebaugh/well-pump-control/issues/10). Detailed
+pressure-qualification cleanup and tests remain in
+[issue #9](https://github.com/bobebaugh/well-pump-control/issues/9).
 Architectural items remain in `V3-ISSUES.md` as TAB5-13, TAB5-14 and TAB5-15.
 
 ## Not verified
 
 - **The qualification utility's capture runs.** `GAUGE CALIBRATION` and `FILL RUN`
   have not executed since the extraction. Entering the branch proves the imports
-  and bindings; it does not prove the capture paths. Their components are unit
-  tested. Do not let an unattended recalibration be the first real run.
+  and bindings; it does not prove the capture paths. Key components have host
+  coverage, but the boot-launcher boundary and Fill Run response handling remain
+  deferred in issue #9. Do not let an unattended recalibration be the first real
+  run.
 - **Pressure commissioning.** `PRESSURE_SENSOR_COMMISSIONED` is still `False`, so
   `PressurePSI` is not produced by the rules engine and `TankFlowQuality` reads
   `PRESSURE_INVALID`. The fit itself is qualified; only the flag is unset.
