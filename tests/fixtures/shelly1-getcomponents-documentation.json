@@ -57,16 +57,30 @@
       "  Number.Set and Boolean.Set are sibling setters on the same virtual-component",
       "  RPC surface, so this corroborates the acknowledgement the dispatcher requires.",
       "  It is not literally Boolean.Set: that capture is still an acceptance check,",
-      "  because no boolean component exists until the script is installed."
+      "  because no boolean component exists until the script is installed.",
+      "",
+      "2026-09-15, the dynamic_only discovery call: Tab5IsLocked NOW EXISTS on the",
+      "device and is recorded below as capturedBooleanComponent. It matches the",
+      "documented Boolean shape this parser was written against - key 'boolean:<id>',",
+      "config.name exactly 'Tab5IsLocked', a boolean status.value, config.id carrying",
+      "the id - so the shape is no longer documentation-based. Its id is 200, which is",
+      "neither the 246 used in the fixtures below nor anything derivable, which is the",
+      "point: it is read from config.id and never assumed.",
+      "That capture also shows exactly three dynamic components, one per interface",
+      "name, with no duplicates - the condition normalize_shelly1_components requires."
     ],
     "notCaptured": [
-      "No boolean:<id> component has been observed on the device yet, because",
-      "Tab5IsLocked is declared by a script revision that is not installed. The",
-      "boolean entries in discoveryResponse and filteredResponse therefore follow the",
-      "documented shape, and a Boolean.Set reply confirming the bare null remains an",
-      "INSTALLATION ACCEPTANCE CHECK - corroborated by the captured Number.Set above,",
-      "not replaced by it.",
-      "Observed relay behavior across a Shelly reboot with an inhibition outstanding."
+      "A literal Boolean.Set reply. The dispatcher accepts HTTP 200 with a body of",
+      "exactly JSON null and nothing else, so this remains an INSTALLATION ACCEPTANCE",
+      "CHECK. It is corroborated by the captured Number.Set above, a sibling setter on",
+      "the same RPC surface, and indirectly by the bench page writing the flag",
+      "successfully - but the bench page applies a laxer acceptance rule than Tab5",
+      "does, so it does not stand in for this.",
+      "Observed relay behavior across a Shelly reboot with an inhibition outstanding.",
+      "Tab5IsLocked is persisted:false and anti-chatter.js seeds it false at startup,",
+      "so a Shelly reboot clears an outstanding inhibition and the relay closes when",
+      "the InitDelay window ends unless Tab5 has re-asserted by then. Whether Tab5's",
+      "reconciliation lands inside that window has never been observed."
     ],
     "idsAreExamples": [
       "Component ids are assigned at creation and are not stable across a rebuild;",
@@ -429,5 +443,26 @@
     "cfg_rev": 140,
     "offset": 0,
     "total": 4
+  },
+  "capturedBooleanComponent": {
+    "key": "boolean:200",
+    "status": {
+      "value": false,
+      "source": "rpc",
+      "last_update_ts": 1789472051
+    },
+    "config": {
+      "id": 200,
+      "name": "Tab5IsLocked",
+      "meta": null,
+      "persisted": false,
+      "default_value": false,
+      "owner": "script:1",
+      "access": "Crw"
+    },
+    "attrs": {
+      "owner": "script:1",
+      "role": "tab5IsLocked"
+    }
   }
 }
