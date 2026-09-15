@@ -36,6 +36,10 @@ SHELLY_1_COMPONENTS_URL = ('http://192.168.50.201/rpc/Shelly.GetComponents?'
 # needs. The key list is built from ids resolved by name, never hard-coded.
 SHELLY_1_FILTERED_URL = ('http://192.168.50.201/rpc/Shelly.GetComponents?'
                          'keys={}&include=%5B%22config%22%2C%22status%22%5D')
+# The filtered URL carries the key list, so it never matches a constant by
+# equality. Diagnostics match on this prefix instead; without it every filtered
+# acquisition logged as the generic 'Shelly.read' with no reason classified.
+SHELLY_1_FILTERED_PREFIX = SHELLY_1_FILTERED_URL.split('{}')[0]
 SHELLY_1_STOP_URL = 'http://192.168.50.201/rpc/Switch.Set?id=0&on=false'
 SHELLY_1_SWITCH_URL = 'http://192.168.50.201/rpc/Switch.Set?id={}&on={}'
 SHELLY_1_BOOLEAN_SET_URL = 'http://192.168.50.201/rpc/Boolean.Set?id={}&value={}'
@@ -523,9 +527,21 @@ def _shelly_read_reason(url, data):
             record = data.get(component)
             if not isinstance(record, dict) or not isinstance(record.get(field), bool):
                 return 'missing-or-invalid-' + component + '.' + field
-    elif url == SHELLY_1_COMPONENTS_URL:
+    elif url == SHELLY_1_COMPONENTS_URL or url.startswith(SHELLY_1_FILTERED_PREFIX):
         if not isinstance(data.get('components'), list):
             return 'components-not-list'
+        if url.startswith(SHELLY_1_FILTERED_PREFIX):
+            # The filtered reply carries the two static components as well, and
+            # a missing one is the failure most likely to be mistaken for a
+            # transport fault. Name it rather than letting it fall through.
+            static = {}
+            for component in data['components']:
+                if isinstance(component, dict) and isinstance(component.get('key'), str):
+                    static[component['key']] = component.get('status')
+            for key, field in (('switch:0', 'output'), ('input:0', 'state')):
+                record = static.get(key)
+                if not isinstance(record, dict) or not isinstance(record.get(field), bool):
+                    return 'missing-or-invalid-' + key + '.' + field
         found = {}
         prefixes = {SHELLY_1_LOCK_NAME: 'number:', SHELLY_1_COUNT_NAME: 'number:',
                     SHELLY_1_FLAG_NAME: 'boolean:'}
@@ -579,7 +595,9 @@ def _shelly_read_diagnostic(label, elapsed, reason, http_status=None):
 def _read_json(url):
     label = ('ShellyEM.status' if url == SHELLY_EM_URL else
              'Shelly1.GetStatus' if url == SHELLY_1_STATUS_URL else
-             'Shelly1.GetComponents' if url == SHELLY_1_COMPONENTS_URL else 'Shelly.read')
+             'Shelly1.GetComponents' if url == SHELLY_1_COMPONENTS_URL else
+             'Shelly1.GetComponents(keys)'
+             if url.startswith(SHELLY_1_FILTERED_PREFIX) else 'Shelly.read')
     started = time.ticks_ms()
     phase, http_status = 'transport', None
     try:
