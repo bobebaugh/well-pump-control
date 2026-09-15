@@ -1,6 +1,18 @@
 # Current status — Tab5 line
 
-## Now — M6.40 counts-only ADC and startup acquisition gate, awaiting upload
+## Now — Tab5IsLocked / Monitor unit CLOSED at M6.41
+
+**The unit is verified on hardware and closed.** Device results are recorded in
+`docs/tab5lock-unit-verification.md`: transient and latched events both work, the
+Shelly holds RLY0 until Tab5 clears, Monitor releases a held latch, the reboot
+availability events are gone, and the extracted qualification utility starts
+without CPU A or CPU B. Open follow-ups are collected in one GitHub issue rather
+than left in this file.
+
+Still open against the unit, both deliberate: the qualification utility's capture
+runs have not executed since the extraction, and the pressure sensor is
+uncommissioned, so `PressurePSI` is not produced and `TankFlowQuality` reads
+`PRESSURE_INVALID`.
 
 **M6.38 is live.** The coordinated inhibition unit is deployed: the cloud side
 from `pilot-working`, a new rules package published and running, `anti-chatter.js`
