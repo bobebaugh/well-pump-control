@@ -1,9 +1,28 @@
 # Current status — Tab5 line
 
-## Now — M6.38 Tab5IsLocked and Monitor unit awaiting owner review
+## Now — M6.39 cadence and ADC reduction, awaiting upload
 
-The coordinated inhibition unit is implemented on `tab5-working` and
-`pilot-working` but is not installed, delivered or deployed. Tab5 no longer writes
+**M6.38 is live.** The coordinated inhibition unit is deployed: the cloud side
+from `pilot-working`, a new rules package published and running, `anti-chatter.js`
+installed on the Shelly, and M6.38 `pilot.py` on Tab5.
+
+**M6.39 is on `tab5-working` and not yet uploaded.** It is `pilot.py` only. It
+moves the observation cadence to 2000ms and derives `STALE_AFTER_MS` and the
+regression `SAMPLE_GAP` limit from it rather than leaving them as literals that
+silently change meaning; cuts the ADC filter from five conversions to three, a
+median, saving about 135ms a cycle; reports a regression window the cadence
+cannot fill at adoption instead of letting it pin at `INSUFFICIENT_HISTORY` in
+silence; and labels the keys-filtered Shelly read in diagnostics, which until now
+logged as a generic `Shelly.read` with no reason classified.
+
+**Open against M6.39:** the shipped `calc-tank` asks for 8 samples in a 10s
+window, which a 2000ms cadence cannot supply. It needs a wider window (20s keeps
+8 samples and improves the fit) or a lower count, and that is a `pilot-working`
+republish. Tab5 logs `V3 CADENCE STARVED` at adoption until it is done. The
+calculation is not in use yet, and there is no way to deactivate a calculated
+field without deleting it and losing its calibration, so it stays.
+
+The unit itself, as designed: Tab5 no longer writes
 RLY0. It publishes its own inhibition as the `Tab5IsLocked` Boolean on the Shelly 1,
 and the Shelly script becomes the sole writer of the relay, closing it exactly when
 `IsLocked == 0 AND Tab5IsLocked == false`. A commanded stop that applies Tab5's
