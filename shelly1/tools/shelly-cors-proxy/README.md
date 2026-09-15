@@ -25,8 +25,8 @@ and recommit whenever `index.html` changes**, or the exe will silently serve an 
 page.
 
 The committed build: 2026-09-15, Go 1.24.7, PE32+ x86-64 console executable,
-6.05 MB, rebuilt for the Diagnose panel. It is unsigned, so Windows will warn on
-first run.
+6.05 MB, rebuilt for the prerequisite banner and the slower default poll. It is
+unsigned, so Windows will warn on first run.
 
 Before a build ships, the same source is built for Linux and run against a mock
 device to confirm the `/proxy/` path parsing and the response relay - including
@@ -56,7 +56,32 @@ Read-only unless a button is pressed:
   has — `status.state` on the input, `status.output` on the switch — and it is the
   request Tab5 itself makes. The unfiltered call is known to truncate on this
   device, which is the likeliest reason a whole-status read came back short.
-- `Input.GetConfig`, to show whether `invert` has been left flipped.
+- `Input.GetConfig`, but only as a fallback. `input:0`'s `config.invert` already
+  travels in the keys-filtered reply, so the ordinary poll does not make this call
+  — it was a third request per poll for something already in hand.
+
+A poll is therefore two requests. It runs every **3 seconds** by default, not
+every second: the device is also running `anti-chatter.js`'s own one-second timer,
+and one second of polling on top of that was too fast. The interval is adjustable
+from 1 to 60 seconds beside the Connect button and is remembered between runs; a
+blank box means the default, not the minimum.
+
+## Device prerequisites
+
+The page checks two `switch:0` settings on every read and shows a banner naming
+whichever is wrong:
+
+- **`in_mode` must be `detached`.** In `follow` the firmware binds `input:0`
+  straight to `switch:0` beneath the script — the relay tracks the input
+  directly, so `anti-chatter.js` is not the sole writer of RLY0 and this page's
+  invert flips move the relay as a side effect. This is exactly what was captured
+  on 2026-09-15.
+- **`initial_state` must be `off`,** so RLY0 starts open rather than closing at
+  boot before any script runs.
+
+Both were found back at their factory values on a device where they had been set
+correctly the day before, which is why the page now reports them instead of
+assuming them. See `shelly1/README.md` for the RPC to set each.
 
 Writes only what a button asks for, and **never the relay**. Move that from the
 Shelly panel.
@@ -126,7 +151,9 @@ run timer's short-cycle verdict, a bare-null reply not being reported as a failu
 a device without the boolean, discovery by name, that no control ever writes the
 relay, and the Diagnose panel: that the URL it prints is the string actually
 fetched, that a failing call does not abort the dump, and that a button-type or
-disabled `input:0` is explained rather than dashed.
+disabled `input:0` is explained rather than dashed. It also covers the
+prerequisite banner in both directions, the poll interval including its clamping,
+and that a poll is two requests rather than three.
 
 ## Original verification
 

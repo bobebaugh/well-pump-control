@@ -192,8 +192,28 @@ Not set by the script — configure these on the Shelly before installing:
   ```
   http://192.168.50.201/rpc/Switch.SetConfig?id=0&config={"initial_state":"off"}
   ```
+- `switch:0` **`in_mode` set to `detached`**. This is the prerequisite the
+  AUTHORITY paragraph in the script depends on and it was, until 2026-09-15, the
+  one prerequisite this README never wrote down. In `follow` (the factory default)
+  the firmware binds `input:0` straight to `switch:0` *beneath* the script: the
+  relay tracks the input directly, so the script is no longer the sole writer of
+  RLY0, `applyRelayPolicy` ends up arguing with the firmware over the output, and
+  a lock cannot reliably hold the relay open while SW is high. Captured on
+  2026-09-15 as `in_mode: "follow"` with `initial_state: "restore_last"`, both
+  back at their factory values on a device where they had been set correctly the
+  day before — so treat these two as things to re-check after any firmware
+  update, factory reset, or re-add of the device, not as set-once. Equivalent by
+  RPC:
+
+  ```
+  http://192.168.50.201/rpc/Switch.SetConfig?id=0&config={"in_mode":"detached"}
+  ```
+
+  The bench page checks both settings on every read and shows a banner naming
+  whichever one is wrong.
 - `input:0` in a mode that reports a level in `status.state`, since edges are taken
-  from the status handler.
+  from the status handler. `type: "switch"` does; `button` does not, reporting
+  `state: null` and emitting events instead.
 - The script set to **run on startup**. This is now load-bearing, not tidiness.
   With the power-on default off, the relay stays open until this script closes it,
   so a script that does not start means no water — from a syntax error, a failed

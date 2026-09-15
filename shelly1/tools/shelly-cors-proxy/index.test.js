@@ -29,12 +29,18 @@ function makePage(respond) {
   }
   nodes["min-runtime"].value = "60";
   const calls = [];
+  const intervals = [];
   const sandbox = {
     document: { querySelector: sel => nodes[sel.replace("#", "")] || null },
-    localStorage: { getItem: () => "192.168.50.201", setItem: () => {} },
+    localStorage: {
+      _store: { shelly1Gen4TestHost: "192.168.50.201", ...(respond.storage || {}) },
+      getItem(key) { return Object.prototype.hasOwnProperty.call(this._store, key) ? this._store[key] : null; },
+      setItem(key, value) { this._store[key] = value; },
+    },
     location: { href: "http://localhost:8899/" },
     URL, URLSearchParams, Promise, Object, Number, Math, Date, JSON, Error, console,
-    setInterval: () => 0, clearInterval: () => {},
+    setInterval: (fn, ms) => { intervals.push(ms); return intervals.length; },
+    clearInterval: () => {},
     fetch: async url => {
       const request = url.pathname + url.search;
       calls.push(request);
@@ -45,7 +51,7 @@ function makePage(respond) {
   };
   vm.createContext(sandbox);
   vm.runInContext(SCRIPT, sandbox, { filename: "index.html" });
-  return { nodes, calls };
+  return { nodes, calls, intervals };
 }
 
 // A Shelly whose physical input position and invert config we control. It answers
@@ -63,7 +69,9 @@ function device(state) {
           "input:0": state.inputEntry || {
             key: "input:0", config: { id: 0, type: "switch", invert: state.invert },
             status: { id: 0, state: state.physical !== state.invert } },
-          "switch:0": { key: "switch:0", config: { id: 0, initial_state: "off" },
+          "switch:0": { key: "switch:0",
+                        config: Object.assign({ id: 0, in_mode: "detached", initial_state: "off" },
+                                              state.switchConfig),
                         status: { id: 0, output: state.relay, source: "loopback" } },
         };
         if (state.noInput) delete available["input:0"];
@@ -296,4 +304,102 @@ test("Copy falls back to a message when there is no clipboard", async () => {
   await nodes.connect.click();
   await nodes["diagnose-copy"].click();
   assert.match(nodes.message.textContent, /copy it manually/);
+});
+
+test("a compliant device shows no prerequisite banner", async () => {
+  const state = freshState();
+  const { nodes } = makePage(device(state));
+  await nodes.connect.click();
+  assert.equal(nodes.prereq.textContent, "");
+});
+
+test("in_mode follow is called out as the reason the relay moves", async () => {
+  // Captured from the device on 2026-09-15: in_mode had gone back to "follow",
+  // which couples input:0 to switch:0 in firmware, beneath the script. The
+  // script's claim to be the sole writer of RLY0 holds only in detached.
+  const state = freshState({ switchConfig: { in_mode: "follow" } });
+  const { nodes } = makePage(device(state));
+  await nodes.connect.click();
+  assert.match(nodes.prereq.textContent, /DEVICE PREREQUISITE NOT MET/);
+  assert.match(nodes.prereq.textContent, /in_mode is "follow", not "detached"/);
+  assert.match(nodes.prereq.textContent, /driving RLY0 from input:0 beneath the script/);
+});
+
+test("a relay that does not start open is called out too, and both can fire at once", async () => {
+  const state = freshState({ switchConfig: { in_mode: "follow", initial_state: "restore_last" } });
+  const { nodes } = makePage(device(state));
+  await nodes.connect.click();
+  assert.match(nodes.prereq.textContent, /initial_state is "restore_last", not "off"/);
+  assert.match(nodes.prereq.textContent, /in_mode is "follow"/);
+});
+
+test("the banner clears once the device is put right", async () => {
+  const state = freshState({ switchConfig: { in_mode: "follow" } });
+  const { nodes } = makePage(device(state));
+  await nodes.connect.click();
+  assert.notEqual(nodes.prereq.textContent, "");
+  state.switchConfig = { in_mode: "detached" };
+  await nodes["read-once"].click();
+  assert.equal(nodes.prereq.textContent, "");
+});
+
+test("polling runs at the chosen interval, not once a second", async () => {
+  const state = freshState();
+  const { nodes, intervals } = makePage(device(state));
+  await nodes.connect.click();
+  assert.ok(intervals.includes(3000), `default poll is 3s, got ${intervals}`);
+  assert.ok(!intervals.includes(1000) || intervals.filter(ms => ms === 1000).length === 1,
+    "the only one-second timer is the run-time display ticker");
+  assert.match(nodes.message.textContent, /every 3s/);
+
+  nodes["poll-interval"].value = "10";
+  await Promise.all(nodes["poll-interval"]._handlers.change.map(fn => fn()));
+  assert.equal(intervals[intervals.length - 1], 10000);
+  assert.match(nodes.message.textContent, /every 10s/);
+});
+
+test("a nonsense or out-of-range interval is clamped rather than obeyed", async () => {
+  const state = freshState();
+  const { nodes, intervals } = makePage(device(state));
+  await nodes.connect.click();
+  for (const [entered, expected] of [["0", 1000], ["999", 60000], ["", 3000]]) {
+    nodes["poll-interval"].value = entered;
+    await Promise.all(nodes["poll-interval"]._handlers.change.map(fn => fn()));
+    assert.equal(intervals[intervals.length - 1], expected, `entered ${JSON.stringify(entered)}`);
+  }
+});
+
+test("a poll costs two requests, not three", async () => {
+  // input:0's config.invert is in the keys-filtered reply, so the separate
+  // Input.GetConfig was a third request per poll for something already in hand.
+  const state = freshState();
+  const { nodes, calls } = makePage(device(state));
+  await nodes.connect.click();
+  assert.equal(calls.length, 2, calls.join("\n"));
+  assert.ok(!calls.some(c => c.includes("Input.GetConfig")), calls.join("\n"));
+
+  await nodes["read-once"].click();
+  assert.equal(calls.length, 4, calls.join("\n"));
+});
+
+test("invert is still read correctly when it comes from the filtered reply", async () => {
+  // The saving must not change the activate/deactivate arithmetic.
+  for (const physical of [false, true]) {
+    for (const invert of [false, true]) {
+      const state = freshState({ physical, invert });
+      const { nodes } = makePage(device(state));
+      await nodes.connect.click();
+      await nodes["pump-on"].click();
+      assert.equal(nodes["input-value"].textContent, "ON", `physical=${physical} invert=${invert}`);
+    }
+  }
+});
+
+test("the saved poll interval is restored", async () => {
+  const respond = device(freshState());
+  respond.storage = { shelly1Gen4PollSeconds: "15" };
+  const { nodes, intervals } = makePage(respond);
+  await nodes.connect.click();
+  assert.equal(nodes["poll-interval"].value, "15");
+  assert.ok(intervals.includes(15000), `${intervals}`);
 });

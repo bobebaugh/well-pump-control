@@ -46,6 +46,9 @@
       <button id="connect" type="button">Connect</button>
       <button id="toggle-polling" class="secondary" type="button" disabled>Stop Polling</button>
       <button id="read-once" class="secondary" type="button" disabled>Read Once</button>
+      <label>Poll every
+        <input id="poll-interval" type="number" min="1" max="60" step="1" value="3">
+      </label>
     </div>
     <p id="message">Enter the Shelly 1 Gen4 address, then connect.</p>
   </section>
@@ -59,6 +62,7 @@
       <div class="value"><span>Relay(0)</span><strong id="relay-value">—</strong></div>
       <div class="value"><span>Run time</span><strong id="run-timer">—</strong><small id="run-note"></small></div>
     </div>
+    <p id="prereq" class="note"></p>
   </section>
 
   <section class="panel">
@@ -143,6 +147,8 @@
     const pumpOffButton = document.querySelector("#pump-off");
     const invertClearButton = document.querySelector("#invert-clear");
     const minRuntimeInput = document.querySelector("#min-runtime");
+    const pollIntervalInput = document.querySelector("#poll-interval");
+    const prereqNote = document.querySelector("#prereq");
     const diagnoseButton = document.querySelector("#diagnose");
     const diagnoseCopyButton = document.querySelector("#diagnose-copy");
     const diagnoseOutput = document.querySelector("#diagnose-output");
@@ -188,9 +194,21 @@
       togglePollingButton.textContent = pollingActive ? "Stop Polling" : "Start Polling";
     }
 
+    // Every poll is three RPC calls against a device that is also running a
+    // one-second script timer, so the default is deliberately not one second.
+    function pollMilliseconds() {
+      // A blank box means unset, not "as fast as possible": Number("") is 0,
+      // which would otherwise clamp to the one-second minimum.
+      const raw = String(pollIntervalInput.value ?? "").trim();
+      if (raw === "") return 3000;
+      const seconds = Number(raw);
+      if (!Number.isFinite(seconds)) return 3000;
+      return Math.min(60, Math.max(1, Math.floor(seconds))) * 1000;
+    }
+
     function startPolling() {
       clearInterval(refreshTimer);
-      refreshTimer = setInterval(() => refresh().catch(error => setMessage(error.message, "error")), 1000);
+      refreshTimer = setInterval(() => refresh().catch(error => setMessage(error.message, "error")), pollMilliseconds());
       pollingActive = true;
       updatePollingButtonLabel();
     }
@@ -265,6 +283,29 @@
       }
     }
 
+    // Two switch:0 settings decide whether anything else on this page means what
+    // it says. They are device config, not script state, and they have silently
+    // regressed before, so the page reports them rather than assuming them.
+    function renderPrerequisites(switchConfig) {
+      if (!switchConfig) { prereqNote.textContent = ""; prereqNote.className = "note"; return; }
+      const faults = [];
+      if (switchConfig.in_mode !== "detached") {
+        faults.push(`switch:0 in_mode is "${switchConfig.in_mode}", not "detached" — ` +
+          "the firmware is driving RLY0 from input:0 beneath the script, so the script " +
+          "is not the sole writer of the relay and anything that moves the input moves " +
+          "the relay. Set the switch to Detached.");
+      }
+      if (switchConfig.initial_state !== "off") {
+        faults.push(`switch:0 initial_state is "${switchConfig.initial_state}", not "off" — ` +
+          "RLY0 does not start open, so the relay can close at boot before any script " +
+          "runs. Shelly panel: Action on power on → Turn OFF.");
+      }
+      prereqNote.textContent = faults.length
+        ? "DEVICE PREREQUISITE NOT MET. " + faults.join(" ")
+        : "";
+      prereqNote.className = faults.length ? "note caution error" : "note";
+    }
+
     function renderState() {
       const locked = named(components, "IsLocked");
       const count = named(components, "loCntr");
@@ -288,6 +329,7 @@
         typeof inputState === "boolean" ? (inputConfig?.invert === true ? "invert is ON" : "")
         : !inputEntry ? "not returned by the device"
         : `type "${inputEntry.config?.type ?? "?"}" reports no steady state`;
+      renderPrerequisites(staticComponents["switch:0"]?.config);
       renderRunTimer();
     }
 
@@ -307,16 +349,20 @@
     }
 
     async function refresh() {
-      const [componentResult, staticByKey, config] = await Promise.all([
+      const [componentResult, staticByKey] = await Promise.all([
         rpc("Shelly.GetComponents", { dynamic_only: true, include: ["config", "status"] }),
-        readStatic(),
-        rpc("Input.GetConfig", { id: 0 }).catch(() => null)
+        readStatic()
       ]);
       components = componentResult.components || [];
       staticComponents = staticByKey;
-      inputConfig = config;
+      // input:0's config.invert is already in the filtered reply - both captures
+      // from this device carry it - so a separate Input.GetConfig was a third
+      // request per poll for something already in hand.
+      inputConfig = staticByKey["input:0"]?.config ?? null;
       renderState();
-      setMessage(pollingActive ? "Connected. Refreshing once per second." : "Read once. Polling is stopped.", "ok");
+      setMessage(pollingActive
+        ? `Connected. Refreshing every ${pollMilliseconds() / 1000}s.`
+        : "Read once. Polling is stopped.", "ok");
     }
 
     async function connect() {
@@ -369,9 +415,9 @@
     async function setPumpInput(wanted) {
       try {
         const staticByKey = await readStatic();
-        const reported = staticByKey["input:0"]?.status?.state;
+        const entry = staticByKey["input:0"];
+        const reported = entry?.status?.state;
         if (typeof reported !== "boolean") {
-          const entry = staticByKey["input:0"];
           if (!entry) {
             throw new Error("input:0 was not returned by the keys-filtered Shelly.GetComponents. " +
               "The device omits keys it does not have, so check the input exists and is enabled.");
@@ -395,8 +441,9 @@
           throw new Error("input:0 was returned but carried no boolean status.state. " +
             "The entry is dumped under Diagnose below — copy it here.");
         }
-        const config = await rpc("Input.GetConfig", { id: 0 });
-        const currentInvert = config?.invert === true;
+        const currentInvert = typeof entry.config?.invert === "boolean"
+          ? entry.config.invert
+          : (await rpc("Input.GetConfig", { id: 0 }))?.invert === true;
         const physical = reported !== currentInvert;      // XOR
         const neededInvert = physical !== wanted;          // XOR
         if (neededInvert !== currentInvert) {
@@ -517,8 +564,16 @@
     pumpOffButton.addEventListener("click", () => setPumpInput(false));
     invertClearButton.addEventListener("click", clearInvert);
     minRuntimeInput.addEventListener("input", renderRunTimer);
+    pollIntervalInput.addEventListener("change", () => {
+      localStorage.setItem("shelly1Gen4PollSeconds", String(pollMilliseconds() / 1000));
+      if (pollingActive) {
+        startPolling();
+        setMessage(`Polling every ${pollMilliseconds() / 1000}s.`, "ok");
+      }
+    });
 
     hostInput.value = localStorage.getItem("shelly1Gen4TestHost") || "";
+    pollIntervalInput.value = localStorage.getItem("shelly1Gen4PollSeconds") || "3";
   </script>
 </body>
 </html>
