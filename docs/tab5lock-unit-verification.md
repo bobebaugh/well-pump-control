@@ -68,6 +68,11 @@ H001 opened at `observationCount: 1` and drove Monitor on each boot.
 | Pressure qualification branch | Entered successfully — which also proves the utility's `__main__` bindings resolve |
 | CPU A / CPU B during the utility | Neither started |
 
+## Follow-ups
+
+Collected in [issue #10](https://github.com/bobebaugh/well-pump-control/issues/10).
+Architectural items remain in `V3-ISSUES.md` as TAB5-13, TAB5-14 and TAB5-15.
+
 ## Not verified
 
 - **The qualification utility's capture runs.** `GAUGE CALIBRATION` and `FILL RUN`

@@ -6,8 +6,10 @@
 `docs/tab5lock-unit-verification.md`: transient and latched events both work, the
 Shelly holds RLY0 until Tab5 clears, Monitor releases a held latch, the reboot
 availability events are gone, and the extracted qualification utility starts
-without CPU A or CPU B. Open follow-ups are collected in one GitHub issue rather
-than left in this file.
+without CPU A or CPU B. Open follow-ups are collected in
+[issue #10](https://github.com/bobebaugh/well-pump-control/issues/10) rather than
+left in this file; the architectural ones stay in `V3-ISSUES.md` as TAB5-13,
+TAB5-14 and TAB5-15.
 
 Still open against the unit, both deliberate: the qualification utility's capture
 runs have not executed since the extraction, and the pressure sensor is
