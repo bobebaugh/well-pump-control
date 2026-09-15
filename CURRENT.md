@@ -6,23 +6,22 @@
 `docs/tab5lock-unit-verification.md`: transient and latched events both work, the
 Shelly holds RLY0 until Tab5 clears, Monitor releases a held latch, the reboot
 availability events are gone, and the extracted qualification utility starts
-without CPU A or CPU B. Open follow-ups are collected in
-[issue #10](https://github.com/bobebaugh/well-pump-control/issues/10) rather than
-left in this file; the architectural ones stay in `V3-ISSUES.md` as TAB5-13,
-TAB5-14 and TAB5-15.
+without CPU A or CPU B. Non-blocking unit follow-ups are collected in
+[issue #10](https://github.com/bobebaugh/well-pump-control/issues/10); detailed
+pressure-qualification cleanup and tests remain in
+[issue #9](https://github.com/bobebaugh/well-pump-control/issues/9). Architectural
+items stay in `V3-ISSUES.md` as TAB5-13, TAB5-14 and TAB5-15.
 
 Still open against the unit, both deliberate: the qualification utility's capture
 runs have not executed since the extraction, and the pressure sensor is
 uncommissioned, so `PressurePSI` is not produced and `TankFlowQuality` reads
 `PRESSURE_INVALID`.
 
-**M6.38 is live.** The coordinated inhibition unit is deployed: the cloud side
-from `pilot-working`, a new rules package published and running, `anti-chatter.js`
-installed on the Shelly, and M6.38 `pilot.py` on Tab5.
-
-**M6.40 is on `tab5-working` and not yet uploaded.** It is `pilot.py` only, and
-supersedes M6.39, which was delivered as a file but whose upload was not
-confirmed. Two changes on top of M6.39.
+**Installed state:** M6.41 is on the Tab5 and was verified on the installed
+hardware. It includes the coordinated inhibition work first deployed at M6.38,
+the M6.39 cadence changes, the M6.40 ADC/startup corrections, and the M6.41
+pressure-qualification extraction. The cloud package and revised
+`anti-chatter.js` used for the verification are installed.
 
 *Counts are the only ADC representation.* A microvolt value was published as
 `values.adc_microvolts` and then converted straight back to counts by every
@@ -45,7 +44,7 @@ advancing or resetting it. Deliberately not a blanket delay of event processing:
 every protective event still evaluates from the first real acquisition, so lock
 reassertion is as timely as before.
 
-M6.39, carried forward: it
+M6.39 changes carried forward into M6.41: it
 moves the observation cadence to 2000ms and derives `STALE_AFTER_MS` and the
 regression `SAMPLE_GAP` limit from it rather than leaving them as literals that
 silently change meaning; cuts the ADC filter from five conversions to three, a
@@ -54,7 +53,7 @@ cannot fill at adoption instead of letting it pin at `INSUFFICIENT_HISTORY` in
 silence; and labels the keys-filtered Shelly read in diagnostics, which until now
 logged as a generic `Shelly.read` with no reason classified.
 
-**Open against M6.39:** the shipped `calc-tank` asks for 8 samples in a 10s
+**Deferred from M6.39 (issue #10, item 8):** the shipped `calc-tank` asks for 8 samples in a 10s
 window, which a 2000ms cadence cannot supply. It needs a wider window (20s keeps
 8 samples and improves the fit) or a lower count, and that is a `pilot-working`
 republish. Tab5 logs `V3 CADENCE STARVED` at adoption until it is done.
@@ -98,7 +97,7 @@ verified; no rule depends on `total`.
 
 ## Verification
 
-- 215 Tab5 host tests pass, including 27 new cutover, authoring, three-valued and
+- 248 Tab5 host tests pass, including the cutover, authoring, three-valued and
   Monitor-timeline regressions. Coverage includes mutual rejection of the revised
   and legacy control packages in both directions, no-runtime staging and reload,
   rejection of any re-introduced relay write, alias and renamed-target resolution
@@ -122,12 +121,12 @@ verified; no rule depends on `total`.
 - Host tests prove decisions, not device answers. They do not establish Shelly
   response shapes, installed reset behavior, relay motion or cycle latency.
 
-## Next
+## Closed-unit disposition
 
-Owner review of the coordinated M6.38 source and test sequence, then the cutover in
-§8 of `docs/minimal-tab5lock-and-monitor-design.md`. Installation, restart, Pilot
-deployment, package delivery/adoption and branch promotion remain separate
-synchronized owner actions.
+The M6.38–M6.41 cutover, installed-hardware verification and documentation are
+complete. Device evidence is in `docs/tab5lock-unit-verification.md`. Remaining
+work is deferred through issues #9 and #10 and `V3-ISSUES.md`; it does not reopen
+this unit.
 
 A filtered `keys=[...]` reply has now been captured from the device and is
 recorded in `tests/fixtures/shelly1-getcomponents-documentation.json` as
@@ -159,11 +158,11 @@ holds it there; input mode Switch and output type Detached were already correct.
 That makes enable-on-boot load-bearing rather than tidy: with the relay starting
 open, a script that fails to start means no water until someone uses HAND.
 
-Acceptance evidence still to be captured, none of it fabricated here: a reply showing
-`Tab5IsLocked` as a `boolean:<id>` component with `config.name` and a Boolean
-`status.value`, and a `Boolean.Set` reply confirming the bare `null` for that exact
-method; and observed relay behavior across a Shelly reboot with an inhibition
-outstanding.
+The device response evidence was captured: `Tab5IsLocked` appeared as the named
+Boolean component, `Boolean.Set` returned bare JSON `null`, and reboot behavior
+with an outstanding inhibition was exercised with the harness. The verification
+record states explicitly where the harness rather than the installed
+`anti-chatter.js` was used.
 
 The owner accepts that pump permission may be interrupted during the maintenance
 interval: a Shelly reboot physically drops its relay, and between stopping the old
@@ -175,13 +174,12 @@ manual relay-close step is added and no Shelly lock is overridden.
 - Battery charging: retain current 75/80 policy until new limits are chosen.
   Owner finds percentage misleading and expects higher thresholds; input power
   versus charging current remains unexplained. Supported UIFlow interfaces only.
-- System Monitor automatic actuation remains deferred under issue #6. Missing
-  telemetry does not release inhibits or advance clearing qualification. There is
-  no Clear Events or Monitor OFF control in M6.37.
+- System Monitor automatic actuation and Monitor release are part of the closed
+  unit. Clear Events remains unconnected and is tracked in issue #10, item 5.
 - Shelly script-health monitoring (issue #5) remains separate; resolve by script
   name, not assumed ID. Shelly-local lockouts/protections remain authoritative.
-- S020 startup sensitivity, brief Cloud-yellow with a pending record, and potential
-  two-second polling remain separate questions, not approved changes here.
+- S020 startup sensitivity and brief Cloud-yellow with a pending record remain
+  separate questions. The two-second cadence is now the installed M6.41 behavior.
 - Rules editor Tab5 status-read failure remains parked by owner.
 - Never fabricate unavailable values, physical action success or exact inferred
   close time. Runtime packages adopt only on restart with an empty event board.
