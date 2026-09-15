@@ -1,4 +1,4 @@
-# Release: 2026-09-15 M6.38 — coordinated launcher; content unchanged since M6.37.
+# Release: 2026-09-13 M6.37 — coordinated launcher for repaired operator restarts.
 # CPU A application launcher. The application itself lives in pilot.py.
 # Escaped exceptions are printed to serial only. Durable operational records
 # belong in cloud storage. Manually selected utilities may write explicit CSVs;
@@ -68,7 +68,7 @@ except Exception as webrepl_err:
 M5.begin()
 STARTUP_MODE = select_startup_mode()
 PRESSURE_QUALIFICATION_SELECTED = STARTUP_MODE == 'pressure-qualification'
-print('[well-main] Release M6.38 launcher; startup mode:', STARTUP_MODE)
+print('[well-main] Release M6.37 launcher; startup mode:', STARTUP_MODE)
 
 
 try:
