@@ -9,6 +9,20 @@ import unittest
 
 PILOT_PATH = pathlib.Path(__file__).parents[1] / 'tab5' / 'pilot.py'
 MAIN_PATH = PILOT_PATH.parent / "main.py"
+QUAL_PATH = PILOT_PATH.parent / "pressure_qualification.py"
+
+
+def _binds_from_main(node):
+    """True for the import-time bindings a module takes from __main__.
+
+    pressure_qualification.py and pilot.py both re-bind names main.py owns, such
+    as `calibrated_psi_from_raw_count = __main__.calibrated_psi_from_raw_count`.
+    Those are plumbing, not logic: executing one here raises NameError, and the
+    real definition is lifted from main.py anyway.
+    """
+    return any(isinstance(child, ast.Name) and child.id == "__main__"
+               for child in ast.walk(node.value))
+
 FUNCTIONS = {
     'ads1110_signed_raw_count',
     '_read_ads1110_reply',
@@ -27,7 +41,6 @@ CONSTANTS = {
     'QUAL_CAPTURE_SAMPLES', 'QUAL_FLOW_WINDOW_DEFAULT_SECONDS',
     'QUAL_FLOW_MIN_SPAN_MS',
     'QUAL_FLOW_WINDOW_TOLERANCE_MS',
-    'PRESSURE_SENSOR_ZERO_UV', 'PRESSURE_SENSOR_SPAN_UV',
     'PRESSURE_SENSOR_SPAN_PSI', 'PRESSURE_CALIBRATION_COUNT_INTERCEPT',
     'PRESSURE_CALIBRATION_COUNTS_PER_PSI', 'PRESSURE_PSI_PER_COUNT',
     'TANK_EFFECTIVE_VOLUME_GAL', 'TANK_PRECHARGE_PSIG',
@@ -37,12 +50,13 @@ CONSTANTS = {
 
 def load_pressure_logic():
     tree = ast.parse(PILOT_PATH.read_text(encoding='utf-8') + '\n' +
-                     MAIN_PATH.read_text(encoding='utf-8'))
+                     MAIN_PATH.read_text(encoding='utf-8') + '\n' +
+                     QUAL_PATH.read_text(encoding='utf-8'))
     nodes = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in FUNCTIONS:
             nodes.append(node)
-        elif isinstance(node, ast.Assign):
+        elif isinstance(node, ast.Assign) and not _binds_from_main(node):
             names = {target.id for target in node.targets if isinstance(target, ast.Name)}
             if names & CONSTANTS:
                 nodes.append(node)
@@ -105,7 +119,8 @@ class PressureFlowTests(unittest.TestCase):
 
     def test_adc_initialization_keeps_continuous_15sps_gain_two(self):
         tree = ast.parse(PILOT_PATH.read_text(encoding='utf-8') + '\n' +
-                     MAIN_PATH.read_text(encoding='utf-8'))
+                     MAIN_PATH.read_text(encoding='utf-8') + '\n' +
+                     QUAL_PATH.read_text(encoding='utf-8'))
         init_node = next(node for node in tree.body
                          if isinstance(node, ast.FunctionDef) and node.name == 'init_adc')
         settings = []
@@ -125,7 +140,8 @@ class PressureFlowTests(unittest.TestCase):
         self.assertIn(('set_mode', 'MODE_CONTIN'), settings)
 
     def test_fill_trace_preserves_each_raw_batch_instead_of_only_microvolts(self):
-        source = PILOT_PATH.read_text(encoding='utf-8')
+        # The fill run left pilot.py in M6.41; it lives in the utility module now.
+        source = QUAL_PATH.read_text(encoding='utf-8')
         tree = ast.parse(source)
         fill_node = next(node for node in tree.body
                          if isinstance(node, ast.FunctionDef) and

@@ -8,6 +8,19 @@ import unittest
 
 PILOT_PATH = pathlib.Path(__file__).parents[1] / "tab5" / "pilot.py"
 MAIN_PATH = PILOT_PATH.parent / "main.py"
+
+
+def _binds_from_main(node):
+    """True for the import-time bindings a module takes from __main__.
+
+    pressure_qualification.py and pilot.py both re-bind names main.py owns, such
+    as `calibrated_psi_from_raw_count = __main__.calibrated_psi_from_raw_count`.
+    Those are plumbing, not logic: executing one here raises NameError, and the
+    real definition is lifted from main.py anyway.
+    """
+    return any(isinstance(child, ast.Name) and child.id == "__main__"
+               for child in ast.walk(node.value))
+
 FUNCTIONS = {
     "_is_number",
     "calibrated_psi_from_raw_count",
@@ -82,7 +95,7 @@ def load_hmi_logic():
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in FUNCTIONS:
             nodes.append(node)
-        elif isinstance(node, ast.Assign):
+        elif isinstance(node, ast.Assign) and not _binds_from_main(node):
             names = set()
             for target in node.targets:
                 names.update(assigned_names(target))

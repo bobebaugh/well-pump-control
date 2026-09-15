@@ -12,6 +12,20 @@ import unittest
 
 PILOT_PATH = pathlib.Path(__file__).parents[1] / "tab5" / "pilot.py"
 MAIN_PATH = PILOT_PATH.parent / "main.py"
+QUAL_PATH = PILOT_PATH.parent / "pressure_qualification.py"
+
+
+def _binds_from_main(node):
+    """True for the import-time bindings a module takes from __main__.
+
+    pressure_qualification.py and pilot.py both re-bind names main.py owns, such
+    as `calibrated_psi_from_raw_count = __main__.calibrated_psi_from_raw_count`.
+    Those are plumbing, not logic: executing one here raises NameError, and the
+    real definition is lifted from main.py anyway.
+    """
+    return any(isinstance(child, ast.Name) and child.id == "__main__"
+               for child in ast.walk(node.value))
+
 FUNCTIONS = {
     "format_observed_at",
     "_observation_path_value",
@@ -134,12 +148,13 @@ CONSTANTS = {
 
 def load_selection_logic():
     tree = ast.parse(PILOT_PATH.read_text(encoding="utf-8") + "\n" +
-                     MAIN_PATH.read_text(encoding="utf-8"))
+                     MAIN_PATH.read_text(encoding="utf-8") + "\n" +
+                     QUAL_PATH.read_text(encoding="utf-8"))
     nodes = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in FUNCTIONS:
             nodes.append(node)
-        elif isinstance(node, ast.Assign):
+        elif isinstance(node, ast.Assign) and not _binds_from_main(node):
             names = {target.id for target in node.targets if isinstance(target, ast.Name)}
             if names & CONSTANTS:
                 nodes.append(node)

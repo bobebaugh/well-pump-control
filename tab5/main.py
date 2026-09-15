@@ -167,6 +167,31 @@ def read_ads1110_filtered_raw_count(service=None):
     return sum(samples[1:-1]) // (ADC_FILTER_SAMPLE_COUNT - 2)
 
 
+# --- the qualified pressure sensor fit ---
+# Produced by tab5/pressure_qualification.py, consumed every cycle by pilot.py.
+# It lives here, with the converter, because both read it and neither owns it:
+# one copy on the device, so a recalibration updates one place. Deleting the
+# utility would not lose these numbers.
+PRESSURE_SENSOR_SPAN_PSI = 100.0
+# End-to-end field fit from 22 usable gauge captures over about 40--61 PSIG.
+# The count intercept is extrapolated sensor-system output at zero gauge
+# pressure; it is not the ADC electrical-zero offset.
+PRESSURE_CALIBRATION_COUNT_INTERCEPT = 3732.02
+PRESSURE_CALIBRATION_COUNTS_PER_PSI = 211.492
+
+# The Shelly EM address, shared: pilot.py polls it every cycle and the fill run
+# uses it to tell a running pump from a stopped one.
+SHELLY_EM_URL = 'http://192.168.50.141/emeter/0'
+
+
+def calibrated_psi_from_raw_count(raw_count):
+    """Apply the qualified end-to-end field fit to one raw ADC count."""
+    if isinstance(raw_count, bool) or not isinstance(raw_count, (int, float)):
+        return None
+    return ((raw_count - PRESSURE_CALIBRATION_COUNT_INTERCEPT) /
+            PRESSURE_CALIBRATION_COUNTS_PER_PSI)
+
+
 def select_startup_mode(timeout_ms=10000):
     """Return a fixed local utility choice, or normal after the timeout."""
     bg = 0x07152e
@@ -227,6 +252,22 @@ init_adc()   # after M5.begin(): it reinitialises the buses this sits beside
 STARTUP_MODE = select_startup_mode()
 PRESSURE_QUALIFICATION_SELECTED = STARTUP_MODE == 'pressure-qualification'
 print('[well-main] Release M6.41 launcher; startup mode:', STARTUP_MODE)
+
+
+# The utility runs INSTEAD of the application, and never returns: every one of
+# its exits reboots. CPU B is therefore never started while a capture is running,
+# so nothing publishes, polls RTDB, or holds the radio against the timed reads.
+# Before M6.41 cloud.start() ran unconditionally and did all three.
+if PRESSURE_QUALIFICATION_SELECTED:
+    print('[well-main] pressure qualification selected; CPU A and CPU B stay down')
+    try:
+        import pressure_qualification   # noqa: F401  - runs on import, then reboots
+    except Exception as qual_err:
+        print('[well-main] pressure qualification failed:')
+        sys.print_exception(qual_err)
+    # Only reached if the utility raised before its own reset.
+    while True:
+        time.sleep(1)
 
 
 try:
