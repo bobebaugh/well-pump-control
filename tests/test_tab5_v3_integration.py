@@ -22,11 +22,19 @@ SHELLY_DOC = json.loads(
 
 
 def load_logic(targets):
-    tree = ast.parse(PILOT_PATH.read_text(encoding="utf-8"))
+    # main.py owns the converter, the qualified fit and the shared device
+    # address, so both files are scanned and the import-time bindings pilot.py
+    # takes from __main__ are skipped - those are plumbing, and executing one
+    # here raises NameError while the real definition comes from main.py.
+    tree = ast.parse(PILOT_PATH.read_text(encoding="utf-8") + "\n" +
+                     (PILOT_PATH.parent / "main.py").read_text(encoding="utf-8"))
     definitions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
     assignments = {}
     for node in tree.body:
         if isinstance(node, ast.Assign):
+            if any(isinstance(child, ast.Name) and child.id == "__main__"
+                   for child in ast.walk(node.value)):
+                continue
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     assignments[target.id] = node
@@ -50,9 +58,13 @@ def load_logic(targets):
                             if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Load)}
             pending.extend(dependencies - wanted)
             wanted.update(dependencies)
+    def _binds_from_main(node):
+        return any(isinstance(child, ast.Name) and child.id == "__main__"
+                   for child in ast.walk(node.value))
+
     nodes = [node for node in tree.body
              if ((isinstance(node, ast.FunctionDef) and node.name in selected_functions) or
-                 (isinstance(node, ast.Assign) and any(
+                 (isinstance(node, ast.Assign) and not _binds_from_main(node) and any(
                      isinstance(target, ast.Name) and target.id in selected_assignments
                      for target in node.targets)))]
     clock = types.SimpleNamespace(

@@ -25,7 +25,6 @@ from machine import I2C, Pin, reset
 import cloud
 
 # --- config (values from firmware/tab5/main/pilot_config.h) ---
-SHELLY_EM_URL = 'http://192.168.50.141/emeter/0'
 SHELLY_1_STATUS_URL = 'http://192.168.50.201/rpc/Shelly.GetStatus'
 # Discovery resolves the dynamic component ids by name. The unfiltered call is
 # paginated and truncates, so it is never used for acquisition.
@@ -257,6 +256,9 @@ if ANTENNA_READBACK:
 # once here rather than reached through __main__ every cycle. This is the only
 # ADC name this application needs: one filtered reading per observation.
 read_ads1110_filtered_raw_count = __main__.read_ads1110_filtered_raw_count
+# One address on the device: the fill run reads this endpoint too, so main.py
+# holds it rather than each application carrying its own copy.
+SHELLY_EM_URL = __main__.SHELLY_EM_URL
 # The qualified sensor fit, produced by tab5/pressure_qualification.py and held
 # in main.py beside the converter that feeds it. One copy on the device, so a
 # recalibration updates one place and the utility cannot disagree with this loop.
