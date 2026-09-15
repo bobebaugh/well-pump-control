@@ -192,6 +192,34 @@ Review this as part of the generic Functions/history design in the consolidation
 simple calculations use the current frozen snapshot; history-dependent logic belongs in
 approved bounded Functions with explicit history consumers and reset boundaries.
 
+### TAB5-15 — Device addresses are declared in the package and then discarded · OPEN
+The contract already carries them and the runtime already insists on them:
+
+- `tests/fixtures/rules-runtime-package-v3-checkpoint1.json` declares
+  `192.168.50.141`, `192.168.50.201` and `local` per device.
+- `_rules_v3_package_valid` REQUIRES `address` on every device and rejects a
+  package whose address is missing, non-string or empty (`pilot.py:2732`, and
+  the V2 path at `:2290`).
+- `resolve_rules_v3_package` then keeps only `enabled`, `fields` and `driver`
+  (`:3134`). `address` survives nowhere else in the file.
+
+Acquisition polls module constants instead - `SHELLY_EM_URL` in `main.py`,
+`SHELLY_1_*` in `pilot.py`. The owner's design intent, stated 2026-09-15, is
+that the rules file is where these belong and is where they should be sourced.
+The Rules Engine screen's note that "device addresses are descriptive here;
+installed Tab5 configuration owns polling endpoints" describes the deviation,
+not the intent, and should change when the code does.
+
+This becomes load-bearing at the next network change: a device handed a
+different lease is unreachable until someone edits device source and uploads,
+even though the package could have said so. Until then, DHCP reservations for
+`.141` and `.201` keep the two in step.
+
+One real constraint, the same one TAB5-13's generic-binding note raises: Tab5
+polls both devices and drives the HMI lock display with no adopted package at
+all, so addresses cannot be purely package-sourced. A base set the application
+owns, overridden by the package when one is adopted, is the shape that works.
+
 ### TAB5-14 — Calibration data is duplicated between device source and package · OPEN
 Every calibration constant this project has exists twice: once in device source and
 once hard-coded in the rules package the Pilot authors. Nothing reconciles them.
