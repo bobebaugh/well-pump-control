@@ -1,4 +1,4 @@
-# Release: 2026-09-13 M6.37 — repaired operator command transport and evidence.
+# Release: 2026-09-15 M6.38 — Tab5 inhibition as a Boolean; RLY0 left to the Shelly script.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -55,7 +55,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
 PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.37'
+SOFTWARE_RELEASE = 'M6.38'
 OPERATOR_COMMAND_LIFETIME_MS = 45000
 OPERATOR_CONFIRM_WINDOW_MS = 8000
 SHELLY_RESTART_CONFIRM_MS = 60000
@@ -5338,7 +5338,7 @@ if _pressure_qualification_selected:
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.37: repaired operator controls; V3 authority')
+log('CPU A release M6.38: Tab5IsLocked inhibition; V3 authority')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.

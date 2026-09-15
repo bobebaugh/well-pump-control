@@ -295,7 +295,7 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertIsNone(arm("restart-tab5", 2000, action, until, True)[2])
 
     def test_release_is_m636(self):
-        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.37")
+        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.38")
 
     def test_touch_service_is_not_limited_to_remaining_cycle_sleep(self):
         source = PILOT_PATH.read_text(encoding="utf-8")
