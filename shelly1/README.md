@@ -374,10 +374,27 @@ false-to-true transition the only shape worth capturing:
 
 ## Status
 
-**Not installed and not hardware-tested.** Written against the qualified contract
-and the Rev2 interface drawing; no bench or live run has been performed. The prior
-occupant of these two components was a test harness that only counted `IsLocked`
-down and never touched `switch:0` or `input:0`.
+**Installed and bench-tested. Not yet run with the pump connected.**
+
+Installed on the device and exercised on the bench on 2026-09-15: the owner ran
+the combinations they could construct through `tools/shelly-cors-proxy`, and
+reported short cycles scoring, `loCntr` incrementing, `Tab5IsLocked` driving RLY0,
+and the old Tab5 build still reading the lock correctly throughout.
+
+That run also found the defect this file's edge detection was rewritten for: with
+the status handler as the only path into `pumpStarted`, nothing was detected at
+all and `loCntr` stayed at 0 through genuine short cycles. See *How an edge is
+detected*.
+
+Every RPC shape this unit depends on is now captured from the device rather than
+assumed - discovery, the keys-filtered acquisition, `Number.Set` and `Boolean.Set`
+- and recorded in `tests/fixtures/shelly1-getcomponents-documentation.json`. One
+behaviour remains unobserved: the relay across a Shelly reboot with an inhibition
+outstanding.
+
+What has **not** happened: no run with the pump connected to the automation, and
+no live Tab5 cutover. The prior occupant of these components was a test harness
+that only counted `IsLocked` down and never touched `switch:0` or `input:0`.
 
 Two electrical assumptions are worth metering before trusting it: that a falling SW
 edge always corresponds to the contactor de-energizing, and that `Shelly.call` on
