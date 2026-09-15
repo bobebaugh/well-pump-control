@@ -306,8 +306,12 @@ class ObservationSelectionTests(unittest.TestCase):
             unavailable["values"]["pressure_psi"],
             self.logic["calibrated_psi_from_raw_count"](16390),
         )
-        self.assertFalse(unavailable["status"]["pressure_sensor_commissioned"])
-        self.assertFalse(unavailable["status"]["pressure_valid"])
+        commissioned = self.logic["PRESSURE_SENSOR_COMMISSIONED"]
+        self.assertEqual(unavailable["status"]["pressure_sensor_commissioned"],
+                         commissioned)
+        # pressure_valid is commissioning AND a usable count, so with a count
+        # present it tracks the flag.
+        self.assertEqual(unavailable["status"]["pressure_valid"], commissioned)
         previous = observation()
         self.assertIsNone(self.reason(unavailable, previous, 1000))
 
@@ -413,8 +417,9 @@ class ObservationSelectionTests(unittest.TestCase):
             (16390 - self.logic["PRESSURE_CALIBRATION_COUNT_INTERCEPT"]) /
             self.logic["PRESSURE_CALIBRATION_COUNTS_PER_PSI"],
         )
-        self.assertFalse(built["status"]["pressure_sensor_commissioned"])
-        self.assertFalse(built["status"]["pressure_valid"])
+        commissioned = self.logic["PRESSURE_SENSOR_COMMISSIONED"]
+        self.assertEqual(built["status"]["pressure_sensor_commissioned"], commissioned)
+        self.assertEqual(built["status"]["pressure_valid"], commissioned)
 
     def test_transient_shelly_poll_failures_do_not_select_durable_records(self):
         confirmation = self.logic["new_shelly_availability_confirmation"](3)

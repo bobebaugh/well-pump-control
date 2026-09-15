@@ -1,4 +1,4 @@
-# Release: 2026-09-15 M6.41 — pressure qualification extracted; ADC owned by main.
+# Release: 2026-09-15 M6.42 — pressure sensor commissioned.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -66,8 +66,14 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # ADS1110 communication alone must not turn a disconnected input into apparent
 # pressure. Field commissioning will replace this bounded release constant with
 # the reviewed parameter lifecycle.
-PRESSURE_SENSOR_COMMISSIONED = False
-SOFTWARE_RELEASE = 'M6.41'
+# Commissioned 2026-09-15. The fit below is qualified against the well gauge over
+# roughly 40-61 PSIG (R2 0.9987, RMS residual 0.23 PSI); see
+# docs/pressure-calibration/. Setting this True is what releases pressure to the
+# application AND to the rules engine: calc-pressure carries _requiredTrueFields
+# guards, so while it was False PressurePSI was never produced at all and
+# TankFlowQuality read PRESSURE_INVALID rather than a real quality.
+PRESSURE_SENSOR_COMMISSIONED = True
+SOFTWARE_RELEASE = 'M6.42'
 OPERATOR_COMMAND_LIFETIME_MS = 45000
 OPERATOR_CONFIRM_WINDOW_MS = 8000
 SHELLY_RESTART_CONFIRM_MS = 60000
@@ -4691,7 +4697,7 @@ def service_navigation():
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.41: ADC owned by main; V3 authority')
+log('CPU A release M6.42: pressure commissioned; V3 authority')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.

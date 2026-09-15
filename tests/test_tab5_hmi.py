@@ -175,7 +175,11 @@ class HmiFoundationTests(unittest.TestCase):
 
     def test_pressure_is_not_presented_before_explicit_commissioning(self):
         pressure = self.logic["pressure_hmi_value"]
-        self.assertEqual(pressure(16390), (None, "NOT COMMISSIONED"))
+        # Explicit, not the module default: the sensor was commissioned in M6.42,
+        # and a test that leans on the default stops testing the gate the moment
+        # it flips.
+        self.assertEqual(pressure(16390, commissioned=False),
+                         (None, "NOT COMMISSIONED"))
         value, status = pressure(16390, commissioned=True)
         self.assertEqual(status, "VALID")
         self.assertIsInstance(value, float)
@@ -207,8 +211,14 @@ class HmiFoundationTests(unittest.TestCase):
         model = self.logic["build_now_hmi_model"](
             observation(), transport(), 10000)
         self.assertEqual(model["pump_state"], "RUNNING")
-        self.assertEqual(model["pressure_status"], "NOT COMMISSIONED")
-        self.assertIsNone(model["pressure_psi"])
+        # Follows the commissioning constant rather than restating it.
+        commissioned = self.logic["PRESSURE_SENSOR_COMMISSIONED"]
+        self.assertEqual(model["pressure_status"],
+                         "VALID" if commissioned else "NOT COMMISSIONED")
+        if commissioned:
+            self.assertIsInstance(model["pressure_psi"], float)
+        else:
+            self.assertIsNone(model["pressure_psi"])
         self.assertEqual(model["shelly_lock"], "UNKNOWN")
         self.assertEqual(model["shelly1"], "SW0 ON  RLY0 OFF")
         self.assertEqual(model["age_text"], "EM <1s  S1 <1s  ADC <1s")
@@ -229,7 +239,10 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertEqual(model["collection"], "ACTIVE")
         self.assertEqual(model["rule_engine"], "V3 RUNNING")
         self.assertEqual(model["system_override"], "NOT AVAILABLE")
-        self.assertEqual(model["pressure"], "NOT COMMISSIONED")
+        self.assertEqual(
+            model["pressure"],
+            "COMMISSIONED" if self.logic["PRESSURE_SENSOR_COMMISSIONED"]
+            else "NOT COMMISSIONED")
         self.assertEqual(model["rules_status"], "ACTIVE")
         self.assertEqual(model["enabled_rules"], 0)
         self.assertEqual(model["cloud_state"], "green")
@@ -315,7 +328,7 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertIsNone(arm("restart-tab5", 2000, action, until, True)[2])
 
     def test_release_matches_the_stamped_software_release(self):
-        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.41")
+        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.42")
 
     def test_touch_service_is_not_limited_to_remaining_cycle_sleep(self):
         # The ADS1110 stack moved to main.py, which owns board init; the touch
