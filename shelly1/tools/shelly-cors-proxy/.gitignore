@@ -1,4 +1,0 @@
-# Built artifact. Rebuild with the command in README.md; the page is embedded at
-# compile time, so rebuild after any change to index.html.
-shelly_cors_proxy.exe
-shelly_cors_proxy

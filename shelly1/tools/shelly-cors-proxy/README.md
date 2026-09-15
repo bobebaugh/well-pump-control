@@ -17,10 +17,16 @@ Go cross-compiles, so no Windows machine is needed:
 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o shelly_cors_proxy.exe .
 ```
 
-The binary is not committed. It is a build artifact and the page is baked into it,
-so every page change would add another six megabytes to history. Rebuild it, or ask
-for a fresh one. Verified for the current page on 2026-09-15 with Go 1.24.7: PE32+
-x86-64 console executable, 6.05 MB.
+`shelly_cors_proxy.exe` **is committed**, deliberately. Git is this project's
+transport between Windows machines, and a bench tool you cannot run when you are
+standing at the panel is no use. The cost is that the page is baked in at compile
+time, so the committed binary is only as current as the last rebuild — **rebuild
+and recommit whenever `index.html` changes**, or the exe will silently serve an old
+page.
+
+The committed build: 2026-09-15, Go 1.24.7, PE32+ x86-64 console executable,
+6.05 MB, embedding the page as of commit c8800b5. It is unsigned, so Windows will
+warn on first run.
 
 Before a build ships, the same source is built for Linux and run against a mock
 device to confirm the `/proxy/` path parsing and the response relay - including
