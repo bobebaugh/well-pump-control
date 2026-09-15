@@ -83,7 +83,11 @@ MAX_DURABLE_OBSERVATION_INTERVAL_MS = 600000
 EVENT_BOARD_HEARTBEAT_MS = 30000
 EVENT_HISTORY_DEPTH = 600
 SHELLY_AVAILABILITY_CONFIRMATION_SAMPLES = 3
-ADC_FILTER_SAMPLE_COUNT = 5
+# Three adjacent conversions, not five. The samples are taken back to back, so a
+# third one adds little beyond rejecting a single outlier, and each costs ~67ms at
+# 15 SPS. The trim below then leaves exactly one value: this is a MEDIAN of three,
+# which is what rejects an outlier here - not an average of the survivors.
+ADC_FILTER_SAMPLE_COUNT = 3
 MATERIAL_NUMERIC_THRESHOLDS = {
     'values.power': 50.0,
     'values.voltage': 2.0,
@@ -397,7 +401,12 @@ def _read_ads1110_microvolts_once(service=None):
 
 
 def trimmed_mean_microvolts(samples):
-    """Discard one high and one low value, then average the middle samples."""
+    """Discard one high and one low value, then average what is left.
+
+    At ADC_FILTER_SAMPLE_COUNT == 3 exactly one value survives the trim, so this
+    returns the median. The arithmetic is unchanged and deliberately general: it
+    stays correct if the count is raised again.
+    """
     if (not isinstance(samples, list) or
             len(samples) != ADC_FILTER_SAMPLE_COUNT):
         raise ValueError('expected exactly {} ADC samples'.format(
@@ -411,7 +420,7 @@ def trimmed_mean_microvolts(samples):
 
 
 def read_ads1110_microvolts(service=None):
-    """Use five fresh 15-SPS conversions to reject one high and one low outlier."""
+    """Use ADC_FILTER_SAMPLE_COUNT fresh 15-SPS conversions, trimmed, as one reading."""
     samples = []
     for index in range(ADC_FILTER_SAMPLE_COUNT):
         value = _read_ads1110_microvolts_once(service)
@@ -422,7 +431,12 @@ def read_ads1110_microvolts(service=None):
 
 
 def read_ads1110_filtered_raw_count(service=None):
-    """Return the trimmed five-conversion mean in native ADC counts."""
+    """Return the trimmed multi-conversion reading in native ADC counts.
+
+    This is the ONLY ADC acquisition in a cycle. Every pressure consumer - the
+    HMI, the observation field, and the package's Boyle tank calculation - reads
+    the single value it produces, so none of them costs a further conversion.
+    """
     samples = []
     for _index in range(ADC_FILTER_SAMPLE_COUNT):
         value = read_ads1110_fresh_raw_count(service)
@@ -5581,7 +5595,7 @@ while True:
             rules_v3_running_reference, rules_v3_desired_reference,
             rules_v3_staged_reference, rules_v3_rejected))
 
-    # The five fresh 15-SPS conversions occupy a material portion of every
+    # The fresh 15-SPS conversions occupy a material portion of every
     # cycle. Service touch inside their DRDY waits instead of limiting touch
     # detection to whatever sleep time happens to remain afterward.
     adc_started_ms = time.ticks_ms()

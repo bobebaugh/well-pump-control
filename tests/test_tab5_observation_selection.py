@@ -250,13 +250,25 @@ class ObservationSelectionTests(unittest.TestCase):
         previous = observation()
         self.assertIsNone(self.reason(unavailable, previous, 1000))
 
-    def test_adc_trimmed_mean_discards_one_high_and_one_low_sample(self):
-        filtered = self.logic["trimmed_mean_microvolts"](
-            [4800000, 4826625, 4830000, 4840000, 4900000]
-        )
-        self.assertEqual(filtered, 4832208)
+    def test_adc_trim_discards_one_high_and_one_low_sample(self):
+        count = self.logic["ADC_FILTER_SAMPLE_COUNT"]
+        trim = self.logic["trimmed_mean_microvolts"]
+        # At a count of three the trim leaves one value, so this is a median.
+        # Built from the count so the case stays honest if the count changes.
+        rising = [4800000 + 10000 * index for index in range(count)]
+        self.assertEqual(trim(rising), rising[count // 2])
+        # A single wild sample must not reach the result, high or low.
+        for outlier in (99999999, -99999999):
+            spiked = list(rising)
+            spiked[0] = outlier
+            self.assertNotEqual(trim(spiked), outlier)
+            self.assertGreaterEqual(trim(spiked), min(rising[1:]))
+            self.assertLessEqual(trim(spiked), max(rising[1:]))
+        # The count is a contract: a batch of any other size is rejected.
         with self.assertRaises(ValueError):
-            self.logic["trimmed_mean_microvolts"]([1, 2, 3, 4])
+            trim(rising + [4900000])
+        with self.assertRaises(ValueError):
+            trim(rising[:-1])
 
     def test_shelly1_status_normalizes_only_gen4_rpc_boolean_state(self):
         normalize = self.logic["normalize_shelly1_status"]
