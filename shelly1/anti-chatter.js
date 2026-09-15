@@ -69,6 +69,7 @@ let lockValue = 0;           // authoritative lock state; mirrored to IsLocked
 let strikeValue = 0;         // authoritative strike count; mirrored to loCntr
 let relayOpenByScript = false;  // true while this script is holding RLY0 open
 let relayOpenForTab5 = false;  // true when that hold is applying Tab5's inhibition
+let observedInputLevel = null;  // last input:0 level acted on; null until seeded
 let runStartS = null;        // uptimeS at the rising SW edge, null when not running
 let lastInfractionS = null;  // drives the loCntr decay window
 let initSecondsRemaining = 0;
@@ -152,6 +153,37 @@ function relayOutput() {
   return status.output;
 }
 
+// The input level, read the same tri-state way as the relay output: null means
+// it was not readable this pass, which must never be mistaken for an edge.
+function inputLevel() {
+  let status = Shelly.getComponentStatus("input:0");
+  if (status === null || status === undefined) return null;
+  if (typeof status.state !== "boolean") return null;
+  return status.state;
+}
+
+// The ONLY path to pumpStarted/pumpStopped. Both the status handler and the tick
+// feed it, and it acts only on a change from the level last acted on, so an edge
+// counts exactly once no matter how many sources report it.
+//
+// Why two sources. The status handler is the fast path and the tick is the
+// backstop. A level this script never receives a notification for is otherwise
+// invisible to it forever: the run is never started, the falling edge finds
+// runStartS null and returns in silence, and loCntr sits at 0 through any number
+// of genuine short cycles. That is not hypothetical - it is the reported symptom
+// this backstop was added for. The handler's event shape is an assumption about
+// the firmware; a polled level is not.
+function observeInputLevel(level) {
+  if (typeof level !== "boolean") return;   // unreadable, or no state field
+  if (observedInputLevel === level) return;
+  observedInputLevel = level;
+  // Before normal processing begins the level is tracked but never acted on, so
+  // a pump already running at startup does not register as a fresh start.
+  if (!initializationComplete) return;
+  if (level === true) pumpStarted();
+  else pumpStopped();
+}
+
 function holdRelayOpenDuringInitialization() {
   let observed = relayOutput();
   if (observed === true) Shelly.call("Switch.Set", { id: 0, on: false });
@@ -228,6 +260,9 @@ function tick() {
 
   if (!initializationComplete) {
     holdRelayOpenDuringInitialization();
+    // Seed, never act: this runs on the completing tick too, so the poll below
+    // sees no change and cannot manufacture an edge out of the startup level.
+    observedInputLevel = inputLevel();
     initSecondsRemaining -= 1;
     if (initSecondsRemaining > 0) return;
     initializationComplete = true;
@@ -254,18 +289,30 @@ function tick() {
       print("[anti-chatter] clean period elapsed; loCntr reset");
     }
   }
+
+  // The backstop, last. A notification that already arrived moved
+  // observedInputLevel, so this is a no-op in the ordinary case and costs one
+  // local status read. Running it after the lock has been serviced keeps a
+  // poll-detected infraction identical to a handler-detected one: the lock it
+  // sets is not then decremented by the same tick that set it. Relay response is
+  // unaffected either way, because recordInfraction applies the policy itself.
+  observeInputLevel(inputLevel());
 }
 
-// The input:0 edge detector, and the only reason this script knows a pump ran.
-// Tab5IsLocked is read through its component handle, not from here.
+// The fast path for an input:0 edge. Not the only path: tick() polls the level
+// as a backstop, and both funnel through observeInputLevel so an edge reported
+// twice is still counted once. This handler exists to catch a run shorter than
+// the one-second tick, which the poll alone would miss.
+//
+// The event shape below is an assumption about the firmware and has never been
+// confirmed on this device. That is precisely why it is no longer load-bearing.
 Shelly.addStatusHandler(function (event) {
+  if (event === null || event === undefined) return;
   if (event.component !== "input:0") return;
   // A falsy delta covers both null and undefined. An exception thrown here stops
   // the script, which leaves RLY0 frozen wherever it was with nothing logged.
   if (!event.delta || typeof event.delta.state !== "boolean") return;
-  if (!initializationComplete) return;
-  if (event.delta.state === true) pumpStarted();
-  else pumpStopped();
+  observeInputLevel(event.delta.state);
 });
 
 // Report missing components loudly. Protection continues either way, but Tab5
@@ -293,6 +340,7 @@ initSecondsRemaining = InitDelay;
 
 setLock(0);
 setStrikes(0);
+observedInputLevel = inputLevel();
 holdRelayOpenDuringInitialization();
 
 Timer.set(1000, true, tick);

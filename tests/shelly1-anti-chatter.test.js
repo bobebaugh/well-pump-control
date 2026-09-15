@@ -87,6 +87,10 @@ function startScript(options = {}, source = SOURCE) {
       input.state = state;
       statusHandler({ component: "input:0", delta: { state } });
     },
+    // Moves the terminal WITHOUT any notification, which is the case the device
+    // appears to present: the level changes and no status event ever arrives.
+    level: state => { input.state = state; },
+    notify: event => statusHandler(event),
     setTab5: value => { values.tab5IsLocked = value; },
     relayWrites: () => calls.filter(c => c.method === "Switch.Set"),
     lock: () => values.isLocked,
@@ -357,4 +361,91 @@ test("hand-edited settings are clamped to usable ranges", () => {
   s.edge(true);
   s.edge(false);
   assert.equal(s.strikes(), 1, "MinRuntime clamped up, so detection still works");
+});
+
+// The status handler's event shape is an assumption about the firmware that has
+// never been confirmed on the device. These cover the reported symptom: the
+// level moves, no notification arrives, and nothing is detected.
+
+test("a run seen only as a level change still scores a strike", () => {
+  const s = startNormal();
+  s.level(true);
+  s.runFor(1);            // the tick polls the level and starts the run
+  s.runFor(10);
+  s.level(false);
+  s.runFor(1);            // the tick polls the level and ends it
+  assert.equal(s.strikes(), 1, "a short cycle no notification reported still scores");
+  assert.equal(s.lock(), 90);
+});
+
+test("a long run seen only as a level change scores nothing", () => {
+  const s = startNormal();
+  s.level(true);
+  s.runFor(70);
+  s.level(false);
+  s.runFor(1);
+  assert.equal(s.strikes(), 0);
+  assert.equal(s.lock(), 0);
+});
+
+test("an edge reported by both the handler and the poll counts once", () => {
+  const s = startNormal();
+  runPump(s, 10);         // handler-driven, level left consistent
+  s.runFor(1);            // the poll sees the same level and must not re-fire
+  assert.equal(s.strikes(), 1, "one short cycle, one strike");
+
+  s.runFor(200);          // let the lock expire
+  runPump(s, 10);
+  s.runFor(1);
+  assert.equal(s.strikes(), 2, "the second is counted, and only once");
+});
+
+test("three short cycles reach the permanent lockout with no notifications at all", () => {
+  const s = startNormal();
+  for (let i = 0; i < 3; i += 1) {
+    s.level(true);
+    s.runFor(5);
+    s.level(false);
+    s.runFor(1);
+    s.runFor(200);        // outlast the lock so the next run is observed
+  }
+  assert.equal(s.strikes(), 3);
+  assert.equal(s.lock(), -1, "the strikeout is reachable without the status handler");
+});
+
+test("a level already high when initialization completes does not begin a run", () => {
+  // SW high at startup means a pump already running, whose start was not seen.
+  // Counting it would measure a run from the wrong instant.
+  const s = startScript({ inputState: true });
+  for (let i = 0; i < 5; i += 1) { s.advance(1000); s.tick(); }
+  s.level(false);
+  s.runFor(1);
+  assert.equal(s.strikes(), 0, "no strike from a run this script never saw start");
+});
+
+test("an unreadable input level is not mistaken for an edge", () => {
+  const s = startNormal();
+  s.level(true);
+  s.runFor(2);
+  assert.equal(s.strikes(), 0);
+  s.level(null);          // getComponentStatus reports no boolean state
+  s.runFor(3);
+  s.level(true);          // still the same real level; must not have been an edge
+  s.runFor(1);
+  s.level(false);
+  s.runFor(1);
+  assert.equal(s.strikes(), 1, "one run, ended once, despite the unreadable gap");
+});
+
+test("a malformed or foreign status event is ignored without throwing", () => {
+  const s = startNormal();
+  for (const event of [null, undefined, {}, { component: "switch:0", delta: { output: true } },
+                       { component: "input:0" }, { component: "input:0", delta: null },
+                       { component: "input:0", delta: { state: "true" } }]) {
+    assert.doesNotThrow(() => s.notify(event), `event ${JSON.stringify(event)}`);
+  }
+  assert.equal(s.strikes(), 0);
+  // The script must still be working afterwards.
+  s.level(true); s.runFor(1); s.level(false); s.runFor(1);
+  assert.equal(s.strikes(), 1);
 });

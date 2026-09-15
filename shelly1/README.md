@@ -95,8 +95,8 @@ any stop with essentially no drawdown.
 script startup    Tab5IsLocked = false    → keep RLY0 open for InitDelay
 after InitDelay   Tab5IsLocked false      → begin normal processing; close RLY0
                   Tab5IsLocked true       → begin normal processing; keep RLY0 open
-rising SW edge   pump started            → start run timer (ignored while locked)
-falling SW edge  pump stopped            → if run < MinRuntime, infraction
+rising SW level  pump started            → start run timer (ignored while locked)
+falling SW level pump stopped            → if run < MinRuntime, infraction
 infraction       loCntr += 1
                  loCntr < MaxLOcntr      → IsLocked = InitLockTime, RLY0 open
                  loCntr >= MaxLOcntr     → IsLocked = -1,           RLY0 open
@@ -301,8 +301,39 @@ Two electrical assumptions are worth metering before trusting it: that a falling
 edge always corresponds to the contactor de-energizing, and that `Shelly.call` on
 `switch:0` is not contended by any other script or schedule on the device.
 
+### How an edge is detected
+
+Two sources, funnelled through one function that acts only on a change from the
+level it last acted on, so an edge reported by both is still counted once:
+
+- **The status handler**, the fast path. It catches a run shorter than the tick.
+- **The once-a-second tick**, the backstop. It reads `input:0`'s level directly and
+  compares it with the last level acted on.
+
+The backstop exists because on 2026-09-15 the device did not detect pump starts at
+all: `loCntr` stayed at 0 through genuine short cycles, which is what a status
+handler that never fires looks like from the outside. The handler's event shape
+(`{component: "input:0", delta: {state}}`) was always an assumption about the
+firmware, and the stubbed tests could not catch it being wrong because the stub
+hands the script exactly that shape. A polled level is not an assumption, so the
+handler is no longer load-bearing: if it never fires, detection now degrades to
+one-second resolution instead of failing silently.
+
+One-second resolution is enough for everything here — `MinRuntime` is 60 and the
+shortest interesting run is many seconds — but a sub-second cycle seen by neither
+source would still be missed, which is why the handler is kept rather than removed.
+
+A level that reads as unreadable (no boolean `status.state`) is never treated as an
+edge, and a level that is already high when the startup delay ends is tracked but
+not acted on, since the start of that run was never observed and measuring it from
+the wrong instant could score an undeserved strike.
+
 `tests/shelly1-anti-chatter.test.js` runs this file in a stubbed Shelly runtime and
 covers the five-second startup delay, hard-lock reassertion, relay truth table,
 commanded-stop suppression, genuine short cycles, the strikeout path, the exact
-three-component declaration, and a missing `Tab5IsLocked` handle. It proves the
-script's decisions, not the device's RPC shapes or the physical relay.
+three-component declaration, and a missing `Tab5IsLocked` handle. It also covers
+the polled backstop: a run detected with no notification at all, an edge reported
+by both sources counting once, the strikeout reached without the status handler,
+an unreadable level not being mistaken for an edge, and malformed events being
+ignored without stopping the script. It proves the script's decisions, not the
+device's RPC shapes or the physical relay.
