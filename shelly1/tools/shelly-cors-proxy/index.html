@@ -3,28 +3,39 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Shelly 1 Gen4 lock-state test</title>
+  <title>Shelly 1 Gen4 bench test</title>
   <style>
     :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0b1220; color: #e9efff; }
-    body { max-width: 760px; margin: 0 auto; padding: 28px 18px 48px; }
-    h1 { margin-bottom: 4px; } p { line-height: 1.45; color: #b9c8e5; }
+    body { max-width: 860px; margin: 0 auto; padding: 28px 18px 48px; }
+    h1 { margin-bottom: 4px; } h2 { font-size: 1.02rem; margin: 0 0 10px; color: #cdd9ef; }
+    p { line-height: 1.45; color: #b9c8e5; }
     .panel { background: #121d31; border: 1px solid #2c4165; border-radius: 10px; padding: 18px; margin: 16px 0; }
     .row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
     label { display: grid; gap: 6px; color: #cdd9ef; font-size: .92rem; }
     input { min-width: 150px; box-sizing: border-box; padding: 9px; border: 1px solid #4b638e; border-radius: 6px; background: #09111f; color: #fff; font: inherit; }
     button { padding: 9px 13px; border: 0; border-radius: 6px; background: #42a5f5; color: #07111e; font-weight: 700; cursor: pointer; font: inherit; }
     button.secondary { background: #334b73; color: #e9efff; }
-    .values { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+    button.warn { background: #b4713a; color: #1b0f04; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .values { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
     .value { padding: 14px; background: #09111f; border-radius: 7px; }
     .value span { display: block; color: #aebeda; font-size: .85rem; }
-    .value strong { font-size: 1.8rem; }
+    .value strong { font-size: 1.7rem; }
+    .value small { color: #7f93b5; }
     #message { min-height: 1.4em; color: #ffd37a; } .ok { color: #86efac !important; } .error { color: #fda4af !important; }
     code { color: #b7ddff; }
+    .note { font-size: .88rem; color: #92a6c6; }
+    .caution { border-left: 3px solid #b4713a; padding-left: 10px; }
+    #run-timer.short { color: #fda4af; } #run-timer.long { color: #86efac; }
   </style>
 </head>
 <body>
-  <h1>Shelly 1 Gen4 lock-state test</h1>
-  <p>Test apparatus only. It discovers the script-owned <code>IsLocked</code> and <code>loCntr</code> values by name, reads <code>input:0</code>, and never writes the relay or input. Served locally by shelly_cors_proxy.exe, which relays requests to the Shelly so the browser never has to cross origins.</p>
+  <h1>Shelly 1 Gen4 bench test</h1>
+  <p>Test apparatus only. It discovers the script-declared <code>IsLocked</code>,
+  <code>loCntr</code> and <code>Tab5IsLocked</code> by name, reads
+  <code>input:0</code> and <code>switch:0</code>, and <strong>never writes the
+  relay</strong>. Served locally by shelly_cors_proxy.exe, which relays requests to
+  the Shelly so the browser never has to cross origins.</p>
 
   <section class="panel">
     <div class="row">
@@ -40,14 +51,54 @@
 
   <section class="panel">
     <div class="values">
-      <div class="value"><span>IsLocked</span><strong id="is-locked-value">—</strong><small> <span id="is-locked-unit"></span></small></div>
+      <div class="value"><span>IsLocked</span><strong id="is-locked-value">—</strong><small id="is-locked-unit"></small></div>
       <div class="value"><span>loCntr</span><strong id="lockout-count-value">—</strong></div>
-      <div class="value"><span>Input(0)</span><strong id="input-value">—</strong></div>
+      <div class="value"><span>Tab5IsLocked</span><strong id="tab5-value">—</strong></div>
+      <div class="value"><span>Input(0) — pump</span><strong id="input-value">—</strong><small id="invert-note"></small></div>
       <div class="value"><span>Relay(0)</span><strong id="relay-value">—</strong></div>
+      <div class="value"><span>Run time</span><strong id="run-timer">—</strong><small id="run-note"></small></div>
     </div>
   </section>
 
   <section class="panel">
+    <h2>Play the pressure switch</h2>
+    <p class="note">Drives <code>input:0</code> by flipping its <code>invert</code>
+    config, which changes the state the Shelly reports and so produces the same
+    rising and falling edge a real pressure switch would. The run timer starts on
+    a fresh Activate; the elapsed value at Deactivate is what the script measures
+    against its own <code>MinRuntime</code>.</p>
+    <div class="row">
+      <button id="pump-on" type="button" disabled>Activate pump</button>
+      <button id="pump-off" class="secondary" type="button" disabled>Deactivate pump</button>
+      <label>MinRuntime for reference
+        <input id="min-runtime" type="number" min="1" max="600" step="1" value="60">
+      </label>
+      <button id="invert-clear" class="secondary" type="button" disabled>Clear invert</button>
+    </div>
+    <p class="note caution"><strong>Unverified on this device, and it writes
+    persisted config.</strong> If Activate does not change Input(0) in the display
+    above, the device does not produce an edge this way and the only route is a
+    jumper at the SW terminal. <code>invert</code> is shown beside Input(0) so you
+    always know whether it has been left flipped; <em>Clear invert</em> puts it
+    back to false.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Play Tab5</h2>
+    <div class="row">
+      <button id="tab5-set" type="button" disabled>Set Tab5IsLocked true</button>
+      <button id="tab5-clear" class="secondary" type="button" disabled>Set false</button>
+    </div>
+    <p class="note">With the real <code>anti-chatter.js</code> running, setting this
+    true should open RLY0 within a second, and clearing it should close RLY0
+    provided <code>IsLocked</code> is 0. <strong>If Tab5 is running with a rules
+    runtime it will revert this within a cycle or two</strong> — it reconciles the
+    flag against its own ownership. Stop Tab5, or run it with no adopted package,
+    to drive this by hand.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Play the Shelly lock</h2>
     <div class="row">
       <label>Set IsLocked
         <input id="is-locked-input" type="number" min="-1" max="86400" step="1" value="0">
@@ -59,7 +110,10 @@
       <button id="set-lockout-count" type="button" disabled>Set loCntr</button>
       <button id="clear-both" class="secondary" type="button" disabled>Set both to 0</button>
     </div>
-    <p><code>IsLocked = -1</code> remains sticky. <code>0</code> is clear. A positive integer decrements once each second to zero. <code>loCntr</code> is an independent test value from 0 through 3.</p>
+    <p class="note"><code>IsLocked = -1</code> is sticky. <code>0</code> is clear. A
+    positive integer decrements once a second, by whichever script is running.
+    <code>loCntr</code> runs 0 through 3. Nothing in Tab5 writes either of these, so
+    a value set here stays until a script changes it.</p>
   </section>
 
   <script>
@@ -70,19 +124,33 @@
     const setLockedButton = document.querySelector("#set-is-locked");
     const setCountButton = document.querySelector("#set-lockout-count");
     const clearBothButton = document.querySelector("#clear-both");
+    const tab5SetButton = document.querySelector("#tab5-set");
+    const tab5ClearButton = document.querySelector("#tab5-clear");
+    const pumpOnButton = document.querySelector("#pump-on");
+    const pumpOffButton = document.querySelector("#pump-off");
+    const invertClearButton = document.querySelector("#invert-clear");
+    const minRuntimeInput = document.querySelector("#min-runtime");
     const message = document.querySelector("#message");
     const output = {
       locked: document.querySelector("#is-locked-value"),
       lockedUnit: document.querySelector("#is-locked-unit"),
       count: document.querySelector("#lockout-count-value"),
+      tab5: document.querySelector("#tab5-value"),
       input: document.querySelector("#input-value"),
-      relay: document.querySelector("#relay-value")
+      invert: document.querySelector("#invert-note"),
+      relay: document.querySelector("#relay-value"),
+      timer: document.querySelector("#run-timer"),
+      runNote: document.querySelector("#run-note")
     };
 
     let endpoint = null;
     let components = null;
+    let inputConfig = null;
     let refreshTimer = null;
+    let timerTicker = null;
     let pollingActive = false;
+    let runStartedAt = null;
+    let lastRunSeconds = null;
 
     function setMessage(text, state = "") {
       message.textContent = text;
@@ -90,11 +158,12 @@
     }
 
     function setControls(enabled) {
-      togglePollingButton.disabled = !enabled;
-      readOnceButton.disabled = !enabled;
-      setLockedButton.disabled = !enabled;
-      setCountButton.disabled = !enabled;
-      clearBothButton.disabled = !enabled;
+      for (const button of [togglePollingButton, readOnceButton, setLockedButton,
+                            setCountButton, clearBothButton, tab5SetButton,
+                            tab5ClearButton, pumpOnButton, pumpOffButton,
+                            invertClearButton]) {
+        button.disabled = !enabled;
+      }
     }
 
     function updatePollingButtonLabel() {
@@ -113,7 +182,7 @@
       refreshTimer = null;
       pollingActive = false;
       updatePollingButtonLabel();
-      setMessage("Polling stopped. Values are static — use Read Once to check them, or the Set controls below.", "ok");
+      setMessage("Polling stopped. Values are static — use Read Once to check them, or the controls below.", "ok");
     }
 
     function normalizeEndpoint() {
@@ -130,41 +199,78 @@
         url.searchParams.set(key, typeof value === "object" ? JSON.stringify(value) : String(value));
       }
       const response = await fetch(url, { cache: "no-store" });
-      const payload = await response.json().catch(() => ({}));
+      // A virtual-component setter answers a bare JSON null, which parses to
+      // null rather than to an object. Reading .error off that throws, so every
+      // successful Set used to report a phantom failure.
+      const payload = (await response.json().catch(() => ({}))) ?? {};
       if (!response.ok || payload.error) {
         throw new Error(payload.error?.message || payload.error || `RPC ${method} failed (${response.status})`);
       }
       return Object.prototype.hasOwnProperty.call(payload, "result") ? payload.result : payload;
     }
 
-    function namedNumber(list, name) {
-      return list.find(component => component.key?.startsWith("number:") && component.config?.name === name) || null;
+    // Components are discovered by name; ids are assigned at creation and are not
+    // stable across a rebuild, so nothing here hard-codes one. The id travels in
+    // config.id, so the key never has to be parsed.
+    function named(list, name) {
+      return (list || []).find(component => component.config?.name === name) || null;
     }
 
-    function componentId(component) {
-      const match = /^number:(\d+)$/.exec(component?.key || "");
-      if (!match) throw new Error("The discovered component did not have a usable numeric ID.");
-      return Number(match[1]);
+    function componentId(component, name) {
+      const id = component?.config?.id;
+      if (typeof id !== "number") throw new Error(`${name} did not report a usable numeric id.`);
+      return id;
+    }
+
+    function formatSeconds(seconds) {
+      if (seconds === null) return "—";
+      return `${seconds}s`;
+    }
+
+    function renderRunTimer() {
+      const minRuntime = Number(minRuntimeInput.value) || 0;
+      const seconds = runStartedAt !== null
+        ? Math.floor((Date.now() - runStartedAt) / 1000)
+        : lastRunSeconds;
+      output.timer.textContent = formatSeconds(seconds);
+      output.timer.className = seconds === null ? ""
+        : seconds < minRuntime ? "short" : "long";
+      if (seconds === null) output.runNote.textContent = "";
+      else if (runStartedAt !== null) {
+        output.runNote.textContent = seconds < minRuntime
+          ? `stopping now would be a short cycle` : `past MinRuntime`;
+      } else {
+        output.runNote.textContent = seconds < minRuntime
+          ? `last run — short cycle` : `last run — clean`;
+      }
     }
 
     function renderState(status) {
-      const locked = namedNumber(components, "IsLocked");
-      const count = namedNumber(components, "loCntr");
-      if (!locked || !count) throw new Error("IsLocked and loCntr were not found. Save and start the supplied Shelly script first.");
+      const locked = named(components, "IsLocked");
+      const count = named(components, "loCntr");
+      const tab5 = named(components, "Tab5IsLocked");
+      if (!locked || !count) throw new Error("IsLocked and loCntr were not found. Save and start a Shelly script that declares them first.");
 
       output.locked.textContent = locked.status?.value ?? "—";
       output.lockedUnit.textContent = locked.status?.value > 0 ? "seconds remaining" : "";
       output.count.textContent = count.status?.value ?? "—";
+      output.tab5.textContent = tab5
+        ? (tab5.status?.value === true ? "TRUE" : tab5.status?.value === false ? "false" : "—")
+        : "absent";
       output.input.textContent = status["input:0"]?.state === true ? "ON" : status["input:0"]?.state === false ? "OFF" : "—";
-      output.relay.textContent = status["switch:0"]?.output === true ? "ON" : status["switch:0"]?.output === false ? "OFF" : "—";
+      output.relay.textContent = status["switch:0"]?.output === true ? "CLOSED" : status["switch:0"]?.output === false ? "open" : "—";
+      output.invert.textContent = inputConfig?.invert === true ? "invert is ON" : "";
+      renderRunTimer();
     }
 
     async function refresh() {
-      const [componentResult, status] = await Promise.all([
+      const [componentResult, status, config] = await Promise.all([
         rpc("Shelly.GetComponents", { dynamic_only: true, include: ["config", "status"] }),
-        rpc("Shelly.GetStatus")
+        rpc("Shelly.GetStatus"),
+        rpc("Input.GetConfig", { id: 0 }).catch(() => null)
       ]);
       components = componentResult.components || [];
+      inputConfig = config;
       renderState(status || {});
       setMessage(pollingActive ? "Connected. Refreshing once per second." : "Read once. Polling is stopped.", "ok");
     }
@@ -177,6 +283,8 @@
         await refresh();
         setControls(true);
         startPolling();
+        clearInterval(timerTicker);
+        timerTicker = setInterval(renderRunTimer, 1000);
       } catch (error) {
         pollingActive = false;
         setControls(false);
@@ -186,14 +294,79 @@
 
     async function setNumber(name, input) {
       try {
-        const component = namedNumber(components || [], name);
+        const component = named(components, name);
         if (!component) throw new Error(`${name} is not available; connect first.`);
         const value = Number(input.value);
         if (!Number.isInteger(value)) throw new Error(`${name} must be an integer.`);
         if (name === "IsLocked" && (value < -1 || value > 86400)) throw new Error("IsLocked must be -1 through 86400.");
         if (name === "loCntr" && (value < 0 || value > 3)) throw new Error("loCntr must be 0 through 3.");
-        await rpc("Number.Set", { id: componentId(component), value });
+        await rpc("Number.Set", { id: componentId(component, name), value });
         await refresh();
+      } catch (error) {
+        setMessage(error.message, "error");
+      }
+    }
+
+    async function setTab5(value) {
+      try {
+        const component = named(components, "Tab5IsLocked");
+        if (!component) throw new Error("Tab5IsLocked is not declared on the device. Is the revised anti-chatter.js installed?");
+        await rpc("Boolean.Set", { id: componentId(component, "Tab5IsLocked"), value });
+        await refresh();
+        setMessage(`Tab5IsLocked set ${value}. If Tab5 is running it may revert this within a cycle.`, "ok");
+      } catch (error) {
+        setMessage(error.message, "error");
+      }
+    }
+
+    // input:0 reports physical XOR invert, so to report a wanted state we set
+    // invert to (physical XOR wanted). Physical is recovered the same way from
+    // whatever is being reported now.
+    async function setPumpInput(wanted) {
+      try {
+        const status = await rpc("Shelly.GetStatus");
+        const reported = status["input:0"]?.state;
+        if (typeof reported !== "boolean") throw new Error("input:0 did not report a boolean state.");
+        const config = await rpc("Input.GetConfig", { id: 0 });
+        const currentInvert = config?.invert === true;
+        const physical = reported !== currentInvert;      // XOR
+        const neededInvert = physical !== wanted;          // XOR
+        if (neededInvert !== currentInvert) {
+          await rpc("Input.SetConfig", { id: 0, config: { invert: neededInvert } });
+        }
+        await refresh();
+
+        const landed = output.input.textContent === (wanted ? "ON" : "OFF");
+        if (!landed) {
+          setMessage("Input(0) did not change. This device may not produce an edge from an invert flip — use a jumper at the SW terminal instead.", "error");
+          return;
+        }
+        if (wanted) {
+          runStartedAt = Date.now();
+          lastRunSeconds = null;
+          setMessage("Pump activated. Run timer started.", "ok");
+        } else if (runStartedAt !== null) {
+          lastRunSeconds = Math.floor((Date.now() - runStartedAt) / 1000);
+          runStartedAt = null;
+          const minRuntime = Number(minRuntimeInput.value) || 0;
+          setMessage(`Pump deactivated after ${lastRunSeconds}s — ` +
+            (lastRunSeconds < minRuntime
+              ? "under MinRuntime, so a running anti-chatter.js should score a strike."
+              : "at or over MinRuntime, so no strike is expected."), "ok");
+        } else {
+          setMessage("Pump deactivated.", "ok");
+        }
+        renderRunTimer();
+      } catch (error) {
+        setMessage(error.message, "error");
+      }
+    }
+
+    async function clearInvert() {
+      try {
+        await rpc("Input.SetConfig", { id: 0, config: { invert: false } });
+        await refresh();
+        setMessage("invert set back to false.", "ok");
       } catch (error) {
         setMessage(error.message, "error");
       }
@@ -215,6 +388,12 @@
       await setNumber("IsLocked", Object.assign(document.querySelector("#is-locked-input"), { value: 0 }));
       await setNumber("loCntr", Object.assign(document.querySelector("#lockout-count-input"), { value: 0 }));
     });
+    tab5SetButton.addEventListener("click", () => setTab5(true));
+    tab5ClearButton.addEventListener("click", () => setTab5(false));
+    pumpOnButton.addEventListener("click", () => setPumpInput(true));
+    pumpOffButton.addEventListener("click", () => setPumpInput(false));
+    invertClearButton.addEventListener("click", clearInvert);
+    minRuntimeInput.addEventListener("input", renderRunTimer);
 
     hostInput.value = localStorage.getItem("shelly1Gen4TestHost") || "";
   </script>

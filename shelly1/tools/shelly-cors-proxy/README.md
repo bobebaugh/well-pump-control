@@ -29,12 +29,60 @@ whenever it was last built.
 
 Read-only unless a button is pressed:
 
-- `Shelly.GetComponents` with `dynamic_only`, to resolve the script-declared
-  components by name. Ids are assigned at creation and are not stable across a
-  rebuild, so nothing here hard-codes one.
+- `Shelly.GetComponents` with `dynamic_only`, to resolve `IsLocked`, `loCntr` and
+  `Tab5IsLocked` by name. Ids are assigned at creation and are not stable across a
+  rebuild, so nothing here hard-codes one; the id travels in `config.id`, so the
+  key is never parsed either.
 - `Shelly.GetStatus`, for `input:0` and `switch:0`.
+- `Input.GetConfig`, to show whether `invert` has been left flipped.
 
-Writes only what a button asks for, and never the relay.
+Writes only what a button asks for, and **never the relay**. Move that from the
+Shelly panel.
+
+## Playing the pressure switch
+
+`input:0` reflects the physical terminal and no RPC sets it. *Activate pump* and
+*Deactivate pump* instead flip the input's `invert` config, which changes the state
+the Shelly reports and should produce the same rising and falling edge a real
+pressure switch would. The page computes the flip from what is currently reported
+and what `invert` currently is, so it works whichever way the terminal is sitting
+and whether or not `invert` was already on.
+
+Two caveats. **This is unverified on the device** — if Activate does not change
+Input(0) in the display, the Shelly does not generate an edge this way and a jumper
+at the SW terminal is the only route. And each press **writes persisted config**,
+so it is bench apparatus, not something to leave toggling. The current `invert` is
+shown beside Input(0), and *Clear invert* puts it back to false.
+
+The run timer starts on a fresh Activate. The elapsed value at Deactivate is what a
+running `anti-chatter.js` measures against its own `MinRuntime`; the field beside
+the buttons is a local reference copy for the verdict text, since that constant
+lives in the script and is not published as a component.
+
+## Playing Tab5
+
+*Set Tab5IsLocked true* should open RLY0 within a second of a running
+`anti-chatter.js` seeing it, and clearing it should close RLY0 provided `IsLocked`
+is 0.
+
+If Tab5 is running with an adopted rules package it will revert the flag within a
+cycle or two — it reconciles that component against its own event ownership and
+writes back what it wants. Stop Tab5, or run it with no adopted package, to drive
+the flag by hand. `IsLocked` and `loCntr` are different: nothing in Tab5 writes
+them, so a value set here stays until a script changes it.
+
+## Tests
+
+```
+node --test shelly1/tools/shelly-cors-proxy/index.test.js
+```
+
+Executes the page's real JavaScript against a fake Shelly with a DOM shim, driving
+real button clicks and asserting on real fetch calls. It covers activate and
+deactivate from every starting combination of terminal position and `invert`, the
+run timer's short-cycle verdict, a bare-null reply not being reported as a failure,
+a device without the boolean, discovery by name, and that no control ever writes
+the relay.
 
 ## Original verification
 
