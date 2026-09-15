@@ -556,5 +556,59 @@ class UserMonitorAttributionTests(unittest.TestCase):
             {"resolved": self.resolved, "kernel": restarted}, "M001"))
 
 
+
+class DocumentedRpcCommandTests(unittest.TestCase):
+    """The RPC reference in shelly1/README.md must be what pilot.py actually sends.
+
+    The section exists because a hand-typed URL is not necessarily byte-for-byte
+    the request Tab5 makes - percent-encoding differs - and that difference has
+    already cost a debugging session. A reference that has drifted from the code
+    is worse than none, because it is trusted.
+    """
+
+    README = (ROOT / "shelly1" / "README.md").read_text(encoding="utf-8")
+    SOURCE = PILOT_PATH.read_text(encoding="utf-8")
+
+    def _constant(self, name):
+        """Read a string constant from pilot.py, joining an implicit concatenation."""
+        import re
+        grouped = re.search(name + r"\s*=\s*\((.*?)\)\n", self.SOURCE, re.S)
+        if grouped:
+            return "".join(re.findall(r"'([^']*)'", grouped.group(1)))
+        return re.search(name + r"\s*=\s*'([^']*)'", self.SOURCE).group(1)
+
+    def test_the_discovery_url_is_documented_exactly_as_sent(self):
+        self.assertIn(self._constant("SHELLY_1_COMPONENTS_URL"), self.README)
+
+    def test_the_filtered_url_is_documented_with_its_encoding(self):
+        filtered = self._constant("SHELLY_1_FILTERED_URL")
+        prefix, _, suffix = filtered.partition("{}")
+        self.assertIn(prefix, self.README)
+        self.assertIn(suffix, self.README, "the include encoding must be shown as sent")
+
+    def test_the_boolean_set_url_is_documented_with_a_worked_example(self):
+        template = self._constant("SHELLY_1_BOOLEAN_SET_URL")
+        self.assertIn(template.format(200, "true"), self.README)
+
+    def test_the_documented_encoding_is_the_real_one(self):
+        """Guards a plausible-looking but wrong hand-written encoding."""
+        import json
+        import urllib.parse
+        expected = urllib.parse.quote(
+            json.dumps(["config", "status"], separators=(",", ":")), safe="")
+        self.assertIn(expected, self.README)
+        self.assertIn(expected, self.SOURCE)
+
+    def test_the_reference_warns_that_ids_are_not_stable(self):
+        # Every documented id is an example. A reader who copies one and finds it
+        # renumbered must be told that is expected, not a device fault.
+        self.assertIn("Component ids are assigned at creation", self.README)
+
+    def test_the_boolean_set_acceptance_rule_is_stated(self):
+        # The dispatcher accepts only a bare null; a reference that omitted this
+        # would let a wrong-but-successful-looking reply pass unnoticed.
+        self.assertIn("bare JSON `null`", self.README)
+
+
 if __name__ == "__main__":
     unittest.main()

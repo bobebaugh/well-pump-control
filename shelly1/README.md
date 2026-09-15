@@ -290,6 +290,88 @@ the same reason — the numeric id is assigned at creation and is not stable acr
 rebuild. This script adopts external writes to `IsLocked` and `loCntr` deliberately,
 so a utility written this way keeps working.
 
+## RPC command reference
+
+Every command is a plain HTTP GET, so a browser address bar is a working client.
+These are the **exact forms Tab5 issues** - the bracketed arguments are percent-
+encoded because that is what `pilot.py` sends. The device also accepts literal
+brackets typed by hand, but a hand-typed URL is not byte-for-byte the request
+Tab5 makes, which has already cost one debugging session. Prefer these.
+
+The ids below (`number:201`, `number:202`, `boolean:200`) are **this device as of
+2026-09-15**. Component ids are assigned at creation and move when the components
+are rebuilt - `IsLocked` has already been seen at both 202 and 201 - so read them
+back before relying on them. Nothing in Tab5 or the bench page hard-codes one.
+
+### Read: discover the components by name
+
+Resolves every dynamic component and its id. This is `SHELLY_1_COMPONENTS_URL`.
+
+```
+http://192.168.50.201/rpc/Shelly.GetComponents?dynamic_only=true&include=%5B%22config%22%2C%22status%22%5D
+```
+
+`%5B%22config%22%2C%22status%22%5D` decodes to `["config","status"]`. Expect exactly three components -
+`IsLocked`, `loCntr`, `Tab5IsLocked` - each with its id in `config.id`.
+
+### Read: one filtered request for everything a cycle needs
+
+This is `SHELLY_1_FILTERED_URL`, the steady-state acquisition. The unfiltered call
+paginates and truncates, so it is never used for acquisition.
+
+```
+http://192.168.50.201/rpc/Shelly.GetComponents?keys=%5B%22switch%3A0%22%2C%22input%3A0%22%2C%22number%3A201%22%2C%22number%3A202%22%2C%22boolean%3A200%22%5D&include=%5B%22config%22%2C%22status%22%5D
+```
+
+`%5B%22switch%3A0%22%2C%22input%3A0%22%2C%22number%3A201%22%2C%22number%3A202%22%2C%22boolean%3A200%22%5D` decodes to
+`["switch:0","input:0","number:201","number:202","boolean:200"]`.
+
+The device **silently omits a key it does not have** - no error, no placeholder -
+and `total` reports only what matched, so a missing component is indistinguishable
+from a short page by the reply alone. Presence-check every key you asked for.
+Components also come back out of order, so look them up by key, never by position.
+
+### Write: Tab5's inhibition flag
+
+This is `SHELLY_1_BOOLEAN_SET_URL`. `value` is `true` or `false`.
+
+```
+http://192.168.50.201/rpc/Boolean.Set?id=200&value=true
+```
+
+**The reply must be a bare JSON `null`.** `_issue_boolean_set` accepts HTTP 200
+with a body of exactly `null` and nothing else - not `{}`, not an error-free
+object. Anything else returns `invalid-response`, no retry is made that cycle, and
+the inhibition silently never applies.
+
+### Write: the lock and the strike count
+
+```
+http://192.168.50.201/rpc/Number.Set?id=201&value=0     # IsLocked, -1..86400
+http://192.168.50.201/rpc/Number.Set?id=202&value=0     # loCntr, 0..3
+```
+
+Captured answering a bare `null` on this device. **Tab5 never issues these** - it
+reads `IsLocked` and `loCntr` and never writes, clears, or works around them.
+They are here for bench use and for the sanctioned hand-clear path.
+
+### Config: the two device prerequisites
+
+See *Device prerequisites* above for `in_mode` and `initial_state`, and why both
+need re-checking after a firmware update or factory reset.
+
+### Capturing the Boolean.Set acceptance reply
+
+The one outstanding acceptance check. Tab5 short-circuits on
+`if observed is value`, so it only ever writes a genuine change - which makes a
+false-to-true transition the only shape worth capturing:
+
+1. Restart `anti-chatter.js`. Its startup seeds `Tab5IsLocked` false.
+2. Run the discovery call above and read `Tab5IsLocked`'s current `config.id`.
+   Do not reuse an id from an earlier session.
+3. `Boolean.Set?id=<that id>&value=true`, and record the reply **verbatim**.
+4. Re-run discovery to confirm `status.value` is now `true`.
+
 ## Status
 
 **Not installed and not hardware-tested.** Written against the qualified contract
