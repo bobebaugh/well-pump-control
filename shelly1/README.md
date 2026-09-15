@@ -209,6 +209,26 @@ Not set by the script — configure these on the Shelly before installing:
   http://192.168.50.201/rpc/Switch.SetConfig?id=0&config={"in_mode":"detached"}
   ```
 
+  **What detached costs, and what it does not.** It stops the physical SW terminal
+  from operating RLY0. That is the point, not a side effect: SW is a *sense* line
+  here, not a control input. It watches ground at the contactor *downstream of
+  RLY0*, so letting it drive RLY0 wires the relay to its own consequence. What
+  detached does **not** take away is any way you actually move the relay by hand -
+  the toggle in the Shelly app and web panel, `Switch.Set` over RPC, and the
+  script's own control all work exactly as before. Nor does it cost the script
+  anything: `input:0` still reports `status.state` and still fires the status
+  handler in detached, which is captured (2026-09-14, `in_mode: "detached"`,
+  `"state": false`) and is the only thing the edge detector needs.
+
+  Follow is not merely redundant, it is corrosive to the one job this script has.
+  The firmware re-drives the output on **every input transition**, overriding
+  whatever the script last decided - so a lock holds only until the next SW edge.
+  (That it is transition-driven rather than continuous is visible in the
+  2026-09-15 capture: `output: true` while `state: false`, which a level-enforcing
+  follow could not produce.) On the bench it also makes the harness meaningless,
+  because relay movement no longer proves the script decided anything - it may
+  just be the firmware mirroring the input.
+
   The bench page checks both settings on every read and shows a banner naming
   whichever one is wrong.
 - `input:0` in a mode that reports a level in `status.state`, since edges are taken
