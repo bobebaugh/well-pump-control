@@ -39,6 +39,7 @@ CONSTANTS = {
     'ADS1110_READY_POLL_MS', 'ADC_DIVIDER', 'ADC_LSB_UV_AT_PIN',
     'ADC_UV_PER_COUNT',
     'QUAL_CAPTURE_SAMPLES', 'QUAL_FLOW_WINDOW_DEFAULT_SECONDS',
+    'QUAL_SAMPLE_PERIOD_MS', 'SAMPLE_PERIOD_MS', 'SAMPLE_GAP_LIMIT_MS',
     'QUAL_FLOW_MIN_SPAN_MS',
     'QUAL_FLOW_WINDOW_TOLERANCE_MS',
     'PRESSURE_SENSOR_SPAN_PSI', 'PRESSURE_CALIBRATION_COUNT_INTERCEPT',
@@ -251,6 +252,102 @@ class PressureFlowTests(unittest.TestCase):
                                    '100', '101', '102', '103', '104'])
         self.assertEqual(row[10:13], ['10', '350', '180'])
         self.assertEqual(row[-3:], ['10', '-2.50000', '-1.25000'])
+
+
+
+class CadenceDerivedConstantTests(unittest.TestCase):
+    """Constants M6.39/M6.41 made derived instead of literal, and never asserted.
+
+    Both were introduced to stop a hidden coupling, and neither had a test, so a
+    wrong arithmetic expression would have shipped silently.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.logic = load_pressure_logic()
+
+    def test_the_regression_gap_limit_scales_with_the_observation_cadence(self):
+        period = self.logic['SAMPLE_PERIOD_MS']
+        limit = self.logic['SAMPLE_GAP_LIMIT_MS']
+        self.assertEqual(limit, period * 2 + 500)
+        # It must tolerate one late cycle and still catch a real stall.
+        self.assertGreater(limit, period * 2, 'one late cycle must not be a gap')
+        self.assertLess(limit, period * 3, 'two missed cycles must still be a gap')
+
+    def test_the_gap_limit_reproduces_the_literal_it_replaced(self):
+        # It was a bare 2500 inline while the cadence was 1000ms. The expression
+        # was chosen to reproduce that exactly, which is the only evidence that
+        # M6.39 changed the cadence without also changing this behaviour.
+        self.assertEqual(1000 * 2 + 500, 2500)
+
+    def test_the_utility_capture_cadence_is_independent_of_the_observation_loop(self):
+        # The utility paced its capture loop with pilot.py's SAMPLE_PERIOD_MS, so
+        # M6.40's move to 2000ms silently halved the calibration sample rate. The
+        # captures behind the shipped fit were taken at 1 Hz.
+        self.assertEqual(self.logic['QUAL_SAMPLE_PERIOD_MS'], 1000)
+        self.assertNotEqual(self.logic['QUAL_SAMPLE_PERIOD_MS'],
+                            self.logic['SAMPLE_PERIOD_MS'],
+                            'the two cadences must not be re-coupled')
+
+
+class UtilityShellyReadTests(unittest.TestCase):
+    """The minimal EM read written for the extracted utility, which had no test.
+
+    Deliberately not pilot.py's read_shelly: a hand-driven utility needs a
+    reading, not the 24x7 loop's failure classification and diagnostic counters.
+    It is only exercised by a fill run, so nothing on the device was going to
+    catch a mistake in it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        source = QUAL_PATH.read_text(encoding='utf-8')
+        tree = ast.parse(source)
+        node = next(item for item in tree.body
+                    if isinstance(item, ast.FunctionDef) and item.name == 'read_shelly')
+        cls.namespace = {'SHELLY_EM_URL': 'http://example.invalid/emeter/0'}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(QUAL_PATH), 'exec'),
+             cls.namespace)
+
+    def call(self, *, status=200, body=None, raises=None):
+        class Reply:
+            status_code = status
+            def json(self):
+                return body
+            def close(self):
+                pass
+
+        def get(url, timeout):
+            if raises:
+                raise raises
+            return Reply()
+        self.namespace['requests'] = types.SimpleNamespace(get=get)
+        return self.namespace['read_shelly']()
+
+    def test_a_valid_reading_returns_power(self):
+        self.assertEqual(self.call(body={'power': 2800.0, 'is_valid': True}),
+                         {'power': 2800.0, 'is_valid': True})
+
+    def test_everything_unusable_returns_none_rather_than_a_guess(self):
+        for label, kwargs in (
+                ('http error', dict(status=500, body={'power': 1.0, 'is_valid': True})),
+                ('not an object', dict(body='malformed')),
+                ('no body', dict(body=None)),
+                ('is_valid false', dict(body={'power': 2800.0, 'is_valid': False})),
+                ('is_valid missing', dict(body={'power': 2800.0})),
+                ('power absent', dict(body={'is_valid': True})),
+                ('power a string', dict(body={'power': '2800', 'is_valid': True})),
+                ('power a bool', dict(body={'power': True, 'is_valid': True})),
+                ('transport failed', dict(raises=OSError('unreachable'))),
+                ('decode failed', dict(raises=ValueError('bad json'))),
+        ):
+            self.assertIsNone(self.call(**kwargs), label)
+
+    def test_zero_watts_is_a_reading_not_a_failure(self):
+        # A stopped pump draws nothing. Rejecting 0 would make the fill run
+        # unable to see the state it exists to detect.
+        self.assertEqual(self.call(body={'power': 0, 'is_valid': True})['power'], 0)
+
 
 
 if __name__ == '__main__':
