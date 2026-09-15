@@ -5,6 +5,11 @@ const shellyRow = document.querySelector("#health-shelly");
 const shelly1Row = document.querySelector("#health-shelly1");
 const checkTime = document.querySelector("#api-check-time");
 const pumpState = document.querySelector("#pump-state");
+const pressureValue = document.querySelector("#pressure-value");
+const tankPressure = document.querySelector("#tank-pressure");
+const tankWater = document.querySelector("#tank-water");
+const pressureTag = document.querySelector("#pressure-tag");
+const pressureRow = document.querySelector("#health-pressure");
 const powerValue = document.querySelector("#power-value");
 const voltageValue = document.querySelector("#voltage-value");
 const pfValue = document.querySelector("#pf-value");
@@ -23,6 +28,14 @@ const operatorButtons = [...document.querySelectorAll(".control-button")];
 
 const NORMAL_REFRESH_MS = 60000;
 const LIVE_REFRESH_MS = 1000;
+// Tab5 mirrors its whole observation to RTDB about every two seconds, so the
+// live readings follow that rather than the 60s Firestore cadence. Polling
+// faster than the device writes only burns requests for the same record.
+const OBSERVATION_REFRESH_MS = 2000;
+// The tank cutaway spans the sensor range; the fit is qualified over roughly
+// 40-61 PSIG, so this is a picture of where the pressure sits, not a gauge.
+const TANK_FULL_PSI = 70;
+let observationTimer;
 let telemetryTimer;
 let monitoringUntil = 0;
 let operatorBusy = false;
@@ -233,6 +246,73 @@ function clearTelemetry() {
   setHealth(shelly1Row, "unavailable", "Awaiting Tab5 telemetry");
 }
 
+function renderObservation(data) {
+  const values = data.values || {};
+  const shelly1 = data.shelly1 || {};
+  // Two seconds of cadence plus a little slack. Past that the number on screen
+  // is a memory, and saying so matters more than showing a stale digit.
+  const fresh = data.ageSeconds !== null && data.ageSeconds <= 30;
+  const psi = Number.isFinite(values.pressurePsi) ? values.pressurePsi : null;
+
+  if (psi !== null && fresh) {
+    const text = psi.toFixed(1);
+    pressureValue.textContent = text;
+    tankPressure.textContent = `${text} psi`;
+    const fill = Math.max(0, Math.min(100, (psi / TANK_FULL_PSI) * 100));
+    tankWater.style.height = `${fill.toFixed(1)}%`;
+    tankWater.classList.add("live");
+    pressureTag.textContent = `Live · ${data.ageSeconds}s ago`;
+    pressureTag.className = "tag";
+    setHealth(pressureRow, "online", `${text} psi · ADC ${values.adcRaw ?? "—"}`);
+  } else {
+    pressureValue.textContent = "—";
+    tankPressure.textContent = "— psi";
+    tankWater.style.height = "";
+    tankWater.classList.remove("live");
+    const reason = data.pressureCommissioned === false
+      ? "Sensor not commissioned"
+      : psi === null ? "Pressure telemetry unavailable" : "Pressure telemetry stale";
+    pressureTag.textContent = reason;
+    pressureTag.className = "tag unavailable";
+    setHealth(pressureRow, "unavailable", reason);
+  }
+
+  // The rest of the live readings come from the same record, so every number on
+  // the row is the same instant rather than two reads stitched together.
+  if (fresh) {
+    if (Number.isFinite(values.powerW)) powerValue.textContent = values.powerW.toFixed(0);
+    if (Number.isFinite(values.voltageV)) voltageValue.textContent = values.voltageV.toFixed(1);
+    if (Number.isFinite(values.powerFactor)) pfValue.textContent = values.powerFactor.toFixed(2);
+    if (typeof shelly1.sw0 === "boolean") setBinaryValue(sw0Value, shelly1.sw0);
+    if (typeof shelly1.rly0 === "boolean") setBinaryValue(rly0Value, shelly1.rly0);
+  }
+}
+
+function clearObservation() {
+  pressureValue.textContent = "—";
+  tankPressure.textContent = "— psi";
+  tankWater.style.height = "";
+  tankWater.classList.remove("live");
+  pressureTag.textContent = "Pressure telemetry unavailable";
+  pressureTag.className = "tag unavailable";
+  setHealth(pressureRow, "unavailable", "Awaiting Tab5 telemetry");
+}
+
+async function checkObservation() {
+  clearTimeout(observationTimer);
+  // Stop polling a page nobody is looking at; resume on the visibility change.
+  if (document.hidden) {
+    observationTimer = setTimeout(checkObservation, OBSERVATION_REFRESH_MS);
+    return;
+  }
+  try {
+    renderObservation(await fetchStatus("/.netlify/functions/current-observation"));
+  } catch (error) {
+    if (error.body?.code === "telemetry_missing") clearObservation();
+  }
+  observationTimer = setTimeout(checkObservation, OBSERVATION_REFRESH_MS);
+}
+
 function eventTime(value) { return value ? formatTime(new Date(value)) : "Unknown time"; }
 function eventLink(event) { const cycle = event?.opening?.cycleSequence || 0; return `/records.html?session=${encodeURIComponent(event.sessionId || "")}&cycle=${cycle}&event=${encodeURIComponent(event.eventDefinitionId || "")}`; }
 function escapeEventHtml(value) { return String(value ?? "").replace(/[&<>\"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]); }
@@ -349,8 +429,16 @@ monitorButton.addEventListener("click", () => {
 operatorUnlock.addEventListener("click", () => checkOperatorStatus({ promptForKey: true }));
 operatorButtons.forEach(button => button.addEventListener("click", () => issueOperatorAction(button.id)));
 
+// Come back immediately when the tab is shown again rather than waiting out the
+// interval, so the first thing seen on return is current and not two seconds of
+// whatever was on screen when it was hidden.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) checkObservation();
+});
+
 checkServices();
 checkTelemetry();
+checkObservation();
 checkEvents();
 checkOperatorStatus();
 setInterval(checkServices, 300000);

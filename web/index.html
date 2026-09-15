@@ -35,6 +35,10 @@
         </div>
       </div>
       <div class="metric">
+        <p>Tank pressure</p>
+        <strong id="pressure-value">—</strong><span> psi</span>
+      </div>
+      <div class="metric">
         <p>Active power</p>
         <strong id="power-value">—</strong><span> W</span>
       </div>
@@ -82,16 +86,16 @@
             <p class="kicker">SYSTEM OVERVIEW</p>
             <h2>Pressure system</h2>
           </div>
-          <span class="tag unavailable">Pressure telemetry unavailable</span>
+          <span class="tag unavailable" id="pressure-tag">Pressure telemetry unavailable</span>
         </div>
 
         <div class="tank-scene" aria-label="Future pressure tank visualization">
           <div class="tank">
             <div class="tank-cap"></div>
-            <div class="water"></div>
+            <div class="water" id="tank-water"></div>
             <div class="tank-reading">
               <span>Pressure</span>
-              <strong>— psi</strong>
+              <strong id="tank-pressure">— psi</strong>
             </div>
           </div>
           <div class="pipe"></div>
@@ -151,9 +155,9 @@
             <span class="health-dot unavailable"></span>
             <div><strong>Shelly EM</strong><small>Awaiting Tab5 link</small></div>
           </div>
-          <div class="health-row">
+          <div class="health-row" id="health-pressure">
             <span class="health-dot unavailable"></span>
-            <div><strong>Pressure ADC</strong><small>Future phase</small></div>
+            <div><strong>Pressure ADC</strong><small>Awaiting Tab5 telemetry</small></div>
           </div>
           <div class="health-row" id="health-shelly1">
             <span class="health-dot unavailable"></span>

@@ -131,7 +131,9 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
   background: rgba(210,222,230,.08);
 }
 .tank-cap { position: absolute; width: 44px; height: 8px; left: 21px; top: -3px; background: #8592a0; }
-.water { position: absolute; left: 0; right: 0; bottom: 0; height: 42%; background: linear-gradient(180deg, rgba(67,168,255,.38), rgba(23,102,178,.55)); opacity: .28; }
+.water { position: absolute; left: 0; right: 0; bottom: 0; height: 42%; background: linear-gradient(180deg, rgba(67,168,255,.38), rgba(23,102,178,.55)); opacity: .28; transition: height .6s ease, opacity .6s ease; }
+/* Faint while it is only decoration; readable once it is tracking real pressure. */
+.water.live { opacity: .62; }
 .tank-reading { position: absolute; inset: 54px 4px auto; text-align: center; }
 .tank-reading span { display: block; color: var(--muted); font-size: .65rem; }
 .tank-reading strong { color: #c5d2df; font-size: .9rem; }
