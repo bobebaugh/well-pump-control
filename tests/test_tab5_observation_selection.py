@@ -177,8 +177,10 @@ def observation(sequence=1, power=1000.0, voltage=240.0, **changes):
         "values": {
             "power": power,
             "voltage": voltage,
-            "adc_microvolts": 7000000,
-            "pressure_psi": 158.877,
+            # Matches the count the builder tests use, so the ADC is not itself
+            # a material change when a built observation is compared with this.
+            "adc_raw": 16390,
+            "pressure_psi": 59.851,
             "battery_voltage": 7.8,
             "battery_current": 0.0,
             "battery_percent": 76,
@@ -225,6 +227,49 @@ class ObservationSelectionTests(unittest.TestCase):
             self.material_details(observation(), None),
             ["initial valid observation"],
         )
+
+    def test_adc_raw_material_change_uses_the_count_domain_threshold(self):
+        # values.adc_microvolts was the only ADC-derived publish-on-change
+        # trigger until M6.40. values.adc_raw: 133.0 replaced it and is the same
+        # physical change - 25000 uV at 187.5 uV/count - but nothing exercised
+        # it, because the fixture above still carried the retired field.
+        threshold = self.logic["MATERIAL_NUMERIC_THRESHOLDS"]["values.adc_raw"]
+        self.assertAlmostEqual(threshold, 133.0)
+        base = observation()
+        baseline = base["values"]["adc_raw"]
+
+        # The comparison is >=, so the threshold itself is material and one
+        # count below it is not. Both directions.
+        for delta, material in ((threshold - 1, False), (threshold, True),
+                                (-(threshold - 1), False), (-threshold, True)):
+            moved = observation(sequence=2)
+            moved["values"]["adc_raw"] = baseline + delta
+            details = self.material_details(moved, base)
+            changed = any("values.adc_raw" in detail for detail in details)
+            self.assertEqual(changed, material,
+                             "delta {} should {}be material".format(
+                                 delta, "" if material else "not "))
+
+    def test_the_adc_raw_change_is_reported_under_its_display_label(self):
+        base = observation()
+        moved = observation(sequence=2)
+        moved["values"]["adc_raw"] = base["values"]["adc_raw"] + 200
+        detail = next(item for item in self.material_details(moved, base)
+                      if "values.adc_raw" in item)
+        self.assertIn(self.logic["MATERIAL_CHANGE_LABELS"]["values.adc_raw"], detail)
+        self.assertIn("pressure ADC", detail)
+        self.assertIn(str(base["values"]["adc_raw"]), detail)
+
+    def test_a_pressure_change_still_triggers_a_publish_at_all(self):
+        # The regression this guards: removing adc_microvolts without replacing
+        # its threshold would have left NO ADC-derived trigger, so telemetry
+        # would have gone quiet between heartbeats while pressure moved.
+        adc_paths = [path for path in self.logic["MATERIAL_NUMERIC_THRESHOLDS"]
+                     if "adc" in path]
+        self.assertEqual(adc_paths, ["values.adc_raw"])
+        moved = observation(sequence=2)
+        moved["values"]["adc_raw"] = observation()["values"]["adc_raw"] + 500
+        self.assertEqual(self.reason(moved, observation(), 1000), "material-change")
 
     def test_failed_shelly_poll_still_builds_a_matched_observation(self):
         build = self.logic["build_observation"]

@@ -82,7 +82,7 @@ TARGETS = {
     "shelly1_component_routing", "shelly1_filtered_keys", "shelly1_filtered_url",
     "start_rules_v3_runtime", "stage_rules_v3_release", "run_rules_v3_cycle",
     "rules_v3_state_report", "issue_rules_v3_action", "dispatch_rules_v3_actions",
-    "build_durable_observation",
+    "build_durable_observation", "build_observation",
 }
 
 
@@ -815,6 +815,109 @@ class V3IntegratedApplicationTests(unittest.TestCase):
             self.assertEqual(record["rulesRelease"]["contentHash"],
                              runtime["reference"]["contentHash"])
 
+
+
+class StartupEventRegressionTests(unittest.TestCase):
+    """The reboot sequence, wired the way the device wires it.
+
+    CPU B holds network traffic for a quiet period after boot while CPU A is
+    already cycling. The polls are skipped, and before M6.40 the observation
+    reported the Shelly devices UNAVAILABLE rather than not-yet-attempted. H001
+    opens on `ShellyEMAvailable == false` at observationCount 1, so it opened on
+    the very first held cycle and drove OperatingMode to Monitor - a new event on
+    every reboot, then closed again once polling began.
+
+    The helper that gates this is covered in test_tab5_v3_semantic_kernel. What
+    is covered here is the WIRING: build_observation carrying the latch through
+    to run_rules_v3_cycle. The only difference between the silent case and the
+    opening case below is acquisition_begun, which is the point.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.logic = load_logic(TARGETS)
+        cls.raw_a = FIXTURE_PATH.read_text(encoding="utf-8")
+
+    EM = {"power": 2800.0, "reactive": 10.0, "pf": 0.98, "voltage": 240.0,
+          "is_valid": True, "total": 1000.0, "total_returned": 0.0}
+
+    @classmethod
+    def routing_ids(cls):
+        return V3IntegratedApplicationTests.routing_ids()
+
+    def observe(self, begun, available, sequence=1):
+        """One real observation, built by the device's own builder."""
+        shelly1 = {"sw0": True, "rly0": False, "is_locked": 0, "lockout_count": 0,
+                   "tab5_is_locked": False,
+                   "flag_id": self.routing_ids()["Tab5IsLocked"]}
+        return self.logic["build_observation"](
+            sequence, sequence * 1000, True, self.EM if available else {},
+            available, begun, sequence * 1000,
+            sequence * 1000, 7.8, 0.0, 78, True, True, True, sequence * 1000,
+            True, True, 1010, "192.0.2.10", 0, 0,
+            shelly1=shelly1 if available else None,
+            shelly1_is_available=available, shelly1_poll_was_attempted=begun,
+            shelly1_last_valid_ticks_ms=sequence * 1000, shelly1_failures=0,
+            ads_raw_count=14307, acquisition_begun=begun)
+
+    def cycle(self, runtime, begun, available, sequence=1):
+        return self.logic["run_rules_v3_cycle"](
+            runtime, self.observe(begun, available, sequence),
+            sequence * 1000)
+
+    def start(self, directory):
+        return V3IntegratedApplicationTests.start(self, directory)
+
+    def test_the_boot_traffic_hold_opens_nothing_and_a_real_failure_still_does(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _path = self.start(directory)
+
+            # 1. Traffic held: no attempt permitted yet.
+            held = self.cycle(runtime, begun=False, available=False, sequence=1)
+            self.assertNotIn("ShellyEMAvailable", held["snapshot"],
+                             "absent reads as unknown; False would be a claim")
+            self.assertEqual(held["records"], [], "no event may open on a held cycle")
+            self.assertEqual(held["actions"], [], "and nothing may be dispatched")
+            self.assertEqual(held["snapshot"]["OperatingMode"], "Normal",
+                             "no Monitor transition")
+
+            # 2. The first acquisition that actually succeeds is still quiet.
+            good = self.cycle(runtime, begun=True, available=True, sequence=2)
+            self.assertIs(good["snapshot"]["ShellyEMAvailable"], True)
+            self.assertEqual(good["records"], [])
+            self.assertEqual(good["snapshot"]["OperatingMode"], "Normal")
+
+            # 3. A genuine failure after acquisition began still opens H001, so
+            #    the gate suppressed a boot artefact and not the protection.
+            failed = self.cycle(runtime, begun=True, available=False, sequence=3)
+            self.assertIs(failed["snapshot"]["ShellyEMAvailable"], False)
+            self.assertIn("opening_qualified",
+                          [record["reason"] for record in failed["records"]])
+            self.assertEqual(failed["snapshot"]["OperatingMode"], "Monitor")
+
+    def test_the_latch_is_the_only_difference_between_quiet_and_opening(self):
+        # Same evidence both times - devices unreadable - and only the latch
+        # differs. Without this, case 1 above could pass for the wrong reason.
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _path = self.start(directory)
+            held = self.cycle(runtime, begun=False, available=False, sequence=1)
+            self.assertEqual(held["records"], [])
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _path = self.start(directory)
+            ungated = self.cycle(runtime, begun=True, available=False, sequence=1)
+            self.assertIn("opening_qualified",
+                          [record["reason"] for record in ungated["records"]],
+                          "identical evidence must open H001 once an attempt was made")
+
+    def test_no_inhibition_is_written_from_a_held_cycle(self):
+        # Tab5IsLocked is E007's whileOpen target. A held cycle must leave the
+        # flag alone entirely, not write its normal value.
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _path = self.start(directory)
+            held = self.cycle(runtime, begun=False, available=False, sequence=1)
+            self.assertEqual(
+                [action for action in held["actions"]
+                 if action.get("target") == "Tab5IsLocked"], [])
 
 if __name__ == "__main__":
     unittest.main()
