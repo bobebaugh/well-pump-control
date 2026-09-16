@@ -124,7 +124,9 @@ function createHandler(dependencies = {}) {
       truncated: page.truncated,
       tankModel: model,
       // Every figure here is an estimate; this says what the water-used estimate
-      // rests on, so the page can label it rather than imply a meter.
+      // rests on, so the page can label it rather than imply a meter. The series
+      // also carries pressureSwitch, the cut-in and cut-out this window actually
+      // observed, so nothing downstream has to assume 40/60.
       delivery: { basis: curve.basis, bands: curve.bands,
                   gpmAt50Psi: Number((curve.intercept + curve.slopePerPsi * 50).toFixed(2)) },
       // ShellyEnergyWh is logging mode "none" in the live package, so no record

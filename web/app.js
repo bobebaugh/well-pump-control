@@ -32,15 +32,43 @@ const LIVE_REFRESH_MS = 1000;
 // live readings follow that rather than the 60s Firestore cadence. Polling
 // faster than the device writes only burns requests for the same record.
 const OBSERVATION_REFRESH_MS = 2000;
-// The tank cutaway spans the sensor range; the fit is qualified over roughly
-// 40-61 PSIG, so this is a picture of where the pressure sits, not a gauge.
-const TANK_FULL_PSI = 70;
+// The tank cutaway shows WATER, as a fraction of the tank's effective volume,
+// not pressure on a linear scale. A precharged tank at 50 psi is about a fifth
+// full of water while sitting three quarters of the way up a 0-70 psi scale, so
+// the old drawing was showing a nearly full tank that held almost nothing.
+//
+// Nothing here assumes a 40/60 switch: the tank model comes from the saved rules
+// and the operating band is whatever the history observed.
+// Both filled in from the history endpoint; until it answers, the cutaway falls
+// back to pressure against the observed band rather than inventing a model.
+let tankModel = null;
+let pressureSwitch = null;
 let observationTimer;
 let telemetryTimer;
 let monitoringUntil = 0;
 let operatorBusy = false;
 let operatorTimer;
 let lastOperatorStatus = null;
+
+// Water in a precharged tank: the air charge compresses, the water is what is
+// left over. Same Boyle model the device and the rules engine use.
+function tankWaterGallons(psi) {
+  if (!tankModel || !Number.isFinite(psi)) return null;
+  const { effectiveTankGallons: volume, prechargeGaugePsi: precharge,
+          atmosphericPressurePsi: atmosphere } = tankModel;
+  if (psi + atmosphere <= 0) return null;
+  const water = volume - volume * (precharge + atmosphere) / (psi + atmosphere);
+  return water >= 0 && water <= volume ? water : null;
+}
+
+function tankFillPercent(psi) {
+  const water = tankWaterGallons(psi);
+  if (water !== null) return (water / tankModel.effectiveTankGallons) * 100;
+  // No model yet: scale against the band this system was observed to run in,
+  // never a nominal full mark.
+  const full = pressureSwitch?.fullPsi;
+  return full ? (psi / full) * 100 : 0;
+}
 
 function formatTime(date) {
   return new Intl.DateTimeFormat(undefined, {
@@ -258,7 +286,7 @@ function renderObservation(data) {
     const text = psi.toFixed(1);
     pressureValue.textContent = text;
     tankPressure.textContent = `${text} psi`;
-    const fill = Math.max(0, Math.min(100, (psi / TANK_FULL_PSI) * 100));
+    const fill = Math.max(0, Math.min(100, tankFillPercent(psi)));
     tankWater.style.height = `${fill.toFixed(1)}%`;
     tankWater.classList.add("live");
     pressureTag.textContent = `Live · ${data.ageSeconds}s ago`;

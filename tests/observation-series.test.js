@@ -336,6 +336,36 @@ test("the pump's own discharge pressure does not become water used", () => {
   assert.ok(used < 0.5, `a quiet cycle should use almost nothing, got ${used} gal`);
 });
 
+test("the pressure switch is measured, not assumed to be 40/60", () => {
+  const window = { startMs: T0, endMs: T0 + 600000, bucketMs: 300000, curve: REFERENCE_DELIVERY };
+  // A switch set nowhere near nominal. Nothing in the reading depends on the
+  // textbook pair, so an adjusted or drifted switch reports itself.
+  const result = buildSeries(cycle(46, 68), window).pressureSwitch;
+  assert.equal(result.cycles, 1);
+  assert.equal(Math.round(result.cutInPsi), 46);
+  // The switch trips on discharge pressure, which sits above where the tank
+  // comes to rest, so cut-out and settled are different numbers.
+  assert.ok(result.cutOutPsi > result.settledPsi,
+    `${result.cutOutPsi} should exceed the settled ${result.settledPsi}`);
+  assert.ok(Math.abs(result.cutOutPsi - result.settledPsi - 1.35) < 0.3);
+  assert.equal(result.fullPsi, result.settledPsi);
+});
+
+test("a window with no completed cycle reports no switch reading rather than a default", () => {
+  const result = buildSeries([], { startMs: T0, endMs: T0 + 600000,
+                                   bucketMs: 300000, curve: REFERENCE_DELIVERY });
+  assert.equal(result.pressureSwitch.cycles, 0);
+  assert.equal(result.pressureSwitch.cutInPsi, null);
+  assert.equal(result.pressureSwitch.fullPsi, null);
+});
+
+test("switch readings average across the cycles in the window", () => {
+  const window = { startMs: T0, endMs: T0 + 1800000, bucketMs: 300000, curve: REFERENCE_DELIVERY };
+  const result = buildSeries([...cycle(40, 60), ...cycle(42, 62, 0, 600000)], window).pressureSwitch;
+  assert.equal(result.cycles, 2);
+  assert.equal(Math.round(result.cutInPsi), 41);
+});
+
 test("a dropped reading just before a start does not lose the cycle", () => {
   // The record immediately before the pump starts has no tank level -- the
   // 5:31:25 PM case, where the Shelly read failed. The anchor is the last level

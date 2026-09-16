@@ -241,6 +241,24 @@ function deliveryCurve(samples) {
            basis: "window", bands: points.length };
 }
 
+function mean(values) {
+  const usable = values.filter(value => value !== null && Number.isFinite(value));
+  return usable.length ? Number((usable.reduce((sum, value) => sum + value, 0) / usable.length).toFixed(2)) : null;
+}
+
+function switchSummary(switches) {
+  return {
+    cycles: switches.length,
+    cutInPsi: mean(switches.map(item => item.cutInPsi)),
+    cutOutPsi: mean(switches.map(item => item.tripPsi)),
+    settledPsi: mean(switches.map(item => item.settledPsi)),
+    // The tank graphic needs a full mark. The settled cut-out is where this tank
+    // actually tops out; falling back on a constant would draw a picture of
+    // somebody else's system.
+    fullPsi: mean(switches.map(item => item.settledPsi))
+  };
+}
+
 function pumpDeliveryGpm(psi, curve) {
   if (psi === null || !curve) return 0;
   return Math.max(0, curve.intercept + curve.slopePerPsi * psi);
@@ -271,6 +289,7 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
   // running or still settling. Nothing outside a cycle is dynamic.
   let settled = null;
   let cycle = null;
+  const switches = [];
 
   for (const sample of samples) {
     const index = Math.floor((sample.timeMs - startMs) / bucketMs);
@@ -318,8 +337,15 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
       if (stillRunning && !cycle) {
         cycle = { anchorGallons: settled?.gallons ?? null,
                   anchorMs: settled?.timeMs ?? sample.timeMs,
-                  delivered: 0, stoppedAtMs: null };
+                  // Nothing is dynamic before the pump draws current, so the
+                  // last settled reading IS the switch's cut-in pressure. It is
+                  // measured, never assumed: the switch is adjustable, it drifts
+                  // as the contacts and spring age, and that drift across a year
+                  // is worth seeing rather than being designed out.
+                  cutInPsi: settled?.psi ?? null,
+                  tripPsi: null, delivered: 0, stoppedAtMs: null };
       }
+      if (stillRunning && cycle && sample.psi !== null) cycle.tripPsi = sample.psi;
     }
 
     if (cycle && cycle.stoppedAtMs !== null &&
@@ -334,6 +360,10 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
           spread(buckets, startMs, bucketMs, cycle.anchorMs, sample.timeMs, used, "used");
         }
       }
+      // Three pressures per cycle, all observed: where the switch closed, where
+      // it opened, and where the tank came to rest once discharge pressure bled
+      // off. The gap between the last two is the transient itself.
+      switches.push({ cutInPsi: cycle.cutInPsi, tripPsi: cycle.tripPsi, settledPsi: sample.psi });
       cycle = null;
       settled = sample;
     } else if (!cycle && sample.gallons !== null &&
@@ -377,12 +407,15 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
       runSeconds: round(buckets.reduce((sum, bucket) => sum + bucket.runSeconds, 0), 0),
       latestGallons: ordered.length ? round(ordered.at(-1).gallons, 1) : null,
       latestAtMs: ordered.length ? ordered.at(-1).timeMs : null
-    }
+    },
+    // The pressure switch as this window actually found it, rather than the
+    // nominal 40/60 nobody's switch is really set to.
+    pressureSwitch: switchSummary(switches)
   };
 }
 
 module.exports = {
   LEVEL_CARRY_LIMIT_MS, MAX_SERIES_ROWS, PUMP_RUNNING_WATTS, REFERENCE_DELIVERY, WINDOWS,
   buildSeries, deliveryCurve, pumpDeliveryGpm, recordField, recordTimeMs, samplesFromRecords,
-  tankModelFromDraft, tankWaterGallons
+  switchSummary, tankModelFromDraft, tankWaterGallons
 };
