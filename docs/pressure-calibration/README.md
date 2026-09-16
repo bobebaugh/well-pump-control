@@ -36,19 +36,14 @@ Two known data caveats, both explained in the record:
   include transient spikes from manual valve movement. They are not reliable
   pump-flow evidence. Ten seconds is the better operational default.
 
-## Relationship to the running application
+## Current application
 
-The record's conclusion 5 says the normal application had not yet adopted the
-fitted formula. That was true at M6.15 on the `Tab5` branch and is now out of
-date: `tab5/pilot.py` carries `PRESSURE_CALIBRATION_COUNT_INTERCEPT = 3732.02`
-and `PRESSURE_CALIBRATION_COUNTS_PER_PSI = 211.492`, and `build_observation`
-computes `pressure_psi` from them every cycle.
-
-What still gates operational use is `PRESSURE_SENSOR_COMMISSIONED = False`, which
-drives `pressure_valid` in the observation record and the `NOT COMMISSIONED` state
-on the HMI. Pressure and flow remain estimators either way.
+The qualified formula is implemented in main.py and used by pilot.py. M6.42 sets
+PRESSURE_SENSOR_COMMISSIONED true. The separately published package expression
+must match that fit. Pressure/flow remain estimates; see FUTURE before recalibration.
+At the two-second beta cadence, the package's eight-sample flow window needs more
+than ten seconds. The measurement CSVs and their caveats above remain unchanged.
 
 ## Not included
 
-`ADC Shorted to Zero Volts.csv`, the 62-observation electrical-zero test described
-in the record, is retained by the operator and has not been added here.
+The electrical-zero capture is retained separately by the owner.

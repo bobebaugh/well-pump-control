@@ -1,195 +1,50 @@
-# Current status — Tab5 line
+# Current beta status â€” Tab5/Shelly
 
-## Now — Tab5IsLocked / Monitor unit CLOSED at M6.41
+As of 16 September 2026. Source baseline before housekeeping:
+6b1210d97642481e7a7be53a4b727ec31d54a1ad on tab5-working. pilot.py is M6.42,
+main.py M6.41 and cloud.py M6.37. Release stamps are per file, not per bundle.
+The Tab5 operating branch remains older and needs accepted-source synchronization.
 
-**The unit is verified on hardware and closed.** Device results are recorded in
-`docs/tab5lock-unit-verification.md`: transient and latched events both work, the
-Shelly holds RLY0 until Tab5 clears, Monitor releases a held latch, the reboot
-availability events are gone, and the extracted qualification utility starts
-without CPU A or CPU B. Non-blocking unit follow-ups are collected in
-[issue #10](https://github.com/bobebaugh/well-pump-control/issues/10); detailed
-pressure-qualification cleanup and tests remain in
-[issue #9](https://github.com/bobebaugh/well-pump-control/issues/9). Architectural
-items stay in `V3-ISSUES.md` as TAB5-13, TAB5-14 and TAB5-15.
+## Implemented and verified
 
-Still open against the unit, both deliberate: the qualification utility's capture
-runs have not executed since the extraction, and the pressure sensor is
-uncommissioned, so `PressurePSI` is not produced and `TankFlowQuality` reads
-`PRESSURE_INVALID`.
+The working source uses two-second acquisition, counts-based qualified pressure,
+V3 events and calculations, Tab5IsLocked inhibition, Monitor release, bounded
+observation/event-board transport and explicit operator controls. M6.42 sets
+PRESSURE_SENSOR_COMMISSIONED true; the fitted calibration is in main.py.
 
-**Installed state:** M6.41 is on the Tab5 and was verified on the installed
-hardware. It includes the coordinated inhibition work first deployed at M6.38,
-the M6.39 cadence changes, the M6.40 ADC/startup corrections, and the M6.41
-pressure-qualification extraction. The cloud package and revised
-`anti-chatter.js` used for the verification are installed.
+The owner believes M6.42 is installed and confirms the Shelly script is fully unit
+tested on the real hardware. The M6.38â€“M6.41 integration verification record and raw
+pressure measurements are retained under docs/ as evidence. They are not competing
+roadmaps. Exact installed file hashes and current rules-package identity are not
+established by this housekeeping.
 
-*Counts are the only ADC representation.* A microvolt value was published as
-`values.adc_microvolts` and then converted straight back to counts by every
-consumer, so it was a lossy intermediate that existed only to be undone. It is
-gone, along with the dead `read_ads1110_microvolts` stack and the second copy of
-the trim arithmetic that only that dead path reached - editing that copy changed
-nothing while every test still passed. `values.adc_raw` was already the bound
-object; `values.adc_microvolts` was never in `DRIVER_BINDINGS` at all and appears
-on the Pilot side only as an example of an invalid binding. The publish-on-change
-threshold moved with it: `values.adc_raw: 133.0` is the same physical change as
-the 25000 uV it replaced.
+## Known limits
 
-*A startup acquisition gate.* CPU B holds network traffic for a quiet period
-after boot while CPU A is already cycling. The skipped polls were reported as
-"unavailable" rather than "not attempted", and a fresh kernel evaluated that
-immediately, so availability events opened on every reboot and closed again once
-polling began. Cycles before the first permitted attempt now present availability
-as absent, which reads as unknown, and unknown freezes qualification rather than
-advancing or resetting it. Deliberately not a blanket delay of event processing:
-every protective event still evaluates from the first real acquisition, so lock
-reassertion is as timely as before.
+Worker/script liveness and abandoned-inhibit recovery need the beta decision in
+FUTURE. The current Shelly reboot outcome reader can reject a successful null RPC
+result. Clear Events/Monitor OFF are absent. The shipped flow window cannot fill
+at the current cadence unless the live package has already been corrected. Utility
+capture-path follow-ups remain separate from normal operation. RAM history is best
+effort, not a persistent outbox. See FUTURE for all deferred work.
 
-M6.39 changes carried forward into M6.41: it
-moves the observation cadence to 2000ms and derives `STALE_AFTER_MS` and the
-regression `SAMPLE_GAP` limit from it rather than leaving them as literals that
-silently change meaning; cuts the ADC filter from five conversions to three, a
-median, saving about 135ms a cycle; reports a regression window the cadence
-cannot fill at adoption instead of letting it pin at `INSUFFICIENT_HISTORY` in
-silence; and labels the keys-filtered Shelly read in diagnostics, which until now
-logged as a generic `Shelly.read` with no reason classified.
+## Next owner decisions
 
-**Deferred from M6.39 (issue #10, item 8):** the shipped `calc-tank` asks for 8 samples in a 10s
-window, which a 2000ms cadence cannot supply. It needs a wider window (20s keeps
-8 samples and improves the fit) or a lower count, and that is a `pilot-working`
-republish. Tab5 logs `V3 CADENCE STARVED` at adoption until it is done.
+Approve synchronization of the accepted candidate into Tab5, choose any beta
+reliability repairs, and record the actual upload set/running package and recovery
+procedure. Source promotion does not reinstall files or change Shelly settings.
+Main/ebaugh.net activation concerns the web/cloud line and is planned in BETA.
 
-Note what that costs, because it is easy to get wrong: a calculated field is not
-an event and carries no `enabled` flag. Every calculation in a package is
-compiled into the plan and **evaluated every cycle** whether or not any event
-reads its outputs. So `calc-tank` is not dormant - it runs each cycle and
-discards the result at `INSUFFICIENT_HISTORY`. Deleting it is the only way to
-stop that, and deletion loses its calibration, so it stays. See V3-ISSUES TAB5-13.
+Housekeeping changes documentation and host-test maintenance only. It does not
+change uploadable source, package bytes, calibration values, network addresses,
+device state or cloud configuration. Archive inventory is under maintenance/.
 
-The unit itself, as designed: Tab5 no longer writes
-RLY0. It publishes its own inhibition as the `Tab5IsLocked` Boolean on the Shelly 1,
-and the Shelly script becomes the sole writer of the relay, closing it exactly when
-`IsLocked == 0 AND Tab5IsLocked == false`. A commanded stop that applies Tab5's
-inhibition no longer scores a short-cycle strike; the script latches why it opened
-the relay so a genuine short cycle coinciding with an unapplied intent still scores.
-RLY0 now powers on open. The script seeds `Tab5IsLocked` false, holds the relay open
-for five seconds so Tab5 can reassert a hard lock, and then begins normal one-second
-processing. Its `@meta` declares only the three interface fields; the five tuning
-values are owner-editable constants at the beginning of the script.
+## Housekeeping verification
 
-Conditions are three-valued across clauses: one definite false decides an `all`
-and one definite true decides an `any`, whatever is unknown beside it. Absent
-evidence stays unknown and advances or resets nothing. A structurally invalid or
-unsupported clause still rejects the whole condition and is never outvoted.
-
-Both User and System Monitor reach Monitor by owning the operating-mode target. In
-Monitor, non-monitor events are not evaluated at all and their qualification
-freezes; monitor-class events keep running so System Monitor can exit. The final
-named reconciliation of the inhibition flag is authoritative: competing actions for
-that target are removed before its value is appended, because the ordinary collapse
-prefers a non-normal value and this target's normal value is `false`. Operator
-command completion is tied to the user's own Monitor event instance, not to
-effective mode, so a System Monitor cannot complete a user request.
-
-Steady-state Shelly acquisition is one filtered `Shelly.GetComponents` request.
-Discovery by name is a bounded exception on the first cycle and after the mapping
-is contradicted. Acceptance requires every requested component to be present and
-verified; no rule depends on `total`.
-
-## Verification
-
-- 248 Tab5 host tests pass, including the cutover, authoring, three-valued and
-  Monitor-timeline regressions. Coverage includes mutual rejection of the revised
-  and legacy control packages in both directions, no-runtime staging and reload,
-  rejection of any re-introduced relay write, alias and renamed-target resolution
-  by binding, the illegal inhibition assignment forms, the combined H001/E007
-  freeze/reassert/close sequence, E007's authored missing-EM close with H001
-  disabled, two Monitor owners, unavailable evidence producing no write, and a
-  fresh runtime reconciling an old true flag to false.
-- 21 Shelly script tests pass. `tests/shelly1-anti-chatter.test.js` runs
-  `shelly1/anti-chatter.js` in a stubbed Shelly runtime: five-second startup hold,
-  hard-lock reassertion, exact three-component declaration, relay truth table,
-  commanded-stop suppression, intent withdrawn before the edge, a genuine short
-  cycle coinciding with an unapplied intent, the strikeout path, lock expiry with
-  Tab5 still held, and a missing Boolean handle never clearing the local lock.
-- Dispatch coverage: HTTP 200 with a bare JSON `null` is the only accepted
-  acknowledgement; `{}`, arbitrary error-free JSON, non-200, RPC errors, malformed
-  bodies and timeouts are all rejected. No readback, no same-cycle retry, at most
-  one flag write per cycle, and none at all when the device already agrees.
-- Qualification counts are read from the authored package in tests rather than
-  restated. The intended package clears E007 on ten reads; nothing hard-codes it
-  and no validation ceiling was added.
-- Host tests prove decisions, not device answers. They do not establish Shelly
-  response shapes, installed reset behavior, relay motion or cycle latency.
-
-## Closed-unit disposition
-
-The M6.38–M6.41 cutover, installed-hardware verification and documentation are
-complete. Device evidence is in `docs/tab5lock-unit-verification.md`. Remaining
-work is deferred through issues #9 and #10 and `V3-ISSUES.md`; it does not reopen
-this unit.
-
-A filtered `keys=[...]` reply has now been captured from the device and is
-recorded in `tests/fixtures/shelly1-getcomponents-documentation.json` as
-`capturedFilteredResponse`. It establishes that the filter works and returns
-`switch:0`, that `total` under the filter is the matched count rather than the
-device-wide count, that `switch:0` and `input:0` carry `status.output` and
-`status.state` in the components envelope, and that components are not returned in
-the requested order. Acceptance remains presence-checked and consults no count.
-
-Two further captures closed the remaining acquisition questions. A filtered request
-naming a key the device does not have returns that key **silently omitted** - no RPC
-error, four components and `total` 4 for a five-key request - so an unknown key is
-indistinguishable from a truncated page by the reply alone, which is why acceptance
-presence-checks every requested key and consults no count. And
-`GET /rpc/Number.Set?id=201&value=0` answered a bare JSON `null` on the device,
-corroborating the acknowledgement the dispatcher requires from the sibling
-`Boolean.Set`.
-
-Tab5 liveness is settled as out of scope for the Shelly script. The seed makes Tab5
-assert an outstanding inhibition rather than inherit a stale true; it cannot detect
-an absent Tab5, and nothing is built on the idea that it can. A dead Tab5 leaves the
-installation better protected than a standard well rather than worse, so the relay
-closing when the initialization delay ends is the right outcome. Supervising CPU B
-and Pilot is future Tab5 work.
-
-The device prerequisites are met. The owner set `switch:0` to power-on off on
-2026-09-14, so the relay now starts open and the script's initialization delay
-holds it there; input mode Switch and output type Detached were already correct.
-That makes enable-on-boot load-bearing rather than tidy: with the relay starting
-open, a script that fails to start means no water until someone uses HAND.
-
-The device response evidence was captured: `Tab5IsLocked` appeared as the named
-Boolean component, `Boolean.Set` returned bare JSON `null`, and reboot behavior
-with an outstanding inhibition was exercised with the harness. The verification
-record states explicitly where the harness rather than the installed
-`anti-chatter.js` was used.
-
-The owner accepts that pump permission may be interrupted during the maintenance
-interval: a Shelly reboot physically drops its relay, and between stopping the old
-Tab5 files and starting the new script nothing is in a position to close RLY0. No
-manual relay-close step is added and no Shelly lock is overridden.
-
-## Later / unresolved
-
-- Battery charging: retain current 75/80 policy until new limits are chosen.
-  Owner finds percentage misleading and expects higher thresholds; input power
-  versus charging current remains unexplained. Supported UIFlow interfaces only.
-- System Monitor automatic actuation and Monitor release are part of the closed
-  unit. Clear Events remains unconnected and is tracked in issue #10, item 5.
-- Shelly script-health monitoring (issue #5) remains separate; resolve by script
-  name, not assumed ID. Shelly-local lockouts/protections remain authoritative.
-- S020 startup sensitivity and brief Cloud-yellow with a pending record remain
-  separate questions. The two-second cadence is now the installed M6.41 behavior.
-- Rules editor Tab5 status-read failure remains parked by owner.
-- Never fabricate unavailable values, physical action success or exact inferred
-  close time. Runtime packages adopt only on restart with an empty event board.
-
-## Boundaries
-
-Source promotion does not install Tab5 files or publish Firebase rules. New coding,
-deployment, package delivery and hardware operations require their applicable owner
-authorization. Preserve mechanical/hardwired/Shelly-local protection; CPU A remains
-sole local event/control authority. No routine flash/SD logging or durable outbox.
-GitHub is the portable source of truth. Keep environment setup bounded. The
-restart marker's atomic write/removal and reset linkage are host-simulated;
-installed-device filesystem and reset behavior remain owner acceptance evidence.
+The remote repository now has exactly main, pilot, pilot-working, Tab5 and
+tab5-working. Eighteen retired branch tips are preserved under published archive
+tags; no unmerged commits were discarded. No operating branch was advanced.
+Host verification: 301 web/cloud tests, 248 Tab5 tests and 31 Shelly tests passed.
+The password regression covers missing/wrong keys on every mutation route. The
+two Windows test adapters change host behavior only. Existing local Node dependencies
+were reused; a fresh dependency install and hosted workflow run were not part of
+these local results. Interfaces remain identical as Git blobs on both working lines.

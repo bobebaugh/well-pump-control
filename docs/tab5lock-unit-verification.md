@@ -1,15 +1,20 @@
-# Tab5IsLocked / Monitor unit — device verification record
+> Current acceptance: the owner confirms the Shelly protection script is fully unit
+> tested on real hardware (16 September 2026). M6.42 enables pressure commissioning.
+> This file retains the specific integration observations and limits of its recorded
+> test sessions; CURRENT/DESIGN are the operating summary and FUTURE is the backlog.
+
+# Tab5IsLocked / Monitor unit â€” device verification record
 
 **Releases covered:** M6.38 through M6.41, plus the revised `shelly1/anti-chatter.js`.
 **Verified by:** owner, on the installed hardware, 2026-09-15.
-**Status:** unit closed. Pressure sensor remains uncommissioned; the extracted
-qualification utility's capture runs remain unexercised since extraction.
+**Status:** unit closed. M6.42 subsequently enabled commissioned pressure. The extracted
+qualification utility's capture-path limits below remain separate.
 
 This records what was confirmed **on the device**. It is the counterpart to the
 automated suites, which prove decisions rather than hardware, and to
 `docs/pressure-calibration/`, which holds the sensor measurement evidence.
 
-## Shelly 1 Gen4 — `anti-chatter.js`
+## Shelly 1 Gen4 â€” `anti-chatter.js`
 
 | What | Result |
 | --- | --- |
@@ -25,7 +30,7 @@ through genuine short cycles. The polled-level backstop fixed it, and the
 increments above are from the corrected build. See *How an edge is detected* in
 `shelly1/README.md`.
 
-## Tab5 — the cutover
+## Tab5 â€” the cutover
 
 | What | Result |
 | --- | --- |
@@ -36,7 +41,7 @@ increments above are from the corrected build. See *How an edge is detected* in
 
 Both test events were authored against `UDF(IsLocked)`, which the owner can set
 to any value over HTTP, giving a controllable trigger without waiting on the
-site's unpredictable 246–253 V supply.
+site's unpredictable 246â€“253 V supply.
 
 The Monitor result is the designed behaviour and the subtlest part of the unit:
 the inhibition is released when the last owning event closes **or while Monitor
@@ -46,26 +51,26 @@ hold releases is correct, not a failure to close.
 ### Package review warnings
 
 Three events report `input_not_connected`. Reviewed and accepted: the code fires
-for two unrelated shapes — an event opening on an occurrence, or closing via
-Clear Events — and its message names three inputs regardless of which applies.
+for two unrelated shapes â€” an event opening on an occurrence, or closing via
+Clear Events â€” and its message names three inputs regardless of which applies.
 Operator occurrences **are** connected; Clear Events is not (`CURRENT.md`).
 `T040` therefore closes only via Monitor release or a restart, which is
 understood and worked around.
 
-## Tab5 — M6.40 startup acquisition gate
+## Tab5 â€” M6.40 startup acquisition gate
 
 Availability events on every reboot: **stopped**. This was the defect the gate
-was written for — CPU B holds network traffic while CPU A is already cycling, and
+was written for â€” CPU B holds network traffic while CPU A is already cycling, and
 the skipped polls were reported as unavailable rather than not-yet-attempted, so
 H001 opened at `observationCount: 1` and drove Monitor on each boot.
 
-## Tab5 — M6.41 extraction
+## Tab5 â€” M6.41 extraction
 
 | What | Result |
 | --- | --- |
 | Normal boot | Unaffected |
 | `ADC AVAILABLE` on the System page | Confirmed, so the counts-only ADC rewiring and the move of the ADS1110 stack into `main.py` both hold |
-| Pressure qualification branch | Entered successfully — which also proves the utility's `__main__` bindings resolve |
+| Pressure qualification branch | Entered successfully â€” which also proves the utility's `__main__` bindings resolve |
 | CPU A / CPU B during the utility | Neither started |
 
 ## Follow-ups
@@ -74,7 +79,7 @@ General unit follow-ups are collected in
 [issue #10](https://github.com/bobebaugh/well-pump-control/issues/10). Detailed
 pressure-qualification cleanup and tests remain in
 [issue #9](https://github.com/bobebaugh/well-pump-control/issues/9).
-Architectural items remain in `V3-ISSUES.md` as TAB5-13, TAB5-14 and TAB5-15.
+Architectural items remain in `FUTURE.md`.
 
 ## Not verified
 
@@ -84,8 +89,9 @@ Architectural items remain in `V3-ISSUES.md` as TAB5-13, TAB5-14 and TAB5-15.
   coverage, but the boot-launcher boundary and Fill Run response handling remain
   deferred in issue #9. Do not let an unattended recalibration be the first real
   run.
-- **Pressure commissioning.** `PRESSURE_SENSOR_COMMISSIONED` is still `False`, so
-  `PressurePSI` is not produced by the rules engine and `TankFlowQuality` reads
-  `PRESSURE_INVALID`. The fit itself is qualified; only the flag is unset.
-- **The pump.** Not yet connected to the automation. Every result above was taken
-  with the pump out of the loop.
+- **Pressure commissioning at the recorded test.** This test preceded M6.42,
+  which now enables commissioned pressure. Do not repeat the old commissioning step.
+- **Connected-system evidence.** These specific recorded integration results were
+  taken with the pump out of the loop. They do not establish the date or scope of
+  any subsequent whole-installation acceptance. The owner separately confirms
+  completed real-hardware unit testing of the Shelly protection script.

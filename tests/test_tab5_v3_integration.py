@@ -72,7 +72,10 @@ def load_logic(targets):
         ticks_add=lambda value, delta: value + delta,
         localtime=lambda: (2026, 9, 11, 12, 0, 0, 0, 0),
     )
-    namespace = {"time": clock, "ujson": json, "uhashlib": hashlib, "os": os}
+    # Model the target's replace-existing rename without Windows os.rename's
+    # FileExistsError. This is a host adapter, not device filesystem evidence.
+    target_os = types.SimpleNamespace(rename=os.replace, remove=os.remove)
+    namespace = {"time": clock, "ujson": json, "uhashlib": hashlib, "os": target_os}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(PILOT_PATH), "exec"), namespace)
     return namespace
 

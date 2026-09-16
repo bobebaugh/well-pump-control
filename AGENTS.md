@@ -1,75 +1,55 @@
-# Project Context — agent instructions
+# Beta maintenance instructions
 
-## Start here
+## Read only what the task needs
 
-A cold agent reads only this Project Context before work:
+Start with CURRENT.md and BETA.md. Read DESIGN.md for behavior changes and
+interfaces/ for cross-application work. FUTURE.md preserves ideas, not authority to
+implement them. Do not reconstruct milestone history or revive archived proposals.
+The owner's current instructions take precedence.
 
-1. `AGENTS.md` — these durable rules.
-2. `CURRENT.md` — verified current status and the rolling **Now / Next / Later** plan.
-3. `DESIGN.md` — current operating design.
-4. `interfaces/` — only when the task crosses the Pilot–Tab5 boundary.
+## Small fixes with minimum overhead
 
-Do not reconstruct project history or read old plans, historical ESP-IDF material,
-unpromoted agent branches, or Google Drive design records unless the active task
-specifically requires a named source.
+- Use pilot-working for web/cloud and tab5-working for device/Shelly work. Retain
+  only these, pilot, Tab5 and main as normal remote branches; use tags for archives.
+- Fetch and verify advertised remote tips, inspect status, and preserve existing
+  work. One writer per checkout. Do not reset or clean someone else's checkout.
+- A requested fix authorizes investigation, the smallest sensible repair, relevant
+  tests, a concise commit and publication to its working branch. No separate design
+  unit, new branch, approval of implementation details, or mandatory PR is needed.
+- A working branch can contain accepted work awaiting promotion. Do not discard
+  it or require it to equal an older operating branch before a new small fix.
+- Check the affected behavior, then stop testing once the relevant checks pass.
+  Docs-only changes need link/content checks, not a hardware or emulator campaign.
+- Keep CURRENT short: accepted behavior, installed evidence, next owner decision.
+  Put deferred ideas in FUTURE rather than creating new handoff documents.
 
-## Working branches
+## Release and physical boundaries
 
-- `pilot` and `Tab5` are the operating branches.
-- `pilot-working` and `tab5-working` are the reusable development branches.
-- One owner and one active agent work at a time. A bounded review/evidence
-  sub-agent may assist but does not modify the working branch.
-- Ordinary scoped commits and related bug fixes on the active working branch are
-  permitted when the owner authorizes that work unit.
-- Nothing may be merged, fast-forwarded, or otherwise promoted into `pilot` or
-  `Tab5` without explicit owner approval.
-- Before beginning a new work unit, the corresponding working branch must be
-  clean and match its operating branch. Read-only reviews and documentation
-  closeout of an accepted unit do not require discarding unpromoted work. Resolve
-  alignment with the owner before the next coding unit.
+Promotion to pilot, Tab5 or main requires owner direction unless already included
+in the active request. A push can deploy a web branch. A source promotion does not
+install device files, publish runtime packages, apply Firebase rules/indexes, or
+change DNS. Do not do those actions without authorization for that activity.
+Do not automatically restart devices after source changes. When the owner is away,
+finish authorized reversible work and record remaining decisions in CURRENT.
 
-## Safety and evidence
+## Preserve the operating contract
 
-- Preserve mechanical, hardwired, and Shelly-local protection. Tab5 never creates
-  ordinary pump demand.
-- Cloud services are never an immediate protection path.
-- Never fabricate unavailable values, lock state, validity, source, time, or
-  staleness.
-- Keep interface definitions versioned. A cross-application record change updates
-  both mirrored `interfaces/` directories and the relevant producer, consumer,
-  examples, and tests.
-- Never expose or commit secrets, tokens, private keys, Wi-Fi credentials, or
-  production configuration.
-- A deployment, board package adoption, flash/erase, wiring change, or connected
-  equipment test needs explicit owner direction for that activity.
+- Never create ordinary pump demand or weaken mechanical, hardwired or Shelly-local
+  protection. Cloud services never provide immediate protection.
+- Tab5 writes its own inhibition flag; the Shelly script alone owns RLY0. A timeout,
+  RPC acknowledgement or unavailable measurement is not physical success/recovery.
+- Preserve units, source, validity, observation time and staleness. No fabricated
+  values, lock state, event close time or execution confirmation.
+- Keep interfaces byte-identical on both working branches. If their meaning changes,
+  update the relevant producer, consumer, schema/examples and checks together.
+- Keep secrets out of Git, logs, URLs and reports. The beta password is checked by
+  server functions. Pilot and Main share live data: a test write is a real write.
+- Under tab5/, also read tab5/AGENTS.md. Preserve every tracked runtime/support file;
+  stamp only files actually changed. UIFlow MicroPython is the supported platform.
 
-## Reporting
+## Git recovery
 
-Report the intended behavior, test evidence, any changed operational configuration,
-known limits, and the next owner decision in plain language. Do not replace a
-missing fact with a historical narrative.
-
-## Cloud workflow and handoffs
-
-- GitHub is the durable source of truth; the owner may switch Windows computers.
-  Work directly on the reusable working branches; avoid routine per-task branches
-  and Windows bundle transfers. Verify remote refs and a clean checkout first.
-- GitHub plugin authorization and shell Git authentication are separate. Verify
-  the intended write route before implementation. If shell push is unavailable,
-  use authenticated GitHub blob/tree/commit/ref tools when available. Never ask
-  the owner to expand permissions merely because shell credentials are absent.
-- Connector-created commits may have different metadata/hashes from local commits.
-  Preserve the intended parent, verify every uploaded blob and the full tested
-  tree, then fast-forward without force. Recheck the advertised tip and align the
-  local checkout only after verifying its files are identical. Report the canonical
-  remote commit, not an abandoned local commit identity.
-- Owner approval is still required for operating promotion. Record the prior tip
-  for rollback; prefer a revert preserving history. Source rollback does not roll
-  back runtime packages, Firebase rules or installed Tab5 files automatically.
-- Keep CURRENT.md current after host/owner acceptance. Distinguish source facts,
-  host fixtures, owner logs and unverified hardware behavior. A focused review or
-  handoff file may carry the next unit; do not grow a competing historical roadmap.
-- Use one active coding agent for a bounded approved unit. A design session reviews
-  first and discusses requirements; do not interpret a design review as coding
-  authorization. Ordinary implementation choices within an approved unit do not
-  require repeated permission requests.
+Prefer normal fast-forward pushes; recheck remote tips before publishing. Never
+force over concurrent work. Keep rollback source and runtime package compatibility
+separate. Archived tips live under archive/beta-2026-09-16/ tags; restore a tag to a
+temporary detached checkout for inspection rather than reviving obsolete branches.
