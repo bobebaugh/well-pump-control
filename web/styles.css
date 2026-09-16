@@ -137,6 +137,7 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
 .tank-reading { position: absolute; inset: 54px 4px auto; text-align: center; }
 .tank-reading span { display: block; color: var(--muted); font-size: .65rem; }
 .tank-reading strong { color: #c5d2df; font-size: .9rem; }
+.tank-gallons { display: block; margin-top: 2px; color: var(--muted); font-size: .72rem; font-weight: 500; }
 .pipe { position: absolute; left: calc(25% + 45px); top: 190px; width: 150px; height: 8px; background: #697888; }
 .pump-symbol { position: absolute; left: calc(25% + 170px); top: 167px; width: 46px; height: 46px; border: 4px solid #68798a; border-radius: 50%; }
 .pump-symbol span { position: absolute; inset: 11px; border: 3px solid #68798a; transform: rotate(45deg); }

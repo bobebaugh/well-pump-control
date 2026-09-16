@@ -7,6 +7,7 @@ const checkTime = document.querySelector("#api-check-time");
 const pumpState = document.querySelector("#pump-state");
 const pressureValue = document.querySelector("#pressure-value");
 const tankPressure = document.querySelector("#tank-pressure");
+const tankGallons = document.querySelector("#tank-gallons");
 const tankWater = document.querySelector("#tank-water");
 const pressureTag = document.querySelector("#pressure-tag");
 const pressureRow = document.querySelector("#health-pressure");
@@ -32,6 +33,7 @@ const LIVE_REFRESH_MS = 1000;
 // live readings follow that rather than the 60s Firestore cadence. Polling
 // faster than the device writes only burns requests for the same record.
 const OBSERVATION_REFRESH_MS = 2000;
+const HISTORY_REFRESH_MS = 300000;
 // The tank cutaway shows WATER against the range this system actually uses.
 //
 // Two scales were wrong before. Pressure on a linear 0-70 scale drew a tank 71%
@@ -49,6 +51,7 @@ const OBSERVATION_REFRESH_MS = 2000;
 let tankModel = null;
 let pressureSwitch = null;
 let observationTimer;
+let historyTimer;
 let telemetryTimer;
 let monitoringUntil = 0;
 let operatorBusy = false;
@@ -66,9 +69,11 @@ function tankWaterGallons(psi) {
   return water >= 0 && water <= volume ? water : null;
 }
 
+// Null where the tank model has not arrived yet, so the caller leaves the
+// cutaway alone rather than drawing an empty tank beside a healthy pressure.
 function tankFillPercent(psi) {
   const water = tankWaterGallons(psi);
-  if (water === null) return 0;
+  if (water === null) return null;
   const low = tankWaterGallons(pressureSwitch?.cutInPsi);
   const high = tankWaterGallons(pressureSwitch?.fullPsi);
   // Until a completed cycle has been seen, fall back to water as a fraction of
@@ -296,15 +301,23 @@ function renderObservation(data) {
     const text = psi.toFixed(1);
     pressureValue.textContent = text;
     tankPressure.textContent = `${text} psi`;
-    const fill = Math.max(0, Math.min(100, tankFillPercent(psi)));
-    tankWater.style.height = `${fill.toFixed(1)}%`;
-    tankWater.classList.add("live");
+    const water = tankWaterGallons(psi);
+    tankGallons.textContent = water === null ? "—" : `${water.toFixed(1)} gal`;
+    const fill = tankFillPercent(psi);
+    if (fill === null) {
+      tankWater.style.height = "";
+      tankWater.classList.remove("live");
+    } else {
+      tankWater.style.height = `${Math.max(0, Math.min(100, fill)).toFixed(1)}%`;
+      tankWater.classList.add("live");
+    }
     pressureTag.textContent = `Live · ${data.ageSeconds}s ago`;
     pressureTag.className = "tag";
     setHealth(pressureRow, "online", `${text} psi · ADC ${values.adcRaw ?? "—"}`);
   } else {
     pressureValue.textContent = "—";
     tankPressure.textContent = "— psi";
+    tankGallons.textContent = "—";
     tankWater.style.height = "";
     tankWater.classList.remove("live");
     const reason = data.pressureCommissioned === false
@@ -329,11 +342,31 @@ function renderObservation(data) {
 function clearObservation() {
   pressureValue.textContent = "—";
   tankPressure.textContent = "— psi";
+  tankGallons.textContent = "—";
   tankWater.style.height = "";
   tankWater.classList.remove("live");
   pressureTag.textContent = "Pressure telemetry unavailable";
   pressureTag.className = "tag unavailable";
   setHealth(pressureRow, "unavailable", "Awaiting Tab5 telemetry");
+}
+
+// History moves slowly and the endpoint caches, so this is nothing like the
+// live cadence. It carries the tank model and the observed switch band, which
+// are what let the cutaway show water rather than a pressure ratio.
+async function checkHistory() {
+  clearTimeout(historyTimer);
+  if (document.hidden) {
+    historyTimer = setTimeout(checkHistory, HISTORY_REFRESH_MS);
+    return;
+  }
+  try {
+    const data = await fetchStatus("/.netlify/functions/observation-series?window=1d");
+    if (data.tankModel) tankModel = data.tankModel;
+    if (data.pressureSwitch?.cycles > 0) pressureSwitch = data.pressureSwitch;
+  } catch (error) {
+    // The cutaway degrades on its own; the pressure readout is unaffected.
+  }
+  historyTimer = setTimeout(checkHistory, HISTORY_REFRESH_MS);
 }
 
 async function checkObservation() {
@@ -471,12 +504,16 @@ operatorButtons.forEach(button => button.addEventListener("click", () => issueOp
 // interval, so the first thing seen on return is current and not two seconds of
 // whatever was on screen when it was hidden.
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) checkObservation();
+  if (!document.hidden) {
+    checkObservation();
+    checkHistory();
+  }
 });
 
 checkServices();
 checkTelemetry();
 checkObservation();
+checkHistory();
 checkEvents();
 checkOperatorStatus();
 setInterval(checkServices, 300000);
