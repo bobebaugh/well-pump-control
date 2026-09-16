@@ -1,13 +1,11 @@
-# Tests
+# Beta checks
 
-Initial automated coverage will include:
+Use the commands in [BETA](../BETA.md). Tests cover contracts, rule evaluation,
+transport, authoring, command authentication and decision behavior as applicable
+to this branch. Fixtures/emulators do not access the installed pump or live data.
+Python executable selection is portable; PYTHON can override it for the JS
+compatibility probe. Tab5's staging fixture models overwrite rename semantics on
+Windows without changing the device implementation.
 
-- accepted and rejected Shelly EM source responses;
-- start/stop hysteresis state transitions;
-- completed-cycle aggregation;
-- stale and communications-fault behavior;
-- Netlify authentication and request validation;
-- Firestore write-shape tests;
-- web formatting of unavailable future measurements.
-
-Physical pump observation, Tab5 display behavior, and network-loss recovery remain field acceptance tests.
+Hardware display/network/timing, installed filesystem replacement, deployed Firebase
+authorization and physical device actions remain separate acceptance evidence.

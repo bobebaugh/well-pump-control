@@ -1,8 +1,9 @@
-name: M3 RTDB Rules Emulator
+name: Beta RTDB Rules Emulator
 
 on:
   push:
     branches:
+      - main
       - pilot
       - pilot-working
     paths:
@@ -16,6 +17,7 @@ on:
       - .github/workflows/m3-rtdb-rules-emulator.yml
   pull_request:
     branches:
+      - main
       - pilot
       - pilot-working
     paths:

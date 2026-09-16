@@ -1,283 +1,50 @@
-# Current status — Pilot line
+# Current beta status â€” web/cloud
 
-## Now — M6.38 Tab5IsLocked authoring and support unit awaiting owner review
+As of 16 September 2026. This records source and owner evidence, not assumed deployment.
 
-The Pilot half of the coordinated inhibition unit is implemented on
-`pilot-working` but is not deployed, and no rules package has been published or
-delivered. Tab5 no longer writes RLY0: it publishes its inhibition as the
-`Tab5IsLocked` Boolean, and the Shelly script becomes the relay's sole writer.
+## Available now
 
-The binding catalog makes `RLY(0)` read-only telemetry and adds
-`UDF(Tab5IsLocked)` as the one writable object, with a `Boolean.Set` shape whose
-parameters are `{valueParameter:"value"}` and whose normal value is `false`. Write
-shapes are discriminated by method and stay closed, so an id is neither optional
-for a method that needs one nor accepted for one that does not. The runtime-support
-gate now resolves the write target by its device binding instead of requiring the
-system name `PumpEnable`, refuses any other writable object, refuses a second
-writer for the same component, and accepts only a held opening assignment set to
-true — release is a consequence of ownership and mode, never an authored value.
+The web/cloud application includes live RTDB readings, power/history views, event
+and durable-record browsing/CSV, V3 authoring/backup/publication and authenticated
+User Monitor/Tab5 restart/Shelly restart requests. The owner reports the latest
+home-page fix is promoted and appears to work. Existing Firestore and RTDB remain
+the intended shared stores for Pilot and Main. No database move is planned.
 
-Shipped authoring defaults change with it. H001 opens on `ShellyEMAvailable == false`
-rather than an internal occurrence the device never generates. E007 opens above 266
-and closes on `any [SupplyVoltage <= 266, ShellyEMAvailable == false]` at the
-authored ten reads, which is what lets it clear when the electrical source is the
-thing that vanished. E007 and E002 assign `Tab5IsLocked = true`.
+The latest device working source is M6.42; the owner believes it is installed.
+The owner confirms the Shelly 1 protection script is fully unit tested on real
+hardware. Exact installed files/package identity still need a release receipt.
 
-The static analysis follows the same binding, and has been taught the three-valued
-closing semantics: an `any` condition with a clause satisfied by the device being
-unavailable is a real escape from the failure that removed the measurement, so the
-revised package no longer raises the stranded-inhibit error the legacy one does.
-The pinned Tab5 resolver fixture was regenerated from `tab5-working` so the online
-and device validators are compared against the build that will actually run.
+## Maintenance baseline
 
-## Previously — operator control moved onto the proven RTDB identity; rules grant outstanding
+Before housekeeping: pilot = 150bb8ab6297062ca6a8157708f05700c6cd74d0;
+pilot-working = b368cf6a44db95a22a6623696a60cbf07f968a29. The working branch contains
+an additional observation-series repair. Housekeeping adds documentation/test
+maintenance only; it does not promote that repair or change live behavior.
+Old branch tips are archived in maintenance/branch-archive-2026-09-16.csv.
 
-The deployed 502 is not the earlier SDK-argument defect. Operator control was the only
-Pilot→RTDB path with no rules-authorized identity: in the published rules
-`operatorControl/command` is `".write": false` for everyone, and `presence`,
-`currentObservation` and `operatorControl/result` carry no `.read` at all. It worked
-around that by using the Admin SDK, whose service-account credential is not authorized
-for this RTDB instance ("Provided authentication credentials for the app named
-[DEFAULT] are invalid"). The SDK's database client retries that failure on a persistent
-connection instead of erroring, so every invocation ran to Netlify's 30 s wall and
-returned an empty 502. The emulator suite never caught it because every command write
-in it runs under `withSecurityRulesDisabled`.
+## Next owner decisions
 
-Operator control now uses the same exchange the rules publisher and event-board mirror
-use: a purpose-scoped custom token (`netlify-operator-control`, claims siteId/deviceId/
-`purpose: operator-control`) traded for an ID token, then RTDB REST. Every call is
-individually aborted at 6 s, so authentication or connectivity failures return a
-reportable outcome well inside the platform limit. The command write is an ETag
-compare-and-set on `operatorControl/command` alone, so `result` stays device-owned and
-a concurrent issue conflicts rather than reusing a sequence. Expiry, exact-session
-targeting, monotonic sequence, duplicate rejection and no-automatic-retry are
-unchanged. An aborted write is reported as indeterminate and never as delivered; a
-write rejected with an HTTP status did not apply. No code path now depends on
-service-account RTDB authorization; `getPilotDatabase` has no remaining callers.
+1. Review the remaining beta reliability choices in FUTURE. No application fix was
+   authorized or applied by housekeeping.
+2. Promote the accepted working candidates to pilot/Tab5 when ready. Main remains
+   intentionally suppressed until the owner authorizes public-beta activation.
+3. Choose the ebaugh.net hostname; verify Netlify production environment scope,
+   shared database access, password strength/access checks and HTTPS using BETA.
+4. Record the web deploy, actual device file set, running package/hash, authoring
+   backup, Shelly settings and applied Firebase rules/indexes. Do not substitute an
+   old package number or this source revision for installed evidence.
 
-Three follow-up fixes complete that transport. The ID token now honors the exchange's
-`expiresIn` and renews ahead of it instead of caching for the life of the container, and
-an explicit 401/403 clears the cached token so the next request recovers rather than
-staying broken until the container recycles. The request timeout now covers body
-consumption, not just headers: a stalled body on a status read is a bounded read
-failure, while a write whose headers already arrived keeps its definitive status and is
-never downgraded to unknown. All calls in one endpoint operation share a 20 s budget
-inside Netlify's 30 s limit. No command write is replayed automatically.
+No DNS, Netlify settings, Firebase configuration, device upload, restart or source
+promotion was performed by this housekeeping. History is in Git; all deferred work
+is consolidated in FUTURE.
 
-`firebase/rtdb.rules.json` now carries the matching grant: `netlify-operator-control`
-reads `currentObservation`, `presence`, `rulesV3State` and `operatorControl`, and writes
-`operatorControl/command` under a `.validate` enforcing the closed command-v2 record.
-`operatorControl/result` stays device-only, `syncState` stays unreadable, and the root
-default remains closed. This is narrower than what it replaces: an Admin SDK bypass with
-unrestricted access becomes a rules-governed identity scoped to five paths.
+## Housekeeping verification
 
-**The rules must still be published by the owner before online controls work.** Source
-promotion does not publish them. Until they are published the function fails fast with
-the new `control_denied` state instead of hanging.
-
-The earlier browser and status repairs stand unchanged. The Pilot repair fixes event links by using the Firestore-valid partial boundary
-`startAt(cycle)` while retaining document-ID tie ordering for stable paging and the
-three preceding durable records. Actual Firebase Admin SDK validation now guards
-that boundary; focused fixtures cover the owner's cycle-600 entry, earlier/later
-paging and an unsynchronized startup session.
-
-The operator-status 503 was not a Firebase-rules failure. Firebase Admin SDK 13.10.0
-accepts an explicit RTDB URL through `getDatabaseWithUrl(url, app)`; the prior
-`getDatabase(app, url)` call ignored its unsupported second argument and immediately
-raised `database/invalid-argument` because the app had no default database URL. The
-status path now uses the supported API and logs a bounded stage, SDK code and message
-without credentials or command contents. The UI separately reports rejected owner
-authentication, missing service configuration and an authenticated-but-unavailable
-status read.
-
-The same unsupported `getDatabase(app, url)` call also remained in the rules-engine
-V3 device-status read, which is the cause of the separately parked rules-editor Tab5
-status-read failure. That path now resolves its database through
-`getDatabaseWithUrl(url, app)` behind a `_deviceStatusDatabase` seam, so the default
-read is covered by actual SDK validation instead of an injected mock. Its URL
-validation, timeout, and error categories are unchanged; the parked editor failure
-is expected to clear on deployment but has not yet been confirmed against live
-Firebase.
-
-Session/cycle, release and receipt-time columns are selectable in the existing
-column area and hidden by default. Their selections survive paging, data-column
-changes and browsing-mode changes; Observation time remains visible and CSV export
-is unchanged.
-
-The approved Pilot–Tab5 operator unit is implemented on `pilot-working` and
-`tab5-working` but is not deployed or installed. M6.37 repairs the reviewed
-operator-control defects without changing the approved controls. Command v2 uses a
-non-empty no-arguments marker that survives RTDB storage. CPU B admission and CPU A
-execution both reject non-increasing command sequences, so duplicates, A → B → A,
-and older different IDs cannot replace or execute after newer work. Session,
-expiry, synchronized-clock, and no-retry boundaries remain.
-
-Online Tab5 restart now atomically preserves the exact accepted request before
-`machine.reset()`. The new session emits a matching completion result and removes
-that marker only after RTDB accepts the result. An unrelated later session never
-confirms an old request; explicit rejection remains rejection, and missing linked
-evidence after possible execution is unknown. A marker-write failure reports
-failure and does not schedule the reset.
-
-The earlier approved event/durable browser remains in this branch and its prior
-evidence still applies. This unit does not alter its history semantics or the
-event-disable/publication workflow.
-
-The latest owner startup runs M6.35 on both CPU A and CPU B with package V17:
-20260913010057-event-v3-v17, hash prefix 207cca64ea14.
-Logs show successful board and durable ingestion, startup S020 opening/closure,
-and S020 opening/closure after temporary Shelly acquisition failure. Screenshots
-confirm observation-v2 fields, coalesced reasons, explicit unavailable pressure
-values, and stored event-open/event-close records. The displayed open and close
-screenshots represent different occurrences, not a verified matching pair.
-
-## Verification — M6.38
-
-- 224 Pilot host tests pass, including 11 new inhibition regressions: the shipped
-  defaults author exactly one device write; `RLY(0)` cannot be made writable again;
-  the inhibition write shape is exact in all four wrong pairings; every illegal
-  assignment form is rejected in both phases and inside guarded groups while the
-  legal form still passes in a guarded group; an alias is refused; a renamed target
-  is still recognised by binding; H001's condition trigger; the revised closing
-  condition clears the evidence-loss finding that the legacy package still raises;
-  and the analyzer still catches a package with no escape.
-- `tests/rules-engine-v3-compatibility.test.js` runs the regenerated
-  `tests/fixtures/tab5-v3-resolver-m638.py`, an AST dependency slice of
-  `tab5/pilot.py` at the tab5-working commit, so online validation is compared
-  against the real device resolver rather than a description of it.
-- `contracts/examples/v3/rules-runtime-package.json` was regenerated from the
-  revised defaults and is byte-compared by the determinism test.
-- No package was published or delivered, no Firebase or RTDB change was made, and
-  no deployment was performed by this unit.
-
-## Verification
-
-- Focused record-browser, UI and operator-control regressions passed 24/24. They
-  include actual Admin SDK rejection of the old empty document-ID boundary and the
-  installed-SDK reproduction/repair of the RTDB initialization failure.
-- Operator-control follow-up: full host suite 167/167. Added regressions cover token
-  renewal ahead of `expiresIn`, cache invalidation after a 401, a stalled response body
-  bounded as a read failure, a stalled write body retaining its definitive status, and
-  the shared operation budget.
-- Operator-control repair: full host suite 162/162. New regressions cover the
-  purpose-scoped identity and claims, REST idempotency/overlap/sequence across expiry,
-  an aborted write reported as indeterminate versus an HTTP-rejected write that did
-  not apply, abort well inside the 30 s limit, and the configuration/denied/upstream
-  split. These use an in-memory RTDB REST double, not live Firebase.
-- Six emulator tests were added for the operator identity: the required status reads,
-  a production-built command-v2 write read back through device permissions, denial for
-  wrong purpose / wrong device / missing claims / anonymous, eleven malformed-command
-  rejections, denial on device-owned `result`, `sequence`, `presence`,
-  `currentObservation`, `rulesV3State`, site control and rules, and an ETag conflict
-  that leaves the winning command in place. The Tab5 validator round-trip is retained.
-- GitHub Actions run 34778283867 at `0900dfd` passed 18/18 real RTDB emulator tests,
-  including all six operator-identity cases. Run 34777903520 at `8dbe840` passed 17/18:
-  the identity grants were already proven there, and the single failure was the ETag
-  conflict test itself sending no authentication, so its conditional read was denied and
-  returned no ETag. The emulator does implement `X-Firebase-ETag` and `If-Match`; the
-  request was wrong, not the feature. It now sends the harness admin token, the
-  equivalent of the `?auth=<idToken>` every production request carries, and reports the
-  status and body on failure. The conflict assertion is unchanged.
-- Emulator success proves the published rules text authorizes this identity. It does not
-  establish that the deployed Firebase project accepts the production service account's
-  custom token, and no rules have been published yet.
-- The emulator cannot be run in this environment: loading any RTDB rules file is blocked
-  here, reproduced with a copy outside the repository and with a minimal closed rules
-  file. Emulator evidence for this line comes from GitHub Actions only.
-- The device-status follow-up added one focused regression that reproduces the
-  production `Can't determine Firebase Database URL.` failure against the installed
-  SDK and passes only with the supported call; the full host run passed 159/159.
-  `rules-engine-v3-compatibility` also passed here, so the previously recorded
-  `null !== 0` result was only a missing `python3` on the owner's PATH, not a defect.
-- The single completion host run passed 158/158 tests. A bounded browser check was
-  attempted without authenticating or issuing commands, but this session's cloud
-  browser could not access localhost and permission to open the deployed owner URL
-  was declined; browser-source verification therefore remains an owner retest.
-
-- M6.37 repair host runs passed 152/152 Pilot tests and 181/181 Tab5 tests.
-  Focused cases cover command-v2 shape, immediate duplicate, A → B → A and older
-  different-ID rejection at both CPU boundaries, stale pending replacement,
-  expired/old-session rejection, request-linked restart completion, explicit
-  rejection followed by another session, manual restart after expiry, and lost
-  acknowledgements remaining unknown.
-- GitHub Actions Java 21 run 34759331965 passed 12/12 actual RTDB emulator tests.
-  The log specifically confirms that the production command builder's record was
-  written to the emulator, read back through device permissions, and accepted by
-  the checked-out `tab5-working` production CPU-B validator/admission path. This
-  is separate from the permission matrix and the host suites.
-
-- Browser repair: `node --test tests/record-browser.test.js` passes 6/6 using
-  Firestore-like timestamp/query fixtures. It covers mixed V1/V2 tie ordering,
-  first/next pages, anchors, receipt fallback, malformed cursors, >50 closures,
-  both close reasons, sparse unsynchronized session navigation and missing prior
-  records. A bounded localhost mock was also operated in a real browser: event
-  session → Latest/date anchor/receipt fallback, older/newer paging, and column
-  changes were exercised. This is mock-backend evidence, not a live Firebase audit.
-- Follow-up browser repair: `node --test tests/record-browser.test.js
-  tests/record-browser-ui.test.js` passes 8/8. Backend fixtures preserve Firestore
-  Timestamp observation fields versus production-shaped string closure fields, and
-  traverse every history page and replay prior pages with no missing or duplicate
-  closure identity. The JavaScript harness and bounded real-browser mock check both
-  retain populated session pages at earlier/later boundaries, preserve columns, and
-  exercise Latest, date anchor and receipt fallback. This remains local mock evidence.
-- Fresh host run: `node --test tests/*.test.js` passed 139/140. The only failure,
-  `rules-engine-v3-compatibility` (`null !== 0` while starting its Python resolver),
-  was reproduced unchanged at pre-browser parent `167a40ed`; it is pre-existing and
-  unrelated to the browser repair. `npm` was not on this host PATH, so the equivalent
-  Node test command was used directly.
-- The follow-up full host run passed 141/142; its only failure is the same documented
-  `rules-engine-v3-compatibility` resolver failure.
-- 168 Tab5 and 134 Pilot host tests passed, independently rerun during prior review.
-- Corrected RTDB rules at f97f909a137f9faf2c369614178f72d5a75f7869 passed
-  10/10 local demo-project emulator tests. Java 21.0.12.1, Node 22.22.2,
-  npm 10.9.7; npm ci then npm run test:rtdb-rules; clean emulator shutdown.
-  An empty local XDG config resolved a shared-config EPERM. Evidence was
-  committed in ed7a757b686e8360dfaa652369587b64290dfa84.
-- Prior 404/400 failures occurred before the matching backend rollout; subsequent
-  logs show acceptance. Do not treat those earlier errors as unresolved defects.
-- Extended outage, saturated FIFO, full-device heap and maximum practical board
-  checks remain outstanding. Encoded FIFO byte cap is provisional at 393,216.
-- No live Firebase audit or hardware action was performed by this closeout.
-
-## Next — M6.38
-
-Owner review of the coordinated source and test sequence across both lines, then
-the cutover in §8 of `docs/minimal-tab5lock-and-monitor-design.md`. Deploy the
-compatible Pilot authoring and validation changes before publishing the revised
-package; publication, delivery, adoption and branch promotion remain separate
-owner actions. The revised package must not be published until the matching Tab5
-files are installed, because the two are deliberately mutually incompatible.
-
-## Next
-
-Owner review of the coordinated M6.37 source and the test sequence in the handoff.
-Deployment, RTDB-rules publication, Tab5 file installation/restart, and any branch
-promotion are separate synchronized owner actions. Online controls must not be used
-until the matching Pilot function/rules and Tab5 M6.37 are all in place.
-
-## Later / unresolved
-
-- Battery charging: retain current 75/80 policy until new limits are chosen.
-  Owner finds percentage misleading and expects higher thresholds; input power
-  versus charging current remains unexplained. Supported UIFlow interfaces only.
-- System Monitor automatic actuation remains deferred under issue #6. Missing
-  telemetry does not release inhibits or advance clearing qualification. There is
-  no Clear Events or Monitor OFF control in M6.37.
-- Shelly script-health monitoring (issue #5) remains separate; resolve by script
-  name, not assumed ID. Shelly-local lockouts/protections remain authoritative.
-- S020 startup sensitivity, brief Cloud-yellow with a pending record, and potential
-  two-second polling remain separate questions, not approved changes here.
-- Rules editor Tab5 status-read failure: the `getDatabase(app, url)` cause is fixed
-  in source and host-verified. It stays open until an owner read confirms it live.
-- Never fabricate unavailable values, physical action success or exact inferred
-  close time. Runtime packages adopt only on restart with an empty event board.
-
-## Boundaries
-
-Source promotion does not install Tab5 files or publish Firebase rules. New coding,
-deployment, package delivery and hardware operations require their applicable owner
-authorization. Preserve mechanical/hardwired/Shelly-local protection; CPU A remains
-sole local event/control authority. No routine flash/SD logging or durable outbox.
-GitHub is the portable source of truth. Keep environment setup bounded. The
-restart marker's atomic write/removal and reset linkage are host-simulated;
-installed-device filesystem and reset behavior remain owner acceptance evidence.
+The remote repository now has exactly main, pilot, pilot-working, Tab5 and
+tab5-working. Eighteen retired branch tips are preserved under published archive
+tags; no unmerged commits were discarded. No operating branch was advanced.
+Host verification: 301 web/cloud tests, 248 Tab5 tests and 31 Shelly tests passed.
+The password regression covers missing/wrong keys on every mutation route. The
+two Windows test adapters change host behavior only. Existing local Node dependencies
+were reused; a fresh dependency install and hosted workflow run were not part of
+these local results. Interfaces remain identical as Git blobs on both working lines.

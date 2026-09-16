@@ -1,6 +1,10 @@
-# Proposed v2 fixture notes
+# Preserved synthetic fixture notes
 
-These files are synthetic review examples for `durable-observation-v2` and `event-record-v2`. They are **not implemented contracts**, are not loaded by the active schema suite, and are not expected to pass current `ingest-record` validation.
+These are preserved synthetic design examples, not active wire contracts, installed
+packages, or instructions to implement a different queue/event architecture. The
+current contracts are in interfaces/; DESIGN.md describes the implemented FIFO and
+board reconciliation. These examples are not loaded by the active schema suite and
+are not expected to pass current ingest-record validation.
 
 For compactness, the fictional running package used by the observation examples logs these fields: `PumpEnable`, `ContactorFlag`, `IsLocked`, `Shelly1Available`, `SupplyVoltage`, `ShellyEMAvailable`, `PressurePSI`, `WiFiConnected`, and `OperatingMode`. The examples therefore include all nine on every observation even when only one triggers. Fictional hash/release/session values do not identify a deployed package or real device run.
 

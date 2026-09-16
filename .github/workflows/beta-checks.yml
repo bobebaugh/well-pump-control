@@ -1,0 +1,37 @@
+name: Beta host checks
+
+on:
+  push:
+    branches: [main, pilot, pilot-working, Tab5, tab5-working]
+    paths: ['web/**', 'cloud/**', 'tab5/**', 'shelly1/**', 'tests/**', 'contracts/**', 'interfaces/**', 'package*.json', '.github/workflows/beta-checks.yml']
+  pull_request:
+    branches: [main, pilot, pilot-working, Tab5, tab5-working]
+    paths: ['web/**', 'cloud/**', 'tab5/**', 'shelly1/**', 'tests/**', 'contracts/**', 'interfaces/**', 'package*.json', '.github/workflows/beta-checks.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Web/cloud host suite
+        if: hashFiles('cloud/netlify/functions/*.js') != ''
+        run: |
+          npm ci
+          npm test
+      - name: Tab5 host suite
+        if: hashFiles('tab5/pilot.py') != ''
+        run: python -m unittest discover -s tests -p 'test_tab5*.py'
+      - name: Shelly script harness
+        if: hashFiles('tests/shelly1-anti-chatter.test.js') != ''
+        run: node --test tests/shelly1-anti-chatter.test.js

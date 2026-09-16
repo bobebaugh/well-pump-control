@@ -1,32 +1,11 @@
-# Netlify cloud layer
+# Netlify beta backend
 
-This directory will contain the authenticated ingestion function and deployment configuration.
+Functions serve public read-only monitoring/history, password-protected ingestion,
+rules authoring/publication/downloads, and explicit operator controls. Firestore
+holds durable data; RTDB holds current state and coordination. Server credentials
+stay in Netlify; devices obtain scoped temporary Firebase credentials.
 
-Pilot responsibilities:
-
-- authenticate the Tab5 request;
-- validate request type, schema version, fields, and ranges;
-- use server-side timestamps where authoritative receipt time is required;
-- write current remote state, events, and completed-cycle summaries to Firestore;
-- reject malformed or unauthorized traffic;
-- never participate in immediate pump protection.
-
-The `pilot` branch is the Netlify branch-deploy source. Secrets belong in Netlify environment variables for the branch-deploy context and must not be committed.
-
-M4 adds `ingest-record` on a nondeploying feature branch. It appends authenticated,
-versioned durable observations and event transitions idempotently while the legacy
-pilot functions and current record remain in service.
-
-M6.35 extends `ingest-record` with durable observation schema v2 while retaining
-schema v1. The authenticated `event-board` endpoint validates complete sparse
-boards, transactionally replaces `eventBoardState/tab5-well-main`, creates
-deterministic event-record-v2 history, and conditionally mirrors only the newest
-accepted revision to RTDB. It does not interpret relay consequences or influence
-Tab5 lifecycle/control state.
-
-The coordinated M6.37 source adds the authenticated `operator-control` endpoint.
-It uses the existing pilot key, requires fresh Tab5 presence, and transactionally
-replaces one RTDB command slot with a 45-second, exact-session request. The endpoint
-does not retry an ambiguous command and reports device results/fresh-session
-evidence separately. Deployment and RTDB-rules publication are not performed by
-the source unit and must be synchronized with the matching Tab5 installation.
+Pilot and Main are two application versions against the same live site/device.
+There is no branch-specific data namespace. See [BETA](../../BETA.md) and
+[DESIGN](../../DESIGN.md). Firebase rules/index publication and device/package
+installation are separate from deploying functions. Tests use fixtures/emulators.
