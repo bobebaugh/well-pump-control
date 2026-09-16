@@ -130,7 +130,10 @@ function recordField(record, name) {
 
 function recordTimeMs(record) {
   const raw = record?.schemaVersion === 2 ? record.time?.observedAt : record.observedAt;
-  const parsed = typeof raw === "string" ? Date.parse(raw) : NaN;
+  // Ingestion stores observedAt as a Firestore Timestamp. ISO strings still
+  // occur in fixtures and in records before they are written to Firestore.
+  const parsed = raw && typeof raw.toMillis === "function" ? raw.toMillis()
+    : typeof raw === "string" ? Date.parse(raw) : NaN;
   return Number.isFinite(parsed) ? parsed : null;
 }
 
