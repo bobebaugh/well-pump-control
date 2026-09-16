@@ -34,6 +34,26 @@ const PUMP_RUNNING_WATTS = 500;
 // flat line carried forward from before the silence.
 const LEVEL_CARRY_LIMIT_MS = 20 * 60 * 1000;
 
+// The pump curve measured on the 2026-08-26 uninterrupted fill:
+// GPM = 28.477 - 0.3001 x psi, RMS residual 0.372 GPM over 81 points.
+//
+// This is a PRIOR, not a constant.  Well water level moves the curve -- the
+// higher the water in the well, the less lift, the more flow -- so a stored fit
+// goes stale across a season.  A window carrying enough fills of its own
+// derives its own curve and this is never consulted.  It is what gets used when
+// the window cannot, because an educated guess from a real measured fill beats
+// refusing to answer: without calibrated flow meters on the well-to-tank and
+// tank-to-house legs, every number here is an estimate anyway, and withholding
+// one is a bigger error than publishing it labelled.
+const REFERENCE_DELIVERY = { intercept: 28.477, slopePerPsi: -0.3001 };
+
+// A fill rate is only evidence over a span long enough to outrun the 1 gallon
+// logging threshold.
+const DELIVERY_MIN_SPAN_MS = 4000;
+const DELIVERY_BAND_PSI = 3;
+const DELIVERY_MIN_PER_BAND = 3;
+const DELIVERY_MIN_BANDS = 3;
+
 const WINDOWS = {
   "1d": { spanMs: 24 * 60 * 60 * 1000, bucketMs: 5 * 60 * 1000 },
   "7d": { spanMs: 7 * 24 * 60 * 60 * 1000, bucketMs: 60 * 60 * 1000 }
@@ -107,7 +127,22 @@ function sampleFromRecord(record, model) {
   if (timeMs === null) return null;
   let gallons = numberOrNull(recordField(record, "TankWaterGallons"));
   if (gallons === null) gallons = tankWaterGallons(recordField(record, "PressurePSI"), model);
-  return { timeMs, gallons, watts: numberOrNull(recordField(record, "PumpWatts")) };
+  return { timeMs, gallons, psi: samplePsi(record, gallons, model),
+           watts: numberOrNull(recordField(record, "PumpWatts")) };
+}
+
+// Tank pressure per sample, for evaluating the delivery curve. PressurePSI is
+// logged, so it is normally read straight off the record; inverting Boyle from
+// the gallons output covers a record that carried one and not the other.
+function samplePsi(record, gallons, model) {
+  const recorded = numberOrNull(recordField(record, "PressurePSI"));
+  if (recorded !== null) return recorded;
+  if (gallons === null || !model) return null;
+  const { effectiveTankGallons: volume, prechargeGaugePsi: precharge,
+          atmosphericPressurePsi: atmosphere } = model;
+  if (gallons >= volume) return null;
+  const psi = volume * (precharge + atmosphere) / (volume - gallons) - atmosphere;
+  return Number.isFinite(psi) ? psi : null;
 }
 
 function samplesFromRecords(records, model) {
@@ -134,6 +169,72 @@ function spread(buckets, startMs, bucketMs, fromMs, toMs, amount, key) {
 }
 
 /**
+ * Derive this window's pump delivery curve from its own fills.
+ *
+ * Within a run the tank rises at (pump delivery - household draw), so across
+ * many fills the FASTEST rise seen at a given pressure is the one where nobody
+ * was drawing, and the upper envelope of observed rates is the pump curve at
+ * this period's well level.  Deriving it per window means it follows the well
+ * through the seasons with nothing stored to go stale.
+ *
+ * Returns the reference prior when the window has too few fills to fit -- never
+ * nothing.  The basis says which, so the page can label the estimate.
+ */
+function deliveryCurve(samples) {
+  const usable = sample => sample.gallons !== null && sample.psi !== null &&
+    sample.watts !== null && sample.watts >= PUMP_RUNNING_WATTS;
+
+  const bands = new Map();
+  for (let index = 0; index < samples.length; index += 1) {
+    const previous = samples[index];
+    if (!usable(previous)) continue;
+    // Pair with the first later sample that spans enough time to outrun the
+    // logging threshold, rather than the next one: at the 1 Hz of a capture no
+    // adjacent pair would ever qualify, and the whole window would fall back.
+    let partner = index + 1;
+    while (partner < samples.length &&
+           samples[partner].timeMs - previous.timeMs < DELIVERY_MIN_SPAN_MS &&
+           usable(samples[partner])) partner += 1;
+    if (partner >= samples.length) break;
+    const current = samples[partner];
+    const spanMs = current.timeMs - previous.timeMs;
+    if (spanMs < DELIVERY_MIN_SPAN_MS || !usable(current)) continue;
+    const rate = (current.gallons - previous.gallons) / (spanMs / 60000);
+    if (!(rate > 0)) continue;
+    const band = Math.floor(((previous.psi + current.psi) / 2) / DELIVERY_BAND_PSI);
+    if (!bands.has(band)) bands.set(band, []);
+    bands.get(band).push(rate);
+  }
+
+  // The second-highest rate rather than the highest: one noisy pair should not
+  // set the envelope for a whole pressure band.
+  const points = [];
+  for (const [band, rates] of bands) {
+    if (rates.length < DELIVERY_MIN_PER_BAND) continue;
+    rates.sort((left, right) => right - left);
+    points.push([(band + 0.5) * DELIVERY_BAND_PSI, rates[1]]);
+  }
+  if (points.length < DELIVERY_MIN_BANDS) {
+    return { ...REFERENCE_DELIVERY, basis: "reference", bands: points.length };
+  }
+  const meanPsi = points.reduce((sum, [psi]) => sum + psi, 0) / points.length;
+  const meanRate = points.reduce((sum, [, rate]) => sum + rate, 0) / points.length;
+  const variance = points.reduce((sum, [psi]) => sum + (psi - meanPsi) ** 2, 0);
+  if (!(variance > 0)) {
+    return { ...REFERENCE_DELIVERY, basis: "reference", bands: points.length };
+  }
+  const slopePerPsi = points.reduce((sum, [psi, rate]) =>
+    sum + (psi - meanPsi) * (rate - meanRate), 0) / variance;
+  return { intercept: meanRate - slopePerPsi * meanPsi, slopePerPsi,
+           basis: "window", bands: points.length };
+}
+
+function pumpDeliveryGpm(psi, curve) {
+  if (psi === null || !curve) return 0;
+  return Math.max(0, curve.intercept + curve.slopePerPsi * psi);
+}
+
+/**
  * Bucket a sorted sample series into the shape the charts draw.
  *
  * gallons  - tank level at the bucket's end, or null where reporting was silent
@@ -141,7 +242,7 @@ function spread(buckets, startMs, bucketMs, fromMs, toMs, amount, key) {
  * starts   - pump starts, counted on the rising crossing
  * runSeconds - time the pump was drawing running current
  */
-function buildSeries(samples, { startMs, endMs, bucketMs }) {
+function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELIVERY }) {
   const count = Math.max(0, Math.ceil((endMs - startMs) / bucketMs));
   const buckets = Array.from({ length: count }, (unused, index) => ({
     startMs: startMs + index * bucketMs,
@@ -165,12 +266,20 @@ function buildSeries(samples, { startMs, endMs, bucketMs }) {
     }
 
     if (previous) {
-      // Water used is the fall in tank level. This is drawdown only: whatever
-      // the house pulls while the pump is refilling the tank is masked by the
-      // rise and is not counted here.
+      // Water used is what the pump delivered less what the tank kept.  With
+      // the pump off delivery is zero and this is just the fall in level; with
+      // it running the rise no longer hides the household draw underneath it.
+      //
+      // Counting only the falls would have undercounted a drawing-while-filling
+      // cycle roughly twofold, and by an amount that depends on how much use
+      // happens during runs -- a bias that moves is the one thing that would
+      // actually corrupt a year-over-year comparison.
       if (previous.gallons !== null && sample.gallons !== null) {
-        const fall = previous.gallons - sample.gallons;
-        if (fall > 0) spread(buckets, startMs, bucketMs, previous.timeMs, sample.timeMs, fall, "used");
+        const running = previous.watts !== null && previous.watts >= PUMP_RUNNING_WATTS;
+        const minutes = (sample.timeMs - previous.timeMs) / 60000;
+        const delivered = running ? pumpDeliveryGpm(previous.psi, curve) * minutes : 0;
+        const used = delivered - (sample.gallons - previous.gallons);
+        if (used > 0) spread(buckets, startMs, bucketMs, previous.timeMs, sample.timeMs, used, "used");
       }
       // The interval carries the state it began in: a record is published within
       // 50 W of any change, so a span that opened at running current was running
@@ -233,6 +342,7 @@ function buildSeries(samples, { startMs, endMs, bucketMs }) {
 }
 
 module.exports = {
-  LEVEL_CARRY_LIMIT_MS, MAX_SERIES_ROWS, PUMP_RUNNING_WATTS, WINDOWS,
-  buildSeries, recordField, recordTimeMs, samplesFromRecords, tankModelFromDraft, tankWaterGallons
+  LEVEL_CARRY_LIMIT_MS, MAX_SERIES_ROWS, PUMP_RUNNING_WATTS, REFERENCE_DELIVERY, WINDOWS,
+  buildSeries, deliveryCurve, pumpDeliveryGpm, recordField, recordTimeMs, samplesFromRecords,
+  tankModelFromDraft, tankWaterGallons
 };

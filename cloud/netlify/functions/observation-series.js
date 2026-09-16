@@ -10,7 +10,7 @@
 const { Timestamp } = require("firebase-admin/firestore");
 const { ConfigurationError, getPilotFirestore } = require("../lib/firebase");
 const {
-  MAX_SERIES_ROWS, WINDOWS, buildSeries, samplesFromRecords, tankModelFromDraft
+  MAX_SERIES_ROWS, WINDOWS, buildSeries, deliveryCurve, samplesFromRecords, tankModelFromDraft
 } = require("../lib/observation-series");
 
 const SITE_ID = "well-main";
@@ -109,7 +109,10 @@ function createHandler(dependencies = {}) {
     }
 
     const samples = samplesFromRecords(page.records, model);
-    const series = buildSeries(samples, { startMs, endMs, bucketMs });
+    // The curve comes from this window's own fills where it can, so it follows
+    // the well's water level through the seasons instead of freezing one fit.
+    const curve = deliveryCurve(samples);
+    const series = buildSeries(samples, { startMs, endMs, bucketMs, curve });
 
     return response(200, {
       status: series.buckets.some(bucket => bucket.gallons !== null) ? "ok" : "empty",
@@ -120,6 +123,10 @@ function createHandler(dependencies = {}) {
       recordCount: page.records.length,
       truncated: page.truncated,
       tankModel: model,
+      // Every figure here is an estimate; this says what the water-used estimate
+      // rests on, so the page can label it rather than imply a meter.
+      delivery: { basis: curve.basis, bands: curve.bands,
+                  gpmAt50Psi: Number((curve.intercept + curve.slopePerPsi * 50).toFixed(2)) },
       // ShellyEnergyWh is logging mode "none" in the live package, so no record
       // has ever carried it and energy cannot be totalled from history.
       energyAvailable: false,

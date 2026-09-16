@@ -3,8 +3,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  LEVEL_CARRY_LIMIT_MS, WINDOWS, buildSeries, recordField, samplesFromRecords,
-  tankModelFromDraft, tankWaterGallons
+  LEVEL_CARRY_LIMIT_MS, REFERENCE_DELIVERY, WINDOWS, buildSeries, deliveryCurve,
+  pumpDeliveryGpm, recordField, samplesFromRecords, tankModelFromDraft, tankWaterGallons
 } = require("../cloud/netlify/lib/observation-series");
 const { createHandler } = require("../cloud/netlify/functions/observation-series");
 
@@ -243,4 +243,104 @@ test("a missing tank draft degrades the live reading, not the recorded history",
 test("energy is reported unavailable, because no record has ever carried it", async () => {
   const reply = await call({});
   assert.equal(reply.energyAvailable, false);
+});
+
+
+// A fill at the reference curve's own rate, sampled every second, optionally
+// bleeding water out at the same time.
+function fill(fromPsi, toPsi, bleedGpm = 0, offsetMs = 0) {
+  const samples = [];
+  let psi = fromPsi;
+  let bled = 0;
+  for (let second = 0; psi < toPsi && second < 600; second += 1) {
+    const gallons = tankWaterGallons(psi, MODEL) - bled;
+    samples.push({ timeMs: T0 + offsetMs + second * 1000, gallons, psi, watts: 2900 });
+    const delivered = pumpDeliveryGpm(psi, REFERENCE_DELIVERY) / 60;
+    bled += bleedGpm / 60;
+    const next = tankWaterGallons(psi, MODEL) + delivered;
+    psi = MODEL.effectiveTankGallons * (MODEL.prechargeGaugePsi + MODEL.atmosphericPressurePsi)
+      / (MODEL.effectiveTankGallons - next) - MODEL.atmosphericPressurePsi;
+  }
+  return samples;
+}
+
+test("delivery is never nothing: too few fills falls back to the measured prior", () => {
+  const curve = deliveryCurve([]);
+  assert.equal(curve.basis, "reference");
+  assert.equal(curve.intercept, REFERENCE_DELIVERY.intercept);
+  // Every window yields a usable curve. Withholding an estimate is not an option
+  // the charts have; without flow meters on either leg they are all estimates.
+  assert.ok(Number.isFinite(pumpDeliveryGpm(50, curve)));
+});
+
+test("a window with its own fills derives its own curve, and flow falls with pressure", () => {
+  const curve = deliveryCurve(fill(40, 60));
+  assert.equal(curve.basis, "window");
+  assert.ok(curve.bands >= 3, `expected several pressure bands, got ${curve.bands}`);
+  assert.ok(curve.slopePerPsi < 0, "a centrifugal pump delivers less as head rises");
+  // Recovered from the fill rather than read from the prior, so it tracks the
+  // well's water level instead of freezing one August measurement.
+  assert.ok(Math.abs(pumpDeliveryGpm(50, curve) - pumpDeliveryGpm(50, REFERENCE_DELIVERY)) < 1.5);
+});
+
+test("a sample cadence finer than the minimum span still yields a curve", () => {
+  // Pairing only adjacent samples would find nothing in a 1 Hz capture.
+  assert.equal(deliveryCurve(fill(40, 60)).basis, "window");
+});
+
+test("delivery never goes negative however far the curve is extrapolated", () => {
+  assert.equal(pumpDeliveryGpm(500, REFERENCE_DELIVERY), 0);
+  assert.equal(pumpDeliveryGpm(null, REFERENCE_DELIVERY), 0);
+});
+
+test("draw during a fill is counted, where the tank's rise alone would hide it", () => {
+  const window = { startMs: T0, endMs: T0 + 600000, bucketMs: 300000, curve: REFERENCE_DELIVERY };
+  const quiet = buildSeries(fill(40, 60), window).totals.usedGallons;
+  const drawn = buildSeries(fill(40, 60, 3), window).totals.usedGallons;
+  // Three GPM through a fill of roughly two minutes is about six gallons that
+  // counting only the falls in level would have missed entirely.
+  assert.ok(drawn - quiet > 4, `expected the draw to show, got ${drawn} against ${quiet}`);
+});
+
+test("with the pump off the estimate collapses to the fall in level", () => {
+  const result = buildSeries([
+    { timeMs: T0, gallons: 24, psi: 60, watts: 12 },
+    { timeMs: T0 + 60000, gallons: 20, psi: 55, watts: 12 }
+  ], { startMs: T0, endMs: T0 + 300000, bucketMs: 300000, curve: REFERENCE_DELIVERY });
+  assert.equal(result.totals.usedGallons, 4);
+});
+
+test("pressure comes off the record, or is inverted from gallons when it is not", () => {
+  const [recorded, inverted] = samplesFromRecords([
+    v2(T0, { PressurePSI: 49.8, TankWaterGallons: 14.88 }),
+    v2(T0 + 1000, { TankWaterGallons: 14.88 })
+  ], MODEL);
+  assert.equal(recorded.psi, 49.8);
+  assert.equal(inverted.psi.toFixed(1), "49.8");
+});
+
+
+test("the curve follows the fastest fills, because those are the ones with no draw", () => {
+  // Three fills in one window: two with the house drawing hard, one quiet. The
+  // quiet one is the pump's actual delivery, and averaging them all would read
+  // the pump as far weaker than it is.
+  const busy = [
+    ...fill(40, 60, 6, 0),
+    ...fill(40, 60, 5, 1200000),
+    ...fill(40, 60, 0, 2400000)
+  ];
+  const curve = deliveryCurve(busy);
+  assert.equal(curve.basis, "window");
+  const derived = pumpDeliveryGpm(50, curve);
+  const quiet = pumpDeliveryGpm(50, deliveryCurve(fill(40, 60)));
+  assert.ok(Math.abs(derived - quiet) < 1.5,
+    `upper envelope should recover the quiet fill: ${derived.toFixed(2)} against ${quiet.toFixed(2)}`);
+  // An average over all three would be dragged down by the drawn fills.
+  assert.ok(derived > quiet - 3);
+});
+
+test("two pressure bands are not enough to fit a line through", () => {
+  // A fill spanning barely one band: a two-point fit would be confidently wrong.
+  const curve = deliveryCurve(fill(40, 44));
+  assert.equal(curve.basis, "reference");
 });
