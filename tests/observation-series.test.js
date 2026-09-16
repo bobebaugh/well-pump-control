@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { Timestamp } = require("firebase-admin/firestore");
 const {
   LEVEL_CARRY_LIMIT_MS, REFERENCE_DELIVERY, WINDOWS, buildSeries, deliveryCurve,
   pumpDeliveryGpm, recordField, samplesFromRecords, switchSummary, tankModelFromDraft,
@@ -70,6 +71,16 @@ test("records without a usable observation time are dropped, and the rest are or
   ], MODEL);
   assert.equal(samples.length, 2);
   assert.deepEqual(samples.map(sample => sample.gallons), [20, 10]);
+});
+
+test("stored Firestore timestamps are retained for both observation schemas", () => {
+  const second = v2(T0 + 5000, { TankWaterGallons: 10 });
+  second.time.observedAt = Timestamp.fromMillis(T0 + 5000);
+  const first = { schemaVersion: 1, observedAt: Timestamp.fromMillis(T0),
+                  values: { TankWaterGallons: 20 } };
+  const samples = samplesFromRecords([second, first], MODEL);
+  assert.deepEqual(samples.map(sample => [sample.timeMs, sample.gallons]),
+                   [[T0, 20], [T0 + 5000, 10]]);
 });
 
 function series(samples, bucketMs = 60000, spanMs = 600000) {
@@ -204,6 +215,16 @@ test("the endpoint serves a bucketed day by default", async () => {
   assert.equal(reply.buckets.length, 288);
   assert.deepEqual(reply.tankModel, MODEL);
   assert.equal(reply.totals.latestGallons, 21);
+});
+
+test("the endpoint charts an observation as Firestore returns it", async () => {
+  const record = v2(T0 - 60000, { TankWaterGallons: 21, PumpWatts: 12 });
+  record.time.observedAt = Timestamp.fromMillis(T0 - 60000);
+  const reply = await call({ records: [record] });
+  assert.equal(reply.statusCode, 200);
+  assert.equal(reply.status, "ok");
+  assert.equal(reply.totals.latestGallons, 21);
+  assert.ok(reply.buckets.some(bucket => bucket.gallons === 21));
 });
 
 test("the week window is served at its own bucket size", async () => {
