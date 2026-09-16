@@ -115,6 +115,29 @@ test("a pump start is counted once per run, not once per record", () => {
   assert.equal(result.buckets[0].runSeconds, 30);
 });
 
+test("a Shelly dropout mid-run is not a stop, and does not invent a second start", () => {
+  // The Sep 15 5:31:25 PM record: PumpWatts and ContactorFlag both unavailable.
+  const result = series([
+    { timeMs: T0, gallons: 20, watts: 12 },
+    { timeMs: T0 + 10000, gallons: 21, watts: 2900 },
+    { timeMs: T0 + 20000, gallons: 22, watts: null },
+    { timeMs: T0 + 30000, gallons: 23, watts: 2890 },
+    { timeMs: T0 + 40000, gallons: 24, watts: 12 }
+  ]);
+  assert.equal(result.totals.starts, 1);
+});
+
+test("the pump is on or off, so one threshold separates the states", () => {
+  // Idle at the well head is ~12 W; the motor runs at ~2900 W.
+  const result = series([
+    { timeMs: T0, gallons: 20, watts: 12.24 },
+    { timeMs: T0 + 2000, gallons: 20, watts: 2961.39 },
+    { timeMs: T0 + 120000, gallons: 26, watts: 12.2 }
+  ]);
+  assert.equal(result.totals.starts, 1);
+  assert.equal(result.totals.runSeconds, 118);
+});
+
 test("run time is attributed to the state the interval opened in", () => {
   const result = series([
     { timeMs: T0, gallons: 20, watts: 2800 },

@@ -14,11 +14,19 @@
 // record has ever carried them. Energy totals are not computable until that
 // changes.
 
-// Idle at the well head is about 12 W of network gear; the pump runs at about
-// 2800 W. Anything between those is unambiguous, so the pair below is a wide
-// hysteresis band rather than a tuned threshold.
+// The pump is on or off; there is no in between. Idle at the well head is about
+// 12 W of network gear and the motor runs at about 2900 W, so one threshold
+// anywhere between them separates the two states and no hysteresis band is
+// needed. What the count needs is edge detection, not a dead zone: a run
+// publishes a record every time its power drifts 50 W, and every one of those
+// is the same start.
+//
+// Power is deliberately the signal rather than ContactorFlag, which leads it by
+// about two seconds. The contactor flag is the pressure switch asking for the
+// pump; power is the motor actually running. During a Tab5 inhibit or a Shelly
+// lockout the switch closes and the pump correctly does not run, and counting
+// that as a start would corrupt the very statistic used to judge short cycling.
 const PUMP_RUNNING_WATTS = 500;
-const PUMP_STOPPED_WATTS = 200;
 
 // Past this the tank level on screen would be a guess rather than a reading. The
 // device publishes a durable record at least every 10 minutes, so a gap beyond
@@ -173,13 +181,14 @@ function buildSeries(samples, { startMs, endMs, bucketMs }) {
       }
     }
 
+    // An unavailable reading leaves the state alone. A Shelly dropout is not a
+    // stop, and treating it as one would invent a start when the reading returns.
     if (sample.watts !== null) {
-      if (!running && sample.watts >= PUMP_RUNNING_WATTS) {
-        running = true;
+      const wasRunning = running;
+      running = sample.watts >= PUMP_RUNNING_WATTS;
+      if (running && !wasRunning) {
         startsTotal += 1;
         if (index >= 0 && index < count) buckets[index].starts += 1;
-      } else if (running && sample.watts <= PUMP_STOPPED_WATTS) {
-        running = false;
       }
     }
 
@@ -224,6 +233,6 @@ function buildSeries(samples, { startMs, endMs, bucketMs }) {
 }
 
 module.exports = {
-  LEVEL_CARRY_LIMIT_MS, MAX_SERIES_ROWS, PUMP_RUNNING_WATTS, PUMP_STOPPED_WATTS, WINDOWS,
+  LEVEL_CARRY_LIMIT_MS, MAX_SERIES_ROWS, PUMP_RUNNING_WATTS, WINDOWS,
   buildSeries, recordField, recordTimeMs, samplesFromRecords, tankModelFromDraft, tankWaterGallons
 };
