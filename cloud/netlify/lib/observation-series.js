@@ -47,6 +47,18 @@ const LEVEL_CARRY_LIMIT_MS = 20 * 60 * 1000;
 // one is a bigger error than publishing it labelled.
 const REFERENCE_DELIVERY = { intercept: 28.477, slopePerPsi: -0.3001 };
 
+// While the pump runs the sensor reads pump discharge pressure, not settled tank
+// pressure. On the 2026-08-26 capture, taken with the house off so the whole
+// decline is the transient, the cut-out settles as
+//
+//   P(t) = 60.007 + 1.329 * exp(-t / 5.7 s)      RMS 0.038 psi
+//
+// a 1.265 psi step worth 0.94 gallons, with 1.449 psi the other way at cut-in.
+// Differencing a dynamic reading against a settled one charges that step to
+// consumption every cycle, which at ten cycles a day is thousands of phantom
+// gallons a year. Three time constants covers it.
+const PUMP_SETTLING_MS = 20000;
+
 // A fill rate is only evidence over a span long enough to outrun the 1 gallon
 // logging threshold.
 const DELIVERY_MIN_SPAN_MS = 4000;
@@ -255,50 +267,78 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
   let previous = null;
   let running = false;
   let startsTotal = 0;
+  // The last reading known to be settled, and the open cycle if the pump is
+  // running or still settling. Nothing outside a cycle is dynamic.
+  let settled = null;
+  let cycle = null;
 
   for (const sample of samples) {
     const index = Math.floor((sample.timeMs - startMs) / bucketMs);
-
     if (sample.gallons !== null && index >= 0 && index < count) {
-      // The level is a state, not a flow, so the bucket shows where the tank
-      // stood at its end rather than an average across it.
       buckets[index].gallons = sample.gallons;
     }
 
+    const wasRunning = previous !== null && previous.watts !== null &&
+      previous.watts >= PUMP_RUNNING_WATTS;
+
     if (previous) {
-      // Water used is what the pump delivered less what the tank kept.  With
-      // the pump off delivery is zero and this is just the fall in level; with
-      // it running the rise no longer hides the household draw underneath it.
-      //
-      // Counting only the falls would have undercounted a drawing-while-filling
-      // cycle roughly twofold, and by an amount that depends on how much use
-      // happens during runs -- a bias that moves is the one thing that would
-      // actually corrupt a year-over-year comparison.
-      if (previous.gallons !== null && sample.gallons !== null) {
-        const running = previous.watts !== null && previous.watts >= PUMP_RUNNING_WATTS;
-        const minutes = (sample.timeMs - previous.timeMs) / 60000;
-        const delivered = running ? pumpDeliveryGpm(previous.psi, curve) * minutes : 0;
-        const used = delivered - (sample.gallons - previous.gallons);
-        if (used > 0) spread(buckets, startMs, bucketMs, previous.timeMs, sample.timeMs, used, "used");
-      }
-      // The interval carries the state it began in: a record is published within
-      // 50 W of any change, so a span that opened at running current was running
-      // for its duration.
-      if (previous.watts !== null && previous.watts >= PUMP_RUNNING_WATTS) {
+      if (wasRunning) {
         spread(buckets, startMs, bucketMs, previous.timeMs, sample.timeMs,
                (sample.timeMs - previous.timeMs) / 1000, "runSeconds");
       }
+      if (cycle) {
+        if (wasRunning) {
+          // Delivery is integrated across the run; the level is not consulted
+          // at all until the tank has settled again.
+          cycle.delivered += pumpDeliveryGpm(previous.psi, curve) *
+            ((sample.timeMs - previous.timeMs) / 60000);
+          cycle.stoppedAtMs = null;
+        } else if (cycle.stoppedAtMs === null) {
+          cycle.stoppedAtMs = previous.timeMs;
+        }
+      } else if (previous.gallons !== null && sample.gallons !== null) {
+        // Both ends settled, so the fall in level is the water that left.
+        const fall = previous.gallons - sample.gallons;
+        if (fall > 0) {
+          spread(buckets, startMs, bucketMs, previous.timeMs, sample.timeMs, fall, "used");
+        }
+      }
     }
 
-    // An unavailable reading leaves the state alone. A Shelly dropout is not a
-    // stop, and treating it as one would invent a start when the reading returns.
     if (sample.watts !== null) {
-      const wasRunning = running;
-      running = sample.watts >= PUMP_RUNNING_WATTS;
-      if (running && !wasRunning) {
+      const stillRunning = sample.watts >= PUMP_RUNNING_WATTS;
+      if (stillRunning && !running) {
         startsTotal += 1;
         if (index >= 0 && index < count) buckets[index].starts += 1;
       }
+      running = stillRunning;
+      // A cycle opens anchored on the last SETTLED level, never on the reading
+      // beside it: by the time the pump is drawing current the sensor is already
+      // showing discharge pressure.
+      if (stillRunning && !cycle) {
+        cycle = { anchorGallons: settled?.gallons ?? null,
+                  anchorMs: settled?.timeMs ?? sample.timeMs,
+                  delivered: 0, stoppedAtMs: null };
+      }
+    }
+
+    if (cycle && cycle.stoppedAtMs !== null &&
+        sample.timeMs - cycle.stoppedAtMs >= PUMP_SETTLING_MS &&
+        sample.gallons !== null && !running) {
+      // Settled at both ends, so the dynamic offset is in both anchors and
+      // cancels. What the pump delivered and the tank did not keep, the house
+      // drew -- including whatever it drew while the tank was refilling.
+      if (cycle.anchorGallons !== null) {
+        const used = cycle.delivered - (sample.gallons - cycle.anchorGallons);
+        if (used > 0) {
+          spread(buckets, startMs, bucketMs, cycle.anchorMs, sample.timeMs, used, "used");
+        }
+      }
+      cycle = null;
+      settled = sample;
+    } else if (!cycle && sample.gallons !== null &&
+               sample.watts !== null && sample.watts < PUMP_RUNNING_WATTS) {
+      settled = sample;
     }
 
     previous = sample;

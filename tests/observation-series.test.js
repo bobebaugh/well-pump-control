@@ -246,23 +246,42 @@ test("energy is reported unavailable, because no record has ever carried it", as
 });
 
 
-// A fill at the reference curve's own rate, sampled every second, optionally
-// bleeding water out at the same time.
-function fill(fromPsi, toPsi, bleedGpm = 0, offsetMs = 0) {
+// A pump cycle as the records actually carry one: settled idle, the fill, then
+// settled idle again. The sensor reads discharge pressure through the run, so a
+// realistic fixture has to bracket it with readings that are not dynamic.
+function cycle(fromPsi, toPsi, bleedGpm = 0, offsetMs = 0) {
   const samples = [];
-  let psi = fromPsi;
-  let bled = 0;
-  for (let second = 0; psi < toPsi && second < 600; second += 1) {
-    const gallons = tankWaterGallons(psi, MODEL) - bled;
-    samples.push({ timeMs: T0 + offsetMs + second * 1000, gallons, psi, watts: 2900 });
-    const delivered = pumpDeliveryGpm(psi, REFERENCE_DELIVERY) / 60;
-    bled += bleedGpm / 60;
-    const next = tankWaterGallons(psi, MODEL) + delivered;
-    psi = MODEL.effectiveTankGallons * (MODEL.prechargeGaugePsi + MODEL.atmosphericPressurePsi)
-      / (MODEL.effectiveTankGallons - next) - MODEL.atmosphericPressurePsi;
+  const at = second => T0 + offsetMs + second * 1000;
+  const psiOf = level =>
+    MODEL.effectiveTankGallons * (MODEL.prechargeGaugePsi + MODEL.atmosphericPressurePsi)
+      / (MODEL.effectiveTankGallons - level) - MODEL.atmosphericPressurePsi;
+  // The dynamic offset appears the instant the pump draws current and is gone
+  // once it settles, so it is in the running readings and in neither anchor.
+  const OFFSET_PSI = 1.35;
+
+  let level = tankWaterGallons(fromPsi, MODEL);
+  let second = 0;
+  for (; second < 20; second += 1) {
+    samples.push({ timeMs: at(second), gallons: level, psi: psiOf(level), watts: 12 });
+  }
+  for (; psiOf(level) < toPsi && second < 600; second += 1) {
+    const psi = psiOf(level);
+    samples.push({ timeMs: at(second), psi: psi + OFFSET_PSI,
+                   gallons: tankWaterGallons(psi + OFFSET_PSI, MODEL), watts: 2900 });
+    // Water is conserved: a house drawing during the fill makes the tank rise
+    // more slowly, it does not merely relabel the level.
+    level += (pumpDeliveryGpm(psi, REFERENCE_DELIVERY) - bleedGpm) / 60;
+  }
+  // The offset does not vanish the instant the contactor opens; it decays with
+  // the 5.7 s time constant measured on the 2026-08-26 capture.
+  for (let rest = 0; rest < 60; rest += 1, second += 1) {
+    const psi = psiOf(level) + OFFSET_PSI * Math.exp(-rest / 5.7);
+    samples.push({ timeMs: at(second), gallons: tankWaterGallons(psi, MODEL), psi, watts: 12 });
   }
   return samples;
 }
+
+const fill = cycle;
 
 test("delivery is never nothing: too few fills falls back to the measured prior", () => {
   const curve = deliveryCurve([]);
@@ -295,11 +314,62 @@ test("delivery never goes negative however far the curve is extrapolated", () =>
 
 test("draw during a fill is counted, where the tank's rise alone would hide it", () => {
   const window = { startMs: T0, endMs: T0 + 600000, bucketMs: 300000, curve: REFERENCE_DELIVERY };
-  const quiet = buildSeries(fill(40, 60), window).totals.usedGallons;
-  const drawn = buildSeries(fill(40, 60, 3), window).totals.usedGallons;
-  // Three GPM through a fill of roughly two minutes is about six gallons that
-  // counting only the falls in level would have missed entirely.
+  const quiet = buildSeries(cycle(40, 60), window).totals.usedGallons;
+  const result = buildSeries(cycle(40, 60, 3), window);
+  const drawn = result.totals.usedGallons;
+  // Three GPM through the fill is water that counting only the falls in level
+  // would have missed entirely, and the figure has to be right, not merely
+  // non-zero: closing the cycle before the tank settles undercounts it by about
+  // a gallon of still-decaying discharge pressure.
+  const expected = 3 * (result.totals.runSeconds / 60);
   assert.ok(drawn - quiet > 4, `expected the draw to show, got ${drawn} against ${quiet}`);
+  assert.ok(Math.abs(drawn - expected) < 0.8,
+    `expected about ${expected.toFixed(2)} gal drawn, got ${drawn}`);
+});
+
+test("the pump's own discharge pressure does not become water used", () => {
+  // A cycle with nobody drawing. Every psi of the 1.35 dynamic offset appears
+  // as a fall in level the moment the pump cuts; differencing a dynamic reading
+  // against a settled one would charge about a gallon of it to consumption.
+  const window = { startMs: T0, endMs: T0 + 600000, bucketMs: 300000, curve: REFERENCE_DELIVERY };
+  const used = buildSeries(cycle(40, 60), window).totals.usedGallons;
+  assert.ok(used < 0.5, `a quiet cycle should use almost nothing, got ${used} gal`);
+});
+
+test("a dropped reading just before a start does not lose the cycle", () => {
+  // The record immediately before the pump starts has no tank level -- the
+  // 5:31:25 PM case, where the Shelly read failed. The anchor is the last level
+  // actually known to be settled, not whichever record happens to sit adjacent.
+  const full = cycle(40, 60, 3);
+  const firstRun = full.findIndex(sample => sample.watts > 500);
+  const gapped = full.map((sample, index) =>
+    index === firstRun - 1 ? { ...sample, gallons: null } : sample);
+  const window = { startMs: T0, endMs: T0 + 600000, bucketMs: 300000, curve: REFERENCE_DELIVERY };
+  const intact = buildSeries(full, window).totals.usedGallons;
+  const dropped = buildSeries(gapped, window).totals.usedGallons;
+  assert.ok(dropped > 4, `one missing record should not zero the cycle, got ${dropped}`);
+  assert.ok(Math.abs(dropped - intact) < 0.3, `${dropped} against ${intact}`);
+});
+
+test("a run already under way when the window opens has no settled anchor", () => {
+  // Records begin mid-fill, so the earliest level is discharge pressure. There
+  // is no honest opening anchor and the cycle is not charged, rather than being
+  // anchored on a reading inflated by about a gallon.
+  const full = cycle(40, 60);
+  const midRun = full.slice(full.findIndex(sample => sample.watts > 500) + 10);
+  const result = buildSeries(midRun, { startMs: T0, endMs: T0 + 600000,
+                                       bucketMs: 300000, curve: REFERENCE_DELIVERY });
+  assert.equal(result.totals.usedGallons, 0);
+});
+
+test("a cycle still open at the window edge is not charged on a dynamic reading", () => {
+  // The run has started but never settled again, so there is no honest closing
+  // anchor and nothing is attributed rather than a guess from discharge pressure.
+  const open = cycle(40, 60).filter(sample => sample.watts > 500);
+  const result = buildSeries(open, { startMs: T0, endMs: T0 + 600000,
+                                     bucketMs: 300000, curve: REFERENCE_DELIVERY });
+  assert.equal(result.totals.usedGallons, 0);
+  assert.equal(result.totals.starts, 1);
 });
 
 test("with the pump off the estimate collapses to the fall in level", () => {
