@@ -84,7 +84,9 @@ test("nothing in the page assumes a nominal switch band or tank rating", () => {
 });
 
 test("the tank model is actually fetched, or the maths above never runs", () => {
-  assert.match(app, /observation-series\?window=1d/);
+  assert.match(app, /observation-series\?window=\$\{encodeURIComponent\(windowKey\)\}/);
+  // The tank cutaway needs the day window specifically, and that is the default.
+  assert.match(app, /let historyWindow = "1d"/);
   assert.match(app, /if \(data\.tankModel\) tankModel = data\.tankModel/);
   assert.match(app, /pressureSwitch\?\.cycles > 0\) pressureSwitch = data\.pressureSwitch/);
   // Fetched at load and again when the tab comes back, not only on a timer.
@@ -94,4 +96,45 @@ test("the tank model is actually fetched, or the maths above never runs", () => 
 test("the tank shows gallons beside the pressure", () => {
   assert.match(html, /id="tank-gallons"/);
   assert.match(app, /tankGallons\.textContent = water === null \? "—" : `\$\{water\.toFixed\(1\)\} gal`/);
+});
+
+test("the motor-power placeholder is gone, replaced by the history panel", () => {
+  // "Not worth graphing" -- the panel that never had a data source.
+  assert.doesNotMatch(html, /Motor power/);
+  assert.doesNotMatch(html, /No telemetry received/);
+  assert.doesNotMatch(html, /Pressure overlay reserved/);
+  assert.match(html, /id="history-chart"/);
+  assert.match(html, /id="history-caption"/);
+});
+
+test("the chart offers all three views and both intervals", () => {
+  for (const view of ["gallons", "used", "starts"]) {
+    assert.match(html, new RegExp(`data-view="${view}"`));
+  }
+  for (const range of ["1d", "7d"]) {
+    assert.match(html, new RegExp(`data-window="${range}"`));
+  }
+});
+
+test("the chart module loads before the script that uses it", () => {
+  assert.ok(html.indexOf("/history-chart.js") < html.indexOf("/app.js"),
+    "history-chart.js must be parsed before app.js references HistoryChart");
+});
+
+test("the three dead tiles carry real figures, and energy is not among them", () => {
+  // Energy is not computable at all: ShellyEnergyWh is logging mode "none" in
+  // the live package, so no durable record has ever carried it.
+  assert.doesNotMatch(html, /Energy today/);
+  assert.doesNotMatch(html, /Last cycle/);
+  for (const id of ["stat-used", "stat-starts", "stat-run"]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  // They are always the last 24 hours, whatever window the chart is showing.
+  assert.match(app, /historyData\["1d"\]\?\.totals/);
+  assert.match(app, /await loadHistory\("1d"\)/);
+});
+
+test("switching view does not refetch, and switching window caches per window", () => {
+  assert.match(app, /if \(historyData\[historyWindow\]\) \{ renderHistory\(\); return; \}/);
+  assert.match(app, /historyData\[windowKey\] = data/);
 });

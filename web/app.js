@@ -8,6 +8,15 @@ const pumpState = document.querySelector("#pump-state");
 const pressureValue = document.querySelector("#pressure-value");
 const tankPressure = document.querySelector("#tank-pressure");
 const tankGallons = document.querySelector("#tank-gallons");
+const historyTitle = document.querySelector("#history-title");
+const historyHero = document.querySelector("#history-hero");
+const historyChart = document.querySelector("#history-chart");
+const historyCaption = document.querySelector("#history-caption");
+const statUsed = document.querySelector("#stat-used");
+const statStarts = document.querySelector("#stat-starts");
+const statRun = document.querySelector("#stat-run");
+const historyViewButtons = [...document.querySelectorAll("#history-view button")];
+const historyRangeButtons = [...document.querySelectorAll("#history-range button")];
 const tankWater = document.querySelector("#tank-water");
 const pressureTag = document.querySelector("#pressure-tag");
 const pressureRow = document.querySelector("#health-pressure");
@@ -52,6 +61,11 @@ let tankModel = null;
 let pressureSwitch = null;
 let observationTimer;
 let historyTimer;
+let historyView = "gallons";
+let historyWindow = "1d";
+// Keyed by window: switching between chart views must not refetch, and the two
+// windows are cached separately so flipping back is instant.
+const historyData = {};
 let telemetryTimer;
 let monitoringUntil = 0;
 let operatorBusy = false;
@@ -353,6 +367,50 @@ function clearObservation() {
 // History moves slowly and the endpoint caches, so this is nothing like the
 // live cadence. It carries the tank model and the observed switch band, which
 // are what let the cutaway show water rather than a pressure ratio.
+function runTimeText(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0 min";
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+// The tiles are always the last 24 hours whatever the chart is showing, so they
+// read off the day series rather than the selected window. Energy is absent by
+// necessity: ShellyEnergyWh is logging mode "none", so no record carries it.
+function renderDayStats() {
+  const totals = historyData["1d"]?.totals;
+  if (!totals) return;
+  statUsed.textContent = `${totals.usedGallons ?? 0} gal`;
+  statStarts.textContent = `${totals.starts ?? 0}`;
+  statRun.textContent = runTimeText(totals.runSeconds);
+}
+
+function renderHistory() {
+  const data = historyData[historyWindow];
+  const spec = HistoryChart.VIEWS[historyView];
+  historyTitle.textContent = spec.title;
+  if (!data) {
+    historyCaption.textContent = "Loading history\u2026";
+    return;
+  }
+  const totals = data.totals || {};
+  historyHero.textContent = historyView === "gallons"
+    ? (totals.latestGallons === null ? "\u2014" : `${totals.latestGallons} gal`)
+    : historyView === "used"
+      ? `${totals.usedGallons ?? 0} gal`
+      : `${totals.starts ?? 0}`;
+  HistoryChart.mount(historyChart, data, historyView, historyWindow);
+  historyCaption.textContent = HistoryChart.caption(data, historyView);
+}
+
+async function loadHistory(windowKey) {
+  const data = await fetchStatus(
+    `/.netlify/functions/observation-series?window=${encodeURIComponent(windowKey)}`);
+  historyData[windowKey] = data;
+  if (data.tankModel) tankModel = data.tankModel;
+  if (data.pressureSwitch?.cycles > 0) pressureSwitch = data.pressureSwitch;
+  return data;
+}
+
 async function checkHistory() {
   clearTimeout(historyTimer);
   if (document.hidden) {
@@ -360,13 +418,54 @@ async function checkHistory() {
     return;
   }
   try {
-    const data = await fetchStatus("/.netlify/functions/observation-series?window=1d");
-    if (data.tankModel) tankModel = data.tankModel;
-    if (data.pressureSwitch?.cycles > 0) pressureSwitch = data.pressureSwitch;
+    // The day window is always refreshed: the tank cutaway and the 24h tiles
+    // both need it even when the chart is showing the week.
+    await loadHistory("1d");
+    if (historyWindow !== "1d") await loadHistory(historyWindow);
+    renderDayStats();
+    renderHistory();
   } catch (error) {
     // The cutaway degrades on its own; the pressure readout is unaffected.
+    if (!historyData[historyWindow]) historyCaption.textContent = "History unavailable";
   }
   historyTimer = setTimeout(checkHistory, HISTORY_REFRESH_MS);
+}
+
+function selectHistory(buttons, attribute, value) {
+  buttons.forEach(button => button.classList.toggle("on", button.dataset[attribute] === value));
+}
+
+historyViewButtons.forEach(button => button.addEventListener("click", () => {
+  historyView = button.dataset.view;
+  selectHistory(historyViewButtons, "view", historyView);
+  renderHistory();
+}));
+
+historyRangeButtons.forEach(button => button.addEventListener("click", async () => {
+  historyWindow = button.dataset.window;
+  selectHistory(historyRangeButtons, "window", historyWindow);
+  if (historyData[historyWindow]) { renderHistory(); return; }
+  historyCaption.textContent = "Loading history\u2026";
+  try {
+    await loadHistory(historyWindow);
+  } catch (error) {
+    historyCaption.textContent = "History unavailable";
+    return;
+  }
+  renderHistory();
+}));
+
+// The SVG is drawn at measured pixel widths so strokes are not scaled, which
+// means a resize needs a redraw rather than a stretch.
+if (typeof ResizeObserver === "function") {
+  let lastWidth = 0;
+  new ResizeObserver(entries => {
+    const width = Math.round(entries[0].contentRect.width);
+    if (width && width !== lastWidth && historyData[historyWindow]) {
+      lastWidth = width;
+      renderHistory();
+    }
+  }).observe(historyChart);
 }
 
 async function checkObservation() {

@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#09111f">
   <title>Well Pump Monitoring — Pilot</title>
   <link rel="stylesheet" href="/styles.css">
+  <script src="/history-chart.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -105,30 +106,35 @@
         </div>
 
         <div class="mini-grid">
-          <div><span>Last cycle</span><strong>—</strong></div>
-          <div><span>Starts today</span><strong>—</strong></div>
-          <div><span>Energy today</span><strong>—</strong></div>
+          <div><span>Water used, 24h</span><strong id="stat-used">—</strong></div>
+          <div><span>Starts, 24h</span><strong id="stat-starts">—</strong></div>
+          <div><span>Run time, 24h</span><strong id="stat-run">—</strong></div>
         </div>
       </article>
 
       <article class="panel trend-panel">
         <div class="panel-heading">
           <div>
-            <p class="kicker">LIVE TREND</p>
-            <h2>Motor power</h2>
+            <p class="kicker">HISTORY</p>
+            <h2 id="history-title">Tank water</h2>
           </div>
-          <span class="tag">60-minute view</span>
+          <strong class="hero" id="history-hero">—</strong>
         </div>
-        <div class="chart-shell" role="img" aria-label="Power trend waiting for telemetry">
-          <div class="y-labels"><span>3 kW</span><span>2 kW</span><span>1 kW</span><span>0</span></div>
-          <div class="chart-grid">
-            <div class="empty-chart">
-              <strong>No telemetry received</strong>
-              <span>The chart will begin when Tab5 reporting is connected.</span>
-            </div>
+        <div class="chart-controls">
+          <div class="segmented" id="history-view" role="group" aria-label="Chart">
+            <button type="button" data-view="gallons" class="on">Tank water</button>
+            <button type="button" data-view="used">Water used</button>
+            <button type="button" data-view="starts">Pump starts</button>
+          </div>
+          <div class="segmented" id="history-range" role="group" aria-label="Interval">
+            <button type="button" data-window="1d" class="on">1 day</button>
+            <button type="button" data-window="7d">1 week</button>
           </div>
         </div>
-        <div class="chart-legend"><span><i class="legend-power"></i>Active power</span><span class="muted">Pressure overlay reserved</span></div>
+        <figure class="chart-figure">
+          <div class="chart-canvas" id="history-chart"></div>
+          <figcaption class="chart-caption" id="history-caption">Loading history…</figcaption>
+        </figure>
       </article>
 
       <article class="panel health-panel">

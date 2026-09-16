@@ -148,6 +148,64 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
 .mini-grid span { display: block; color: var(--muted); font-size: .62rem; }
 .mini-grid strong { display: block; margin-top: 5px; font-size: .85rem; }
 
+/* Chart marks. Stepped down from the page hues so they sit in the dark-mode
+   lightness band against the panel surface; validated for contrast and, for the
+   three together, CVD separation. Only one series is ever drawn at a time. */
+:root {
+  --chart-level: #2b87e0;
+  --chart-used: #33a866;
+  --chart-starts: #c2882a;
+}
+.hero { font-size: 1.45rem; font-weight: 600; letter-spacing: -.01em; color: var(--text); }
+.chart-controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; margin-top: 16px; }
+.segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.segmented button {
+  padding: 6px 12px; border: 0; background: transparent; color: var(--muted);
+  font: inherit; font-size: .72rem; cursor: pointer;
+}
+.segmented button + button { border-left: 1px solid var(--line); }
+.segmented button:hover { color: var(--text); background: rgba(132, 158, 190, .08); }
+.segmented button.on { background: var(--panel-2); color: var(--text); }
+.segmented button:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+.chart-figure { margin: 14px 0 0; }
+.chart-canvas { position: relative; min-height: 260px; }
+.chart-caption { margin-top: 10px; color: var(--muted); font-size: .68rem; }
+
+.hc-grid { stroke: var(--line-soft); stroke-width: 1; }
+.hc-axis { fill: var(--muted); font-size: 10px; }
+/* paint-order puts the stroke behind the glyph, so the label knocks a halo out
+   of whatever mark it lands on rather than colliding with the trace. */
+.hc-peak {
+  fill: #c6d3e1; font-size: 10px; font-weight: 600;
+  paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round;
+}
+.hc-cross { stroke: rgba(198, 211, 225, .45); stroke-width: 1; stroke-dasharray: 3 3; }
+.hc-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.hc-area { opacity: .18; }
+.hc-bar { stroke: none; }
+/* Two-class selectors deliberately: a bare .hc-gallons setting fill would win
+   over .hc-line's fill:none on equal specificity and flood the line into a
+   filled wedge. Each element states both properties. */
+.hc-line.hc-gallons { stroke: var(--chart-level); fill: none; }
+.hc-line.hc-used { stroke: var(--chart-used); fill: none; }
+.hc-line.hc-starts { stroke: var(--chart-starts); fill: none; }
+.hc-area.hc-gallons { fill: var(--chart-level); stroke: none; }
+.hc-area.hc-used { fill: var(--chart-used); stroke: none; }
+.hc-area.hc-starts { fill: var(--chart-starts); stroke: none; }
+.hc-bar.hc-gallons { fill: var(--chart-level); stroke: none; }
+.hc-bar.hc-used { fill: var(--chart-used); stroke: none; }
+.hc-bar.hc-starts { fill: var(--chart-starts); stroke: none; }
+.hc-hit { cursor: crosshair; }
+.hc-tip {
+  position: absolute; top: 6px; padding: 5px 9px; border: 1px solid var(--line);
+  border-radius: 7px; background: rgba(7, 16, 29, .95); color: var(--text);
+  font-size: .7rem; white-space: nowrap; pointer-events: none;
+}
+.hc-empty { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; padding: 20px; }
+.hc-empty strong { color: #c6d3e1; font-size: .9rem; }
+.hc-empty span { display: block; max-width: 300px; margin-top: 7px; color: var(--muted); font-size: .72rem; }
+
 .chart-shell { height: 260px; margin-top: 20px; display: grid; grid-template-columns: 38px 1fr; }
 .y-labels { display: flex; flex-direction: column; justify-content: space-between; padding: 0 7px 16px 0; color: var(--muted); font-size: .62rem; text-align: right; }
 .chart-grid {
