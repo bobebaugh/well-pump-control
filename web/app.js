@@ -32,13 +32,18 @@ const LIVE_REFRESH_MS = 1000;
 // live readings follow that rather than the 60s Firestore cadence. Polling
 // faster than the device writes only burns requests for the same record.
 const OBSERVATION_REFRESH_MS = 2000;
-// The tank cutaway shows WATER, as a fraction of the tank's effective volume,
-// not pressure on a linear scale. A precharged tank at 50 psi is about a fifth
-// full of water while sitting three quarters of the way up a 0-70 psi scale, so
-// the old drawing was showing a nearly full tank that held almost nothing.
+// The tank cutaway shows WATER against the range this system actually uses.
 //
-// Nothing here assumes a 40/60 switch: the tank model comes from the saved rules
-// and the operating band is whatever the history observed.
+// Two scales were wrong before. Pressure on a linear 0-70 scale drew a tank 71%
+// full at 49.8 psi when it held 14.9 of 79.3 gallons, because a precharged
+// tank's water content is a Boyle function of pressure, not a linear one. And
+// no absolute full mark is meaningful: the tank is rated to 150 psi, nobody
+// runs one there, and a normal band is anywhere from 30-50 to 40-60 depending
+// on where the tank sits.
+//
+// So the cutaway runs empty at the observed cut-in and full at the observed
+// cut-out -- the usable drawdown, which is the water actually available before
+// the pump has to run. Both ends are measured from history, never assumed.
 // Both filled in from the history endpoint; until it answers, the cutaway falls
 // back to pressure against the observed band rather than inventing a model.
 let tankModel = null;
@@ -63,11 +68,16 @@ function tankWaterGallons(psi) {
 
 function tankFillPercent(psi) {
   const water = tankWaterGallons(psi);
-  if (water !== null) return (water / tankModel.effectiveTankGallons) * 100;
-  // No model yet: scale against the band this system was observed to run in,
-  // never a nominal full mark.
-  const full = pressureSwitch?.fullPsi;
-  return full ? (psi / full) * 100 : 0;
+  if (water === null) return 0;
+  const low = tankWaterGallons(pressureSwitch?.cutInPsi);
+  const high = tankWaterGallons(pressureSwitch?.fullPsi);
+  // Until a completed cycle has been seen, fall back to water as a fraction of
+  // the tank -- honest, just always low-looking, since even at cut-out a
+  // bladder tank is only about a third water.
+  if (low === null || high === null || !(high > low)) {
+    return (water / tankModel.effectiveTankGallons) * 100;
+  }
+  return ((water - low) / (high - low)) * 100;
 }
 
 function formatTime(date) {

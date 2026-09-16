@@ -4,7 +4,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   LEVEL_CARRY_LIMIT_MS, REFERENCE_DELIVERY, WINDOWS, buildSeries, deliveryCurve,
-  pumpDeliveryGpm, recordField, samplesFromRecords, tankModelFromDraft, tankWaterGallons
+  pumpDeliveryGpm, recordField, samplesFromRecords, switchSummary, tankModelFromDraft,
+  tankWaterGallons
 } = require("../cloud/netlify/lib/observation-series");
 const { createHandler } = require("../cloud/netlify/functions/observation-series");
 
@@ -240,6 +241,14 @@ test("a missing tank draft degrades the live reading, not the recorded history",
   assert.equal(reply.totals.latestGallons, 19);
 });
 
+test("the reply carries the precharge disagreement the gallons output cannot show", async () => {
+  const reply = await call({});
+  assert.equal(reply.prechargeCheck.stored, 38);
+  // No completed cycle in this fixture, so nothing is implied and nothing is claimed.
+  assert.equal(reply.prechargeCheck.implied, null);
+  assert.equal(reply.prechargeCheck.deltaPsi, null);
+});
+
 test("energy is reported unavailable, because no record has ever carried it", async () => {
   const reply = await call({});
   assert.equal(reply.energyAvailable, false);
@@ -351,12 +360,29 @@ test("the pressure switch is measured, not assumed to be 40/60", () => {
   assert.equal(result.fullPsi, result.settledPsi);
 });
 
+test("cut-in implies the precharge, which pressure alone can never check", () => {
+  const window = { startMs: T0, endMs: T0 + 600000, bucketMs: 300000, curve: REFERENCE_DELIVERY };
+  // A bladder tank is charged 2 psi below cut-in.
+  const result = buildSeries(cycle(40, 60), window).pressureSwitch;
+  assert.equal(result.impliedPrechargePsi, Number((result.cutInPsi - 2).toFixed(2)));
+
+  // The rule holds wherever the switch is set. A tank in a garage might run
+  // 30/50, one feeding an upstairs 40/60 or higher; nothing here is tied to a
+  // band, and the 150 psi tank rating is not a full mark for any of them.
+  const garage = switchSummary([{ cutInPsi: 30, tripPsi: 51.3, settledPsi: 50 }]);
+  assert.equal(garage.impliedPrechargePsi, 28);
+  assert.equal(garage.fullPsi, 50);
+  const upstairs = switchSummary([{ cutInPsi: 60, tripPsi: 91.3, settledPsi: 90 }]);
+  assert.equal(upstairs.impliedPrechargePsi, 58);
+});
+
 test("a window with no completed cycle reports no switch reading rather than a default", () => {
   const result = buildSeries([], { startMs: T0, endMs: T0 + 600000,
                                    bucketMs: 300000, curve: REFERENCE_DELIVERY });
   assert.equal(result.pressureSwitch.cycles, 0);
   assert.equal(result.pressureSwitch.cutInPsi, null);
   assert.equal(result.pressureSwitch.fullPsi, null);
+  assert.equal(result.pressureSwitch.impliedPrechargePsi, null);
 });
 
 test("switch readings average across the cycles in the window", () => {

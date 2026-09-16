@@ -65,6 +65,16 @@ async function savedTankModel(site) {
   return snapshot.exists ? tankModelFromDraft(snapshot.data().items) : null;
 }
 
+// A bladder losing air over a season shifts every gallon on the screen by a
+// constant amount with nothing else to show for it. Surfacing the disagreement
+// is not the same as acting on it: the stored parameter stays the operator's.
+function prechargeCheck(model, pressureSwitch) {
+  const stored = model?.prechargeGaugePsi ?? null;
+  const implied = pressureSwitch?.impliedPrechargePsi ?? null;
+  if (stored === null || implied === null) return { stored, implied, deltaPsi: null };
+  return { stored, implied, deltaPsi: Number((stored - implied).toFixed(2)) };
+}
+
 function createHandler(dependencies = {}) {
   const firestore = dependencies.firestore || getPilotFirestore;
   const now = dependencies.now || Date.now;
@@ -132,6 +142,9 @@ function createHandler(dependencies = {}) {
       // ShellyEnergyWh is logging mode "none" in the live package, so no record
       // has ever carried it and energy cannot be totalled from history.
       energyAvailable: false,
+      // The one check the gallons output cannot provide: it is computed from
+      // the stored precharge, so it can never contradict it. Cut-in can.
+      prechargeCheck: prechargeCheck(model, series.pressureSwitch),
       ...series
     }, window);
   };

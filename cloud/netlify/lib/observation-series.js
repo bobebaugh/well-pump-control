@@ -59,6 +59,10 @@ const REFERENCE_DELIVERY = { intercept: 28.477, slopePerPsi: -0.3001 };
 // gallons a year. Three time constants covers it.
 const PUMP_SETTLING_MS = 20000;
 
+// Standard practice for a bladder tank: charge the air side 2 psi below the
+// switch's cut-in.
+const PRECHARGE_BELOW_CUT_IN_PSI = 2;
+
 // A fill rate is only evidence over a span long enough to outrun the 1 gallon
 // logging threshold.
 const DELIVERY_MIN_SPAN_MS = 4000;
@@ -247,15 +251,24 @@ function mean(values) {
 }
 
 function switchSummary(switches) {
+  const cutIn = mean(switches.map(item => item.cutInPsi));
   return {
     cycles: switches.length,
-    cutInPsi: mean(switches.map(item => item.cutInPsi)),
+    cutInPsi: cutIn,
     cutOutPsi: mean(switches.map(item => item.tripPsi)),
     settledPsi: mean(switches.map(item => item.settledPsi)),
     // The tank graphic needs a full mark. The settled cut-out is where this tank
     // actually tops out; falling back on a constant would draw a picture of
-    // somebody else's system.
-    fullPsi: mean(switches.map(item => item.settledPsi))
+    // somebody else's system. The tank is RATED to 150 psi and nobody runs one
+    // there, so the rating is not a full mark either.
+    fullPsi: mean(switches.map(item => item.settledPsi)),
+    // A bladder tank is charged 2 psi below cut-in, so a measured cut-in implies
+    // the precharge it was set up with. The stored parameter cannot be checked
+    // against pressure any other way -- the gallons output is computed FROM it,
+    // so it can never disagree with itself -- and a bladder that slowly loses
+    // air over a year would otherwise bias every gallon on the screen with
+    // nothing to show for it.
+    impliedPrechargePsi: cutIn === null ? null : Number((cutIn - PRECHARGE_BELOW_CUT_IN_PSI).toFixed(2))
   };
 }
 
@@ -415,7 +428,8 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
 }
 
 module.exports = {
-  LEVEL_CARRY_LIMIT_MS, MAX_SERIES_ROWS, PUMP_RUNNING_WATTS, REFERENCE_DELIVERY, WINDOWS,
+  LEVEL_CARRY_LIMIT_MS, MAX_SERIES_ROWS, PRECHARGE_BELOW_CUT_IN_PSI, PUMP_RUNNING_WATTS,
+  REFERENCE_DELIVERY, WINDOWS,
   buildSeries, deliveryCurve, pumpDeliveryGpm, recordField, recordTimeMs, samplesFromRecords,
   switchSummary, tankModelFromDraft, tankWaterGallons
 };
