@@ -7,6 +7,16 @@ interfaces/ for cross-application work. FUTURE.md preserves ideas, not authority
 implement them. Do not reconstruct milestone history or revive archived proposals.
 The owner's current instructions take precedence.
 
+This beta is past major surgery. Architecture rewrites, file-wide reformatting,
+re-platforming and new control authority are out of scope. A proposal to start
+one, including from the owner, gets this reminder and a smaller alternative
+before any work begins. Cleanup never ends; that is not a reason to start.
+
+Verify against the deployed artifact, never a seed or a stored fixture.
+rules-engine-defaults.js seeds a fresh draft; tests/fixtures/ holds dated
+snapshots. The authoritative package is the saved Firestore draft and the
+authoritative device files are the installed ones.
+
 ## Small fixes with minimum overhead
 
 - Use pilot-working for web/cloud and tab5-working for device/Shelly work. Retain
