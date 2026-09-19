@@ -61,6 +61,51 @@ harness or raw setters as an unattended operational recovery system; they can re
 the protection script from service. Deliberate Shelly reboot can interrupt a running
 pump and clears volatile local lock/strike state.
 
+## RPC command reference
+
+Every command is a plain HTTP GET, so a browser address bar is a working client.
+These are the exact forms `pilot.py` sends, percent-encoded as sent. The device
+also accepts literal brackets typed by hand, but a hand-typed URL is not
+byte-for-byte the request Tab5 makes, which has already cost one debugging
+session. Prefer these.
+
+Component ids are assigned at creation and move when the components are rebuilt —
+`IsLocked` has been seen at both 201 and 202 — so read them back rather than
+trusting an id copied from here. Nothing in Tab5 or the bench page hard-codes one.
+
+Discover the components by name (`SHELLY_1_COMPONENTS_URL`):
+
+```
+http://192.168.50.201/rpc/Shelly.GetComponents?dynamic_only=true&include=%5B%22config%22%2C%22status%22%5D
+```
+
+`%5B%22config%22%2C%22status%22%5D` decodes to `["config","status"]`. Expect
+exactly three components, each with its id in `config.id`.
+
+The steady-state acquisition read (`SHELLY_1_FILTERED_URL`) asks for every key one
+cycle needs. The unfiltered call paginates and truncates, so it is never used for
+acquisition:
+
+```
+http://192.168.50.201/rpc/Shelly.GetComponents?keys=%5B%22switch%3A0%22%2C%22input%3A0%22%2C%22number%3A201%22%2C%22number%3A202%22%2C%22boolean%3A200%22%5D&include=%5B%22config%22%2C%22status%22%5D
+```
+
+The device silently omits a key it does not have — no error, no placeholder — and
+`total` counts only what matched, so a missing component is indistinguishable from
+a short page by the reply alone. Presence-check every key, and look results up by
+key rather than by position.
+
+Write the Tab5 inhibition flag (`SHELLY_1_BOOLEAN_SET_URL`), `value` true or false:
+
+```
+http://192.168.50.201/rpc/Boolean.Set?id=200&value=true
+```
+
+**The reply must be a bare JSON `null`.** `_issue_boolean_set` accepts HTTP 200
+with a body of exactly `null` and nothing else — not `{}`, not an error-free
+object. Anything else returns `invalid-response`, no retry is made that cycle, and
+the inhibition silently never applies.
+
 ## Bench tools — only during authorized maintenance
 
 test-harness-attaching.js declares nothing and uses the components provisioned by
