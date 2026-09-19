@@ -33,3 +33,24 @@ test("status UI distinguishes rejected authentication, missing configuration, an
   assert.match(app, /Owner key accepted; current control status is unavailable/);
   assert.match(app, /Control status unavailable; no command was retried/);
 });
+
+test("the operator poll stops against a hidden tab, and resumes when it returns", () => {
+  // The heaviest poll in the page: one call reads four RTDB children, the
+  // current observation among them, and it was the only poller with no
+  // visibility guard -- 17,280 calls and 69,120 RTDB reads a day against a
+  // screen nobody was looking at.
+  assert.match(app, /if \(document\.hidden && !promptForKey\) \{\s*operatorTimer = setTimeout\(checkOperatorStatus, 5000\);\s*return;/);
+  // Unlocking is a deliberate click, so it must not be swallowed by the guard.
+  assert.match(app, /document\.hidden && !promptForKey/);
+  const visibility = app.slice(app.indexOf('addEventListener("visibilitychange"'));
+  assert.match(visibility, /checkOperatorStatus\(\)/);
+});
+
+test("every repeating poll now has a visibility guard", () => {
+  for (const poller of ["checkObservation", "checkHistory", "checkOperatorStatus"]) {
+    const start = app.indexOf(`async function ${poller}(`);
+    assert.notEqual(start, -1, `${poller} is missing`);
+    const body = app.slice(start, start + 900);
+    assert.match(body, /document\.hidden/, `${poller} polls a hidden tab`);
+  }
+});

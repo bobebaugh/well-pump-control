@@ -27,6 +27,14 @@ const READER_CLAIMS = {
   purpose: "operator-control"
 };
 
+// An ID token is good for an hour, and Netlify reuses a warm container across
+// invocations, so minting one per request meant a full custom-token mint plus an
+// Identity Toolkit exchange on every poll -- tens of thousands of round trips a
+// day for a token that had barely aged. Same shape the operator store already
+// uses, renewed ahead of expiry so a request never carries one that dies mid-read.
+const TOKEN_RENEWAL_MARGIN_MS = 60000;
+const DEFAULT_TOKEN_LIFETIME_MS = 3600000;
+
 const jsonHeaders = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store"
@@ -50,17 +58,35 @@ function createHandler(dependencies = {}) {
   const fetchImpl = dependencies.fetch || globalThis.fetch;
   const now = dependencies.now || Date.now;
 
+  let cachedToken = null;
+  let exchangeInFlight = null;
+
   async function readerToken() {
-    const { auth, projectId } = firebase.getPilotAuth();
-    if (projectId !== "well-pump-control") throw new Error("configuration_missing");
-    const customToken = await auth.createCustomToken(OPERATOR_UID, READER_CLAIMS);
-    const reply = await fetchImpl(
-      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(env.FIREBASE_WEB_API_KEY)}`,
-      { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: customToken, returnSecureToken: true }) });
-    const body = await reply.json().catch(() => null);
-    if (!reply.ok || typeof body?.idToken !== "string") throw new Error("reader_auth_failed");
-    return body.idToken;
+    if (cachedToken && now() < cachedToken.renewAtMs) return cachedToken.idToken;
+    // One exchange in flight at a time: concurrent invocations on a warm
+    // container should share the mint rather than each start their own.
+    if (!exchangeInFlight) {
+      exchangeInFlight = (async () => {
+        const { auth, projectId } = firebase.getPilotAuth();
+        if (projectId !== "well-pump-control") throw new Error("configuration_missing");
+        const customToken = await auth.createCustomToken(OPERATOR_UID, READER_CLAIMS);
+        const reply = await fetchImpl(
+          `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(env.FIREBASE_WEB_API_KEY)}`,
+          { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: customToken, returnSecureToken: true }) });
+        const body = await reply.json().catch(() => null);
+        if (!reply.ok || typeof body?.idToken !== "string") throw new Error("reader_auth_failed");
+        const seconds = Number(body.expiresIn);
+        const lifetimeMs = Number.isFinite(seconds) && seconds > 0
+          ? seconds * 1000 : DEFAULT_TOKEN_LIFETIME_MS;
+        cachedToken = {
+          idToken: body.idToken,
+          renewAtMs: now() + Math.max(lifetimeMs - TOKEN_RENEWAL_MARGIN_MS, Math.floor(lifetimeMs / 2))
+        };
+        return cachedToken.idToken;
+      })().finally(() => { exchangeInFlight = null; });
+    }
+    return exchangeInFlight;
   }
 
   return async function currentObservation(event) {

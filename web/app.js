@@ -190,6 +190,14 @@ async function checkOperatorStatus({ promptForKey = false } = {}) {
   clearTimeout(operatorTimer);
   const key = sessionStorage.getItem("pilotMonitorKey") || (promptForKey ? pilotKey() : null);
   if (!key) return;
+  // This is the heaviest poll in the page -- one call reads four RTDB children,
+  // including the whole current observation -- and it was the only one that kept
+  // running against a screen nobody was looking at. The visibilitychange handler
+  // brings it straight back.
+  if (document.hidden && !promptForKey) {
+    operatorTimer = setTimeout(checkOperatorStatus, 5000);
+    return;
+  }
   try {
     const body = await fetchStatus("/.netlify/functions/operator-control", {
       headers: { "X-Pilot-Key": key }
@@ -606,6 +614,7 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
     checkObservation();
     checkHistory();
+    checkOperatorStatus();
   }
 });
 

@@ -142,3 +142,71 @@ test("it reads the path Tab5 writes, and only answers GET", async () => {
   const rejected = await handler({ httpMethod: "POST" });
   assert.equal(rejected.statusCode, 405);
 });
+
+test("the reader token is minted once and reused across polls", async () => {
+  // At a two-second poll, minting per request meant a custom-token mint plus an
+  // Identity Toolkit exchange tens of thousands of times a day for a token good
+  // for an hour.
+  const { handler, calls } = handlerFor(observation());
+  for (let poll = 0; poll < 5; poll += 1) await handler({ httpMethod: "GET" });
+  const exchanges = calls.filter(call => String(call.url).includes("identitytoolkit"));
+  const reads = calls.filter(call => String(call.url).includes("currentObservation"));
+  assert.equal(reads.length, 5, "every poll must still read the record");
+  assert.equal(exchanges.length, 1, `expected one token exchange, got ${exchanges.length}`);
+});
+
+test("a token is renewed before it expires rather than used until it fails", async () => {
+  let clock = NOW;
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, options });
+    if (String(url).includes("identitytoolkit")) {
+      // Firebase returns expiresIn as seconds, in a string.
+      return { ok: true, async json() { return { idToken: "token-abc", expiresIn: "3600" }; } };
+    }
+    return { ok: true, async json() { return observation(); } };
+  };
+  const handler = createHandler({
+    env: { FIREBASE_WEB_API_KEY: "key",
+           FIREBASE_RTDB_URL: "https://well-pump-control-default-rtdb.firebaseio.com" },
+    firebase: { getPilotAuth: () => ({ projectId: "well-pump-control",
+      auth: { async createCustomToken() { return "custom"; } } }) },
+    fetch: fetchImpl,
+    now: () => clock
+  });
+
+  await handler({ httpMethod: "GET" });
+  clock += 3500 * 1000;                       // still inside the renewal margin
+  await handler({ httpMethod: "GET" });
+  assert.equal(calls.filter(c => String(c.url).includes("identitytoolkit")).length, 1);
+
+  clock += 300 * 1000;                        // past it
+  await handler({ httpMethod: "GET" });
+  assert.equal(calls.filter(c => String(c.url).includes("identitytoolkit")).length, 2);
+});
+
+test("a failed exchange is not cached, so the next poll retries", async () => {
+  let ok = false;
+  const calls = [];
+  const handler = createHandler({
+    env: { FIREBASE_WEB_API_KEY: "key",
+           FIREBASE_RTDB_URL: "https://well-pump-control-default-rtdb.firebaseio.com" },
+    firebase: { getPilotAuth: () => ({ projectId: "well-pump-control",
+      auth: { async createCustomToken() { return "custom"; } } }) },
+    fetch: async url => {
+      calls.push(String(url));
+      if (String(url).includes("identitytoolkit")) {
+        return ok ? { ok: true, async json() { return { idToken: "t", expiresIn: "3600" }; } }
+                  : { ok: false, async json() { return {}; } };
+      }
+      return { ok: true, async json() { return observation(); } };
+    },
+    now: () => NOW
+  });
+
+  const first = await handler({ httpMethod: "GET" });
+  assert.equal(first.statusCode, 502);
+  ok = true;
+  const second = await handler({ httpMethod: "GET" });
+  assert.equal(second.statusCode, 200);
+});
