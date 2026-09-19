@@ -4,22 +4,54 @@ A staged monitoring and supervisory-control project for a private well system.
 
 ## Current status
 
-The current pilot is **observational only**. It uses the installed Gen-1 Shelly EM as its sole physical input and proves this vertical slice:
+The current pilot is **observational**. It reads three physical inputs:
+
+- the Gen-1 **Shelly EM** (house side) — pump watts, supply voltage, power factor, load ratio
+- a **Shelly 1** (wellhead) — contactor state and control-circuit status
+- a **pressure transducer** on the Tab5's own ADC — system pressure
 
 ```text
-Shelly EM local API -> Tab5 -> authenticated Netlify function -> Firestore
-                              |                         |
-                           Tab5 HMI                 Web HMI
+Shelly EM + Shelly 1 + pressure ADC -> Tab5 -> authenticated Netlify function -> Firestore
+                                         |                          |
+                                      Tab5 HMI                   Web HMI
 ```
 
-The pilot must not start, stop, inhibit, or otherwise control the pump.
+## Control authority, as built
 
-## Safety boundary
+Stated plainly, because the wiring permits more than the software currently does.
+
+The contactor coil has two gated legs:
+
+- **+24 VDC leg** — gated by the garage WELL ENABLE wall switch and the mechanical pressure switch, in series. Nothing in this project touches this leg.
+- **0 V / ground leg** — gated by the automation: the wellhead maximum-runtime timer contact and the Shelly 1 relay contact, in series, when the selector is in **Auto**.
+
+**HAND** (and the center `0` position) hard-grounds the coil return, removing both the original timer and the Shelly 1 from the circuit entirely. Pressure-switch and wall-switch control remain. This is the fallback when an automation component fails.
+
+What follows from that:
+
+- This project has **no pump-start authority in any selector position.** It cannot close the +24 VDC leg, so it cannot start the pump.
+- In **Auto**, the Shelly 1 relay sits in series in the 0 V leg and **is physically capable of inhibiting the pump.** This is a deliberate provision for later phases, not an oversight.
+- **The Shelly 1 relay leads are presently disconnected for testing.** The device is powered and reporting, and its SW input senses contactor state, but its relay contacts are not in the circuit. Reconnecting them restores the inhibit capability described above.
+
+## Owner responsibility
+
+This is a privately owned well system. The owner specified, wired, and commissioned it, and the owner operates it.
+
+The owner is responsible for:
+
+- deciding what authority, if any, this software is given over the pump, and physically wiring that decision
+- verifying the state of the Shelly 1 relay leads before treating any run as unattended
+- setting and verifying the start delay (`t1`) and maximum runtime (`t2`)
+- all testing, commissioning, and acceptance of changes to the control circuit
+- conformance with applicable electrical and plumbing practice
+
+No AI assistant, code review, automated test, or document in this repository carries that responsibility or can discharge it. Nothing here is a safety device. Treat every output as advisory and verify it against the installed system.
+
+## Engineering boundary
 
 - Existing mechanical and hardwired well controls remain authoritative.
-- Tab5 must never gain pump-start authority.
 - Netlify and Firestore are not part of immediate pump protection.
-- No existing protection may be removed or weakened until a replacement has been separately designed, tested, accepted, installed, and documented.
+- No existing protection may be removed or weakened until a replacement has been separately designed, tested, accepted, installed, and documented by the owner.
 - Never commit Wi-Fi credentials, bearer tokens, Firebase credentials, or other secrets.
 
 ## Branches
