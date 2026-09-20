@@ -112,8 +112,20 @@ records. Silence never closes an event; disappearance/restart closes have unknow
 device close times. A revision guards the RTDB mirror from delayed overwrites.
 Events entirely between delivered boards may be absent from cloud history.
 
-The web home displays live RTDB observations and event state, with legacy power
-telemetry also retained. The record browser supports selected columns, event/session
-navigation, paging, date anchors and daily CSV export. Reporting time, acquisition
-time, inferred closure and transport age must remain distinct. The legacy
-current-power freshness limitation is deferred in FUTURE, not described as fixed.
+The web home displays live RTDB observations and event state. Every live reading,
+the pump badge and the Tab5/meter/Shelly 1 health rows come from one observation
+record, so the state and the numbers beside it are the same instant. The badge
+reads SW(0) directly and falls back to meter watts only when Shelly 1 is
+unavailable; unknown is a distinct state and is never shown as stopped. The page
+displays a disagreement between the contactor and motor current without judging
+it; the rules engine owns what one means. The record browser supports selected
+columns, event/session navigation, paging, date anchors and daily CSV export.
+Reporting time, acquisition time, inferred closure and transport age must remain
+distinct. Device age on screen is the server-stamped receipt, so a resent
+observation cannot present itself as fresh.
+
+ingest-power still accepts device telemetry and writes the Firestore current
+document, which no longer has a reader; it remains only until the device's
+cloud_available formula stops depending on its result. current-power and
+monitor-session are retired, and with them the 1 Hz live view. User Monitor is a
+separate RTDB operator control and is unaffected.

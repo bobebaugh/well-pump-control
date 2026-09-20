@@ -94,9 +94,6 @@ exports.handler = async function ingestPower(event) {
     const { db } = getPilotFirestore();
     const site = db.collection("sites").doc(SITE_ID);
     const current = site.collection("current").doc("well-power");
-    const device = site.collection("devices").doc(telemetry.deviceId);
-    const eventRecord = site.collection("events").doc();
-    const monitoring = site.collection("control").doc("monitoring");
     const startThresholdW = configuredThreshold("PUMP_START_THRESHOLD_W", 1000, 100, 10000);
     const stopThresholdW = configuredThreshold("PUMP_STOP_THRESHOLD_W", 100, 0, 9999);
 
@@ -116,62 +113,37 @@ exports.handler = async function ingestPower(event) {
       ...(telemetry.observation === undefined ? {} : { observation: telemetry.observation })
     };
 
+    // The devices/{id} and events/{auto-id} writes are gone: neither had a reader
+    // anywhere in cloud/ or web/. The control/monitoring read went with the 1 Hz
+    // live view, so the transaction is one read rather than two. The device
+    // treats an absent monitoring object in the reply as success by design, so
+    // dropping it from the response cannot turn an accepted write into a retry.
+    //
+    // The current/well-power write stays deliberately. Nothing reads it now that
+    // the dashboard is sourced from the RTDB observation -- it is not a write the
+    // cleanup missed. Retiring this endpoint is Phase 2 and needs the device's
+    // cloud_available formula re-referenced first; minimal change wins until then.
     const outcome = await db.runTransaction(async transaction => {
-      const [previous, monitoringSnapshot] = await Promise.all([
-        transaction.get(current),
-        transaction.get(monitoring)
-      ]);
+      const previous = await transaction.get(current);
       const previousRunning = previous.exists && typeof previous.data().pumpRunning === "boolean"
         ? previous.data().pumpRunning
         : null;
-      const monitoringData = monitoringSnapshot.exists ? monitoringSnapshot.data() : {};
-      const monitoringExpiresAt = monitoringData.expiresAt && typeof monitoringData.expiresAt.toMillis === "function"
-        ? monitoringData.expiresAt.toMillis()
-        : 0;
-      const monitoringActive = monitoringData.active === true && monitoringExpiresAt > Date.now();
       const pumpRunning = classifyPumpRunning(
         telemetry.values.powerW,
         previousRunning,
         startThresholdW,
         stopThresholdW
       );
-      const stateChanged = previousRunning !== null && pumpRunning !== previousRunning;
 
       transaction.set(current, {
         ...common,
         pumpRunning,
         thresholds: { startW: startThresholdW, stopW: stopThresholdW }
       });
-      // Current telemetry already proves liveness. Keep the device metadata
-      // document sparse so a 1 Hz live session costs one write, not two.
-      if (stateChanged || telemetry.publishReason === "manual-test") {
-        transaction.set(device, {
-          deviceType: "shelly-em-gen1",
-          channel: 0,
-          gateway: "tab5",
-          lastSeenAt: FieldValue.serverTimestamp(),
-          pumpRunning
-        }, { merge: true });
-      }
-
-      if (stateChanged) {
-        transaction.create(eventRecord, {
-          schemaVersion: 1,
-          eventType: pumpRunning ? "pump-started" : "pump-stopped",
-          deviceId: telemetry.deviceId,
-          observedAt: Timestamp.fromDate(telemetry.observedAt),
-          receivedAt: FieldValue.serverTimestamp(),
-          powerW: telemetry.values.powerW,
-          voltageV: telemetry.values.voltageV
-        });
-      }
 
       return {
         pumpRunning,
-        stateChanged,
-        eventId: stateChanged ? eventRecord.id : null,
-        monitoringActive,
-        monitoringUntil: monitoringActive ? new Date(monitoringExpiresAt).toISOString() : null
+        stateChanged: previousRunning !== null && pumpRunning !== previousRunning
       };
     });
 
@@ -182,12 +154,7 @@ exports.handler = async function ingestPower(event) {
       measurementType: "well-power",
       currentDocument: "sites/well-main/current/well-power",
       pumpRunning: outcome.pumpRunning,
-      stateChanged: outcome.stateChanged,
-      eventId: outcome.eventId,
-      monitoring: {
-        active: outcome.monitoringActive,
-        until: outcome.monitoringUntil
-      }
+      stateChanged: outcome.stateChanged
     });
   } catch (error) {
     if (error instanceof ContractError) {

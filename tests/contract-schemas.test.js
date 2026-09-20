@@ -332,11 +332,7 @@ test("V3 runtime schema accepts typed generic session working fields", () => {
 
 test("protected pilot functions and telemetry contract match the reviewed baselines", () => {
   const expected = {
-    "cloud/netlify/functions/ingest-power.js": "70986d473b9ede3d3589193a5d38b20c80af54a0655bbf46f80da074141a362e",
-    // M6.10 extends only this read response with status already stored inside
-    // the complete observation. Ingest behavior and the legacy values remain.
-    "cloud/netlify/functions/current-power.js": "f2c1f1a5e42a672cdce7de5c0493fe9078b09f76fbcf493c862c6157427e64be",
-    "cloud/netlify/functions/monitor-session.js": "14b7b478a92872e2276d7b359212aa56c5324b0b3ebccd08762a16843553e177",
+    "cloud/netlify/functions/ingest-power.js": "3a833c14f361d036cf34c1fade0beafe20bff8d553e447a64705fdf74bd87273",
     "cloud/netlify/functions/firebase-status.js": "056590d9bd3b034cb8edba81822685bfee71ad24f0dc37d71d94f1cae36c0fe0",
     "cloud/netlify/functions/health.js": "59b3b43001d439108faee31fe566f2ae4f79346887692c2a75b44d2d23d73421",
     "cloud/netlify/lib/power-contract.js": "78eeed600c71cb1da373e12f3e677889b1b6894d27a7c0fdc5be296f60cb258f",

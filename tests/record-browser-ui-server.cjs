@@ -15,9 +15,6 @@ http.createServer((request, response) => {
   if (["/.netlify/functions/health", "/.netlify/functions/firebase-status"].includes(url.pathname)) {
     response.writeHead(200, { "Content-Type": "application/json" }); response.end('{"status":"ok"}'); return;
   }
-  if (url.pathname === "/.netlify/functions/current-power") {
-    response.writeHead(404, { "Content-Type": "application/json" }); response.end('{"status":"error","code":"telemetry_missing"}'); return;
-  }
   if (url.pathname === "/.netlify/functions/record-browser") {
     const receipt = url.searchParams.get("view") === "receipt";
     const session = url.searchParams.get("view") === "session";

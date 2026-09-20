@@ -34,7 +34,8 @@ function observation(over = {}) {
     observedAt: "2026-09-15T18:00:08Z",
     receivedAtMs: Date.parse("2026-09-15T18:00:08Z"),
     values: { pressure_psi: 50.0018, adc_raw: 14307, power: 2800.0, voltage: 240.0,
-              pf: 0.98, battery_percent: 78, shelly1_sw0: true, shelly1_rly0: false,
+              pf: 0.98, is_valid: true, battery_percent: 78,
+              shelly1_sw0: true, shelly1_rly0: false,
               shelly1_lock: 0, shelly1_lockout_count: 0, shelly1_tab5lock: false },
     status: { shelly1_available: true, shelly_available: true,
               pressure_sensor_commissioned: true, pressure_valid: true },
@@ -60,7 +61,7 @@ test("every live reading comes from the one record, so they share an instant", a
   const reply = await body(observation());
   assert.deepEqual(reply.values, {
     pressurePsi: 50.0018, adcRaw: 14307, powerW: 2800, voltageV: 240,
-    powerFactor: 0.98, batteryPercent: 78
+    powerFactor: 0.98, isValid: true, batteryPercent: 78
   });
   assert.deepEqual(reply.shelly1, {
     available: true, sw0: true, rly0: false,
@@ -88,7 +89,34 @@ test("a missing or unusable value is null rather than a guess", async () => {
   assert.equal(reply.values.voltageV, null);
   assert.equal(reply.values.powerFactor, null);
   assert.equal(reply.shelly1.sw0, null);
+  assert.equal(reply.values.isValid, null);
   assert.equal(reply.pressureCommissioned, null);
+});
+
+test("meter validity is reported apart from meter reachability", async () => {
+  // Two different failures. shellyAvailable says the meter answered; isValid is
+  // the meter's own verdict on the numbers it gave. The pump badge falls back to
+  // watts on a Shelly 1 dropout and must not act on a reading the meter itself
+  // disowns, so collapsing these would put a bad measurement behind the badge.
+  const valid = await body(observation());
+  assert.equal(valid.values.isValid, true);
+  assert.equal(valid.shellyAvailable, true);
+
+  const bad = await body(observation({
+    values: { ...observation().values, is_valid: false },
+    status: { shelly1_available: true, shelly_available: true }
+  }));
+  assert.equal(bad.values.isValid, false);
+  assert.equal(bad.shellyAvailable, true, "a reachable meter can still report a bad reading");
+
+  // A dropout leaves no verdict at all. Absent evidence stays null so it can
+  // never be read as the meter having reported something invalid.
+  const gone = await body(observation({
+    values: { power: 2800.0 },
+    status: { shelly_available: false }
+  }));
+  assert.equal(gone.values.isValid, null);
+  assert.equal(gone.shellyAvailable, false);
 });
 
 test("an absent record is reported as empty, not as an error", async () => {

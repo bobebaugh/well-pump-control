@@ -4,10 +4,11 @@
 //
 // Tab5 mirrors its COMPLETE observation to
 // v1/sites/well-main/devices/tab5-well-main/currentObservation on its own
-// cadence, which is far faster than the Firestore current document that
-// current-power reads. Everything the home screen shows live comes from here:
-// pressure, power, voltage, power factor and the Shelly 1 contacts, all from
-// one record so they are the same instant rather than assembled from two reads.
+// cadence, far faster than the 60s Firestore path this replaced. Everything the
+// home screen shows live comes from here: pressure, power, voltage, power
+// factor, meter validity, the Shelly 1 contacts, the pump badge and the health
+// rows -- all from one record so they are the same instant rather than a state
+// from one read sitting beside numbers from another.
 
 const { _approvedRtdbUrl } = require("../lib/rules-store");
 const { OPERATOR_UID } = require("../lib/operator-control-store");
@@ -142,6 +143,11 @@ function createHandler(dependencies = {}) {
         powerW: numberOrNull(values.power),
         voltageV: numberOrNull(values.voltage),
         powerFactor: numberOrNull(values.pf),
+        // The meter's own verdict on the reading beside it. Distinct from
+        // status.shelly_available below: that says the meter answered, this says
+        // the numbers it gave are usable. A dropout leaves this null rather than
+        // false, so absent evidence never reads as a bad measurement.
+        isValid: booleanOrNull(values.is_valid),
         batteryPercent: numberOrNull(values.battery_percent)
       },
       shelly1: {

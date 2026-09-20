@@ -46,7 +46,7 @@ No separate database or second password is needed just to maintain two web versi
 
 Every supported mutation endpoint checks X-Pilot-Key against PILOT_INGEST_TOKEN
 server-side before processing the request: rules-engine, rules-admin, operator-control,
-monitor-session, ingest-power, ingest-record, event-board and device-sync. Missing or
+ingest-power, ingest-record, event-board and device-sync. Missing or
 wrong passwords cannot use those endpoints to change rules or request a reboot.
 The public GET endpoints intentionally expose monitoring/history; this is not a
 private-data login. Backend Firebase credentials and temporary device tokens are

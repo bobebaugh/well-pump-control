@@ -25,8 +25,6 @@ const voltageValue = document.querySelector("#voltage-value");
 const pfValue = document.querySelector("#pf-value");
 const sw0Value = document.querySelector("#sw0-value");
 const rly0Value = document.querySelector("#rly0-value");
-const monitorButton = document.querySelector("#monitor-toggle");
-const monitorStatus = document.querySelector("#monitor-status");
 const eventStatus = document.querySelector("#event-browser-status");
 const openEvents = document.querySelector("#open-events");
 const closedEvents = document.querySelector("#closed-events");
@@ -36,8 +34,6 @@ const operatorEvidence = document.querySelector("#operator-evidence");
 const restartConsequence = document.querySelector("#restart-consequence");
 const operatorButtons = [...document.querySelectorAll(".control-button")];
 
-const NORMAL_REFRESH_MS = 60000;
-const LIVE_REFRESH_MS = 1000;
 // Tab5 mirrors its whole observation to RTDB about every two seconds, so the
 // live readings follow that rather than the 60s Firestore cadence. Polling
 // faster than the device writes only burns requests for the same record.
@@ -66,8 +62,6 @@ let historyWindow = "1d";
 // Keyed by window: switching between chart views must not refetch, and the two
 // windows are cached separately so flipping back is instant.
 const historyData = {};
-let telemetryTimer;
-let monitoringUntil = 0;
 let operatorBusy = false;
 let operatorTimer;
 let lastOperatorStatus = null;
@@ -268,47 +262,69 @@ async function issueOperatorAction(action) {
   }
 }
 
-function renderTelemetry(data) {
-  const values = data.values || {};
+// SW0 is the contactor itself. The Shelly 1 relay supplies the contactor coil's
+// ground path, so the flag is true only when 240 VAC actually reached the pump
+// control box -- see the signal topology in DESIGN.md. That makes the badge a
+// boolean passthrough: no threshold, no hysteresis, and no pump-domain judgement
+// living in the page.
+//
+// Watts is the fallback for a Shelly 1 dropout only, and it answers a different
+// question: current in the motor rather than power at the contactor. The two
+// disagree in exactly the cases the rules engine exists to catch, so the page
+// shows both readings and judges neither. Issue #12 owns what a disagreement
+// means and what happens about it.
+const PUMP_PRESENT_WATTS = 100;
+
+function pumpBadgeState(data, fresh) {
+  if (!fresh) return null;
+
   const shelly1 = data.shelly1 || {};
-  const fresh = data.ageSeconds !== null && data.ageSeconds <= 150;
-  const stateText = !fresh ? "Telemetry stale" : (data.pumpRunning ? "RUNNING" : "STOPPED");
-  const stateClass = !fresh ? "stale" : (data.pumpRunning ? "running" : "stopped");
+  if (shelly1.available === true && typeof shelly1.sw0 === "boolean") {
+    return { running: shelly1.sw0, degraded: false };
+  }
 
-  pumpState.className = `pump-state ${stateClass}`;
-  pumpState.querySelector("strong").textContent = stateText;
-  powerValue.textContent = Number.isFinite(values.powerW) ? values.powerW.toFixed(0) : "—";
-  voltageValue.textContent = Number.isFinite(values.voltageV) ? values.voltageV.toFixed(1) : "—";
-  pfValue.textContent = Number.isFinite(values.powerFactor) ? values.powerFactor.toFixed(2) : "—";
-  setBinaryValue(sw0Value, shelly1.sw0);
-  setBinaryValue(rly0Value, shelly1.rly0);
+  const values = data.values || {};
+  if (values.isValid === true && Number.isFinite(values.powerW)) {
+    return { running: values.powerW > PUMP_PRESENT_WATTS, degraded: true };
+  }
 
-  const ageText = data.ageSeconds === null ? "Timestamp unavailable" : `Last report ${data.ageSeconds}s ago`;
-  setHealth(tab5Row, fresh ? "online" : "checking", ageText);
-  setHealth(shellyRow, values.isValid === true ? "online" : "offline", values.isValid === true ? "Meter valid" : "Meter invalid");
+  return null;
+}
+
+// Unknown is a distinct state, never STOPPED. STOPPED is a positive claim that
+// the contactor was read and is open; saying it when nothing could be read would
+// be the one reading on this page capable of actively misleading.
+function renderPumpBadge(state) {
+  if (state === null) {
+    pumpState.className = "pump-state unknown";
+    pumpState.querySelector("strong").textContent = "Pump state unknown";
+    return;
+  }
+
+  pumpState.className = `pump-state ${state.running ? "running" : "stopped"}`;
+  pumpState.querySelector("strong").textContent =
+    `${state.running ? "RUNNING" : "STOPPED"}${state.degraded ? " · from watts" : ""}`;
+}
+
+// Reachability and validity are different failures and are reported as such: a
+// meter that cannot be read is not a meter reporting a bad reading.
+function renderMeterHealth(data) {
+  const values = data.values || {};
+  if (values.isValid === true) setHealth(shellyRow, "online", "Meter valid");
+  else if (values.isValid === false) setHealth(shellyRow, "offline", "Meter invalid");
+  else if (data.shellyAvailable === false) setHealth(shellyRow, "offline", "Not reachable from Tab5");
+  else setHealth(shellyRow, "unavailable", "Meter state unknown");
+}
+
+function renderShelly1Health(shelly1) {
   if (shelly1.available === true) {
-    const mismatch = fresh && typeof shelly1.sw0 === "boolean" && shelly1.sw0 !== data.pumpRunning;
-    const state = !fresh ? "checking" : (mismatch ? "offline" : "online");
-    const detail = mismatch
-      ? `SW0 ${shelly1.sw0 ? "ON" : "OFF"} does not match pump state · RLY0 ${shelly1.rly0 ? "ON" : "OFF"}`
-      : `SW0 ${shelly1.sw0 ? "ON" : "OFF"} · RLY0 ${shelly1.rly0 ? "ON" : "OFF"}`;
-    setHealth(shelly1Row, state, detail);
+    setHealth(shelly1Row, "online",
+      `SW0 ${shelly1.sw0 ? "ON" : "OFF"} · RLY0 ${shelly1.rly0 ? "ON" : "OFF"}`);
   } else if (shelly1.available === false) {
     setHealth(shelly1Row, "offline", "Not reachable from Tab5 · relay state unknown");
   } else {
     setHealth(shelly1Row, "unavailable", "Firmware has not reported Shelly 1 yet");
   }
-}
-
-function clearTelemetry() {
-  pumpState.className = "pump-state unknown";
-  pumpState.querySelector("strong").textContent = "Waiting for telemetry";
-  powerValue.textContent = "—";
-  voltageValue.textContent = "—";
-  pfValue.textContent = "—";
-  setBinaryValue(sw0Value, null);
-  setBinaryValue(rly0Value, null);
-  setHealth(shelly1Row, "unavailable", "Awaiting Tab5 telemetry");
 }
 
 function renderObservation(data) {
@@ -359,6 +375,15 @@ function renderObservation(data) {
     if (typeof shelly1.sw0 === "boolean") setBinaryValue(sw0Value, shelly1.sw0);
     if (typeof shelly1.rly0 === "boolean") setBinaryValue(rly0Value, shelly1.rly0);
   }
+
+  // The badge and these rows read the same record as everything above, so the
+  // state and the watts beside it are one instant. That disagreement between a
+  // 60s badge and a 2s power figure is what this replaced.
+  renderPumpBadge(pumpBadgeState(data, fresh));
+  renderMeterHealth(data);
+  renderShelly1Health(shelly1);
+  setHealth(tab5Row, fresh ? "online" : "checking",
+    data.ageSeconds === null ? "Timestamp unavailable" : `Last report ${data.ageSeconds}s ago`);
 }
 
 function clearObservation() {
@@ -370,6 +395,15 @@ function clearObservation() {
   pressureTag.textContent = "Pressure telemetry unavailable";
   pressureTag.className = "tag unavailable";
   setHealth(pressureRow, "unavailable", "Awaiting Tab5 telemetry");
+  pumpState.className = "pump-state unknown";
+  pumpState.querySelector("strong").textContent = "Waiting for telemetry";
+  powerValue.textContent = "—";
+  voltageValue.textContent = "—";
+  pfValue.textContent = "—";
+  setBinaryValue(sw0Value, null);
+  setBinaryValue(rly0Value, null);
+  setHealth(shellyRow, "unavailable", "Awaiting Tab5 telemetry");
+  setHealth(shelly1Row, "unavailable", "Awaiting Tab5 telemetry");
 }
 
 // History moves slowly and the endpoint caches, so this is nothing like the
@@ -487,6 +521,10 @@ async function checkObservation() {
     renderObservation(await fetchStatus("/.netlify/functions/current-observation"));
   } catch (error) {
     if (error.body?.code === "telemetry_missing") clearObservation();
+    // The read failed rather than the device going quiet, so the age on screen
+    // proves nothing. Say the row is unavailable instead of ageing a number
+    // nothing refreshed.
+    else setHealth(tab5Row, "offline", "Telemetry unavailable");
   }
   observationTimer = setTimeout(checkObservation, OBSERVATION_REFRESH_MS);
 }
@@ -496,6 +534,10 @@ function eventLink(event) { const cycle = event?.opening?.cycleSequence || 0; re
 function escapeEventHtml(value) { return String(value ?? "").replace(/[&<>\"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]); }
 function eventCard(event, close = null) { const severity = String(event.severity || "Info").toLowerCase(); const opening = event?.opening?.observedAt ? `Device opening ${escapeEventHtml(eventTime(event.opening.observedAt))}` : `Device opening time unknown${event?.firstReportedAt ? `; first reported ${escapeEventHtml(eventTime(event.firstReportedAt))}` : ""}`; const closure = close ? `<span>Closed by ${escapeEventHtml(close.closeReason)}; cloud detection ${escapeEventHtml(eventTime(close.detectedAt || close.restartDetectedAt))}. Device close time unknown.</span>` : "<span>Open in the last successful board</span>"; return `<article class="event-card ${severity}"><strong>${escapeEventHtml(event.severity || "Info")} · ${escapeEventHtml(event.displayName || event.eventDefinitionId)}</strong><span>${opening}</span>${closure}<a href="${eventLink(event)}">View nearby observations</a></article>`; }
 async function checkEvents() {
+  // The heaviest of the remaining repeating polls: one call assembles the event
+  // board and the recent closed occurrences rather than reading a document.
+  if (document.hidden) return;
+
   try {
     const data = await fetchStatus("/.netlify/functions/record-browser?view=home");
     const board = data.board;
@@ -512,74 +554,12 @@ async function checkEvents() {
   }
 }
 
-function updateMonitorControls() {
-  const remainingMs = monitoringUntil - Date.now();
-  const active = remainingMs > 0;
-
-  if (!active) {
-    monitoringUntil = 0;
-    monitorButton.textContent = "Start 15-minute live view";
-    monitorButton.classList.remove("active");
-    monitorStatus.textContent = "Standard 60-second refresh";
-    return;
-  }
-
-  monitorButton.textContent = "Stop live view";
-  monitorButton.classList.add("active");
-  monitorStatus.textContent = `Live · ${Math.ceil(remainingMs / 60000)} min remaining`;
-}
-
-async function checkTelemetry() {
-  clearTimeout(telemetryTimer);
-
-  try {
-    const data = await fetchStatus("/.netlify/functions/current-power");
-    renderTelemetry(data);
-  } catch (error) {
-    if (error.body?.code === "telemetry_missing") {
-      clearTelemetry();
-    } else {
-      setHealth(tab5Row, "offline", "Telemetry unavailable");
-    }
-  }
-
-  updateMonitorControls();
-  telemetryTimer = setTimeout(checkTelemetry, monitoringUntil > Date.now() ? LIVE_REFRESH_MS : NORMAL_REFRESH_MS);
-}
-
-async function setMonitoring(action) {
-  let key = sessionStorage.getItem("pilotMonitorKey");
-
-  if (!key) {
-    key = window.prompt("Enter the pilot monitoring key");
-  }
-
-  if (!key) {
-    return;
-  }
-
-  try {
-    const result = await fetchStatus("/.netlify/functions/monitor-session", {
-      method: "POST",
-      headers: { "X-Pilot-Key": key, "Content-Type": "application/json" },
-      body: JSON.stringify({ action })
-    });
-
-    sessionStorage.setItem("pilotMonitorKey", key);
-    monitoringUntil = result.monitoring.until ? Date.parse(result.monitoring.until) : 0;
-    updateMonitorControls();
-    checkTelemetry();
-  } catch (error) {
-    if (error.body?.code === "unauthorized") {
-      sessionStorage.removeItem("pilotMonitorKey");
-      window.alert("The pilot monitoring key was not accepted.");
-    } else {
-      window.alert("The monitoring session could not be changed.");
-    }
-  }
-}
-
 async function checkServices() {
+  // Same visibility guard the operator poll already carries. This one repeats on
+  // a bare interval, so without it two endpoints were billed every five minutes
+  // against a screen nobody was looking at.
+  if (document.hidden) return;
+
   const checkedAt = new Date();
   const [apiResult, firestoreResult] = await Promise.allSettled([
     fetchStatus("/.netlify/functions/health"),
@@ -601,9 +581,6 @@ async function checkServices() {
   checkTime.textContent = `Services checked ${formatTime(checkedAt)}`;
 }
 
-monitorButton.addEventListener("click", () => {
-  setMonitoring(monitoringUntil > Date.now() ? "stop" : "start");
-});
 operatorUnlock.addEventListener("click", () => checkOperatorStatus({ promptForKey: true }));
 operatorButtons.forEach(button => button.addEventListener("click", () => issueOperatorAction(button.id)));
 
@@ -615,11 +592,15 @@ document.addEventListener("visibilitychange", () => {
     checkObservation();
     checkHistory();
     checkOperatorStatus();
+    // These two skip their interval tick while hidden rather than rescheduling,
+    // so without this they would show whatever was on screen at the last tick
+    // until the interval came round again -- up to five minutes for services.
+    checkEvents();
+    checkServices();
   }
 });
 
 checkServices();
-checkTelemetry();
 checkObservation();
 checkHistory();
 checkEvents();

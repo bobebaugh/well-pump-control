@@ -138,3 +138,67 @@ test("switching view does not refetch, and switching window caches per window", 
   assert.match(app, /if \(historyData\[historyWindow\]\) \{ renderHistory\(\); return; \}/);
   assert.match(app, /historyData\[windowKey\] = data/);
 });
+
+// The pump badge, lifted the same way. This is the reading the page leads with,
+// and the one that used to come from a 60s Firestore document while the watts
+// beside it came from the 2s observation.
+
+const PRESENT_WATTS = Number(/const PUMP_PRESENT_WATTS = (\d+)/.exec(app)?.[1]);
+
+function badge() {
+  assert.ok(Number.isFinite(PRESENT_WATTS), "PUMP_PRESENT_WATTS is missing from app.js");
+  return new Function("PUMP_PRESENT_WATTS",
+    `${lift("pumpBadgeState")}\nreturn pumpBadgeState;`)(PRESENT_WATTS);
+}
+
+function record({ available = true, sw0 = true, powerW = 2800, isValid = true } = {}) {
+  return { shelly1: { available, sw0 }, values: { powerW, isValid } };
+}
+
+test("the badge reads the contactor, not a watts threshold", () => {
+  const state = badge();
+  // SW0 is the contactor itself, so it needs no threshold and no hysteresis.
+  assert.deepEqual(state(record({ sw0: true }), true), { running: true, degraded: false });
+  assert.deepEqual(state(record({ sw0: false }), true), { running: false, degraded: false });
+});
+
+test("the contactor wins even when the watts beside it disagree", () => {
+  const state = badge();
+  // Both disagreements are real conditions the rules engine owns, not the page:
+  // contactor closed with no current is a fault, current with it open is HAND.
+  // Either way the badge reports the contactor and leaves the meaning alone.
+  assert.equal(state(record({ sw0: true, powerW: 0 }), true).running, true);
+  assert.equal(state(record({ sw0: false, powerW: 2800 }), true).running, false);
+});
+
+test("watts stand in only when Shelly 1 has dropped out, and say so", () => {
+  const state = badge();
+  const fallback = state(record({ available: false, sw0: null, powerW: 2800 }), true);
+  assert.deepEqual(fallback, { running: true, degraded: true });
+  assert.equal(state(record({ available: false, sw0: null, powerW: 0 }), true).running, false);
+  // Right at the threshold is not running: a few watts of network gear is not a motor.
+  assert.equal(state(record({ available: false, sw0: null, powerW: PRESENT_WATTS }), true).running, false);
+});
+
+test("an unreadable source is unknown, and unknown is never stopped", () => {
+  const state = badge();
+  // The one reading on this page that could actively mislead. STOPPED is a
+  // positive claim that the contactor was read and is open; saying it when
+  // nothing could be read would report a running pump as idle.
+  assert.equal(state(record(), false), null, "a stale record proves nothing");
+  assert.equal(state(record({ available: null, sw0: null, isValid: null }), true), null);
+  assert.equal(state(record({ available: false, sw0: null, isValid: false }), true), null,
+    "a meter that disowns its own reading cannot back the fallback");
+  assert.equal(state(record({ available: false, sw0: null, powerW: null }), true), null);
+  assert.equal(state({}, true), null, "an empty record is unknown, not stopped");
+});
+
+test("the badge and the watts beside it come from one endpoint", () => {
+  // The whole point of the change: a state from one read sitting next to numbers
+  // from another is what made a pump start show 2900 W against a STOPPED badge.
+  assert.ok(!app.includes("current-power"), "the legacy telemetry read is gone");
+  assert.ok(!app.includes("monitor-session"), "the 1 Hz live-view handshake is gone");
+  assert.ok(/renderPumpBadge\(pumpBadgeState\(data, fresh\)\)/.test(app),
+    "the badge is rendered from the observation record");
+  assert.ok(!html.includes("monitor-toggle"), "the dead live-view control is gone");
+});

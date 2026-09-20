@@ -71,7 +71,12 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
 
 .status-strip {
   display: grid;
-  grid-template-columns: minmax(220px, 1.6fr) repeat(5, minmax(110px, 1fr));
+  /* Seven children: the badge, four readings, then the two Shelly 1 contacts.
+     This declared six, so RLY0 fell to an implicit second row on its own. The
+     contacts get narrower tracks than the readings because ON/OFF is short
+     where a four-digit wattage is not. */
+  grid-template-columns:
+    minmax(240px, 1.7fr) repeat(4, minmax(104px, 1fr)) repeat(2, minmax(86px, .8fr));
   border: 1px solid var(--line);
   border-radius: var(--radius);
   overflow: hidden;
@@ -257,7 +262,8 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
 footer { display: flex; justify-content: space-between; gap: 20px; padding: 14px clamp(18px,3vw,42px) 24px; color: #687e96; font-size: .66rem; }
 
 @media (max-width: 1050px) {
-  .status-strip { grid-template-columns: repeat(4, 1fr); }
+  /* Six readings over three columns is two full rows; four left a ragged pair. */
+  .status-strip { grid-template-columns: repeat(3, 1fr); }
   .pump-state { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--line); }
   .workspace { grid-template-columns: 1fr 1fr; }
   .health-panel { grid-column: 1 / -1; min-height: auto; }
@@ -281,36 +287,6 @@ footer { display: flex; justify-content: space-between; gap: 20px; padding: 14px
   display: flex;
   align-items: center;
   gap: 14px;
-}
-
-.monitor-control {
-  display: grid;
-  justify-items: end;
-  gap: 4px;
-}
-
-.monitor-control small {
-  color: var(--muted);
-  font-size: .62rem;
-}
-
-.monitor-button {
-  padding: 8px 12px;
-  border: 1px solid rgba(67,168,255,.45);
-  border-radius: 8px;
-  color: #cfe8ff;
-  background: rgba(67,168,255,.1);
-  font: inherit;
-  font-size: .72rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.monitor-button:hover { background: rgba(67,168,255,.17); }
-.monitor-button.active {
-  border-color: rgba(242,184,75,.55);
-  color: #f2cf87;
-  background: rgba(242,184,75,.1);
 }
 
 .nav-link, .primary-button, .secondary-button {
@@ -384,10 +360,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(67,168,255,.
   box-shadow: 0 0 18px rgba(67,168,255,.45);
 }
 
-.pump-state.stale .state-dot {
-  background: var(--amber);
-  box-shadow: 0 0 18px rgba(242,184,75,.45);
-}
+/* Unknown keeps the base amber dot: nothing could be read, which is not the
+   same claim as stopped and should not look like it. */
 
 @media (max-width: 700px) {
   .topbar-actions { align-items: flex-end; flex-direction: column-reverse; }

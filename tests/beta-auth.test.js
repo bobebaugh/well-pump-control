@@ -14,7 +14,7 @@ test('beta mutation routes reject missing and wrong owner passwords before work'
     const routes = [
       ['rules-engine', 'PUT'], ['rules-engine', 'POST'],
       ['rules-admin', 'POST'], ['operator-control', 'POST'],
-      ['monitor-session', 'POST'], ['ingest-power', 'POST'],
+      ['ingest-power', 'POST'],
       ['ingest-record', 'POST'], ['event-board', 'POST'],
       ['device-sync', 'POST']
     ];
