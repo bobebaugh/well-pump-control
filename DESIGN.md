@@ -10,6 +10,18 @@ The Shelly 1 script detects short cycles and alone writes RLY0. Tab5 observes th
 system and can withdraw automatic permission through its own inhibition flag; it
 cannot create ordinary demand. Cloud outages do not remove existing local protection.
 
+Signal topology behind ContactorFlag, recorded here because no other file carries
+it. The pressure and wall switches feed a three-second on-delay timer, then the
+HAND/OFF/AUTO relay, then the 24 VDC contactor coil; the contactor passes 240 VAC
+to the pump control box. The Shelly 1 relay supplies that coil's ground path, so an
+open RLY0 leaves the coil unable to energise. SW(0) senses the contactor itself,
+downstream of both the delay and that ground path. ContactorFlag is therefore false
+whenever RLY0 is open, a Tab5 inhibition or a Shelly lockout drops it, and true
+means 240 VAC actually reached the pump control box. It is not the pressure switch
+and it does not lead the motor. Current in the motor is what proves the pump is
+running: the flag true with no current is a fault, and current with the flag false
+is the HAND signature. Issue #12 holds those detection decisions.
+
 Tab5 runs interpreted MicroPython on stock UIFlow 2.5.0. main.py owns startup,
 the ADC and utility selection. pilot.py (CPU A) owns acquisition, calculations,
 events, display and local dispatch. cloud.py (CPU B) owns Wi-Fi recovery, clock
