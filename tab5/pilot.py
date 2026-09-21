@@ -2490,6 +2490,10 @@ RULES_V3_WRITE_SHAPES = {
 # The one physical object that carries Tab5's inhibition. Resolved by device
 # binding rather than by an editable system name.
 RULES_V3_INHIBITION_OBJECT = 'UDF(Tab5IsLocked)'
+# The switch input the contactor drives, which is what says the pump is running.
+# Bound the same way and for the same reason: the system name behind it is the
+# owner's to rename, the object is not.
+RULES_V3_PUMP_RUNNING_OBJECT = 'SW(0)'
 
 
 def _v3_write_parameters(method, parameters):
@@ -3170,6 +3174,20 @@ def resolve_rules_v3_package(package):
             if inhibition_target is not None:
                 return None  # two targets for one physical component
             inhibition_target = field['systemName']
+    # Read-only, and bound exactly like the inhibition target above. A second
+    # alias for the same switch would make "is the pump running" ambiguous at
+    # the moment it matters most, so it is refused rather than guessed.
+    pump_running_field = None
+    for device in package['devices']:
+        if device.get('driver') != 'shelly-gen4-switch':
+            continue
+        for field in device['fields']:
+            if (field['object'] != RULES_V3_PUMP_RUNNING_OBJECT or
+                    field['type'] != 'boolean'):
+                continue
+            if pump_running_field is not None:
+                return None  # two names for one physical switch
+            pump_running_field = field['systemName']
     tab5_objects = {}
     for device in package['devices']:
         if device.get('driver') == 'tab5-runtime':
@@ -3217,6 +3235,7 @@ def resolve_rules_v3_package(package):
         'operatingModeTarget': operating_mode_target,
         'pumpTarget': pump_target,
         'inhibitionTarget': inhibition_target,
+        'pumpRunningField': pump_running_field,
         'lockField': lock_field,
         'calculations': calculation_plan,
     }
@@ -3323,7 +3342,7 @@ def rules_v3_acquisition_availability(resolved, accepted_records,
 
 
 def new_rules_v3_calculation_state():
-    return {'histories': {}}
+    return {'histories': {}, 'pumpRunning': {}}
 
 
 def _rules_v3_linear_slope(history):
@@ -3345,7 +3364,7 @@ def _rules_v3_linear_slope(history):
     return slope if _v3_number(slope) else None
 
 
-def _rules_v3_boyle_outputs(calculation, fields, state, now_ms):
+def _rules_v3_boyle_outputs(calculation, fields, state, now_ms, pump_field=None):
     """Evaluate the package's five positional Boyle outputs from real tick history."""
     parameters = calculation['parameters']
     outputs = calculation['outputs']
@@ -3379,6 +3398,33 @@ def _rules_v3_boyle_outputs(calculation, fields, state, now_ms):
         return result
     result[names[0]] = water_gallons
     history = histories.setdefault(calculation['id'], [])
+    # A pump transition puts a discontinuity inside the window: the manifold
+    # steps about 1.5 PSI at a start, and at a stop the tank air begins shedding
+    # the heat of its own compression. Neither is water moving. A regression
+    # spanning one reports flow that is confidently wrong - inflow while the
+    # tank is draining - and marks it VALID, which is worse than saying nothing.
+    # Dropping the window leaves INSUFFICIENT_HISTORY standing until real
+    # post-transition samples rebuild it.
+    #
+    # This cycle's sample goes with it. One cycle is not one instant: the ADC
+    # burst, the switch read and the energy meter are three reads taken moments
+    # apart, so on the edge cycle nothing says which side of the transition this
+    # pressure came from. Gallons still stands - it is instantaneous, and true
+    # whenever the pressure is - and only the slope needs clean provenance.
+    #
+    # Absent evidence is not a transition. A switch read that failed leaves the
+    # field missing, and a missing field neither flushes the window nor advances
+    # what is remembered, the same way an absent availability freezes an event
+    # rather than resolving it.
+    pump_states = state.setdefault('pumpRunning', {})
+    running = fields.get(pump_field) if isinstance(pump_field, str) else None
+    if isinstance(running, bool):
+        previous = pump_states.get(calculation['id'])
+        pump_states[calculation['id']] = running
+        if isinstance(previous, bool) and previous != running:
+            history[:] = []
+            result[names[4]] = 'INSUFFICIENT_HISTORY'
+            return result
     history.append((now_ms, pressure))
     tolerance_ms = 350
     history[:] = [item for item in history
@@ -3434,7 +3480,9 @@ def evaluate_rules_v3_calculations(resolved, fields, state, now_ms):
             if _v3_number(value):
                 values[calculation['output']['systemName']] = value
         elif calculation['kind'] == 'function':
-            values.update(_rules_v3_boyle_outputs(calculation, values, state, now_ms))
+            values.update(_rules_v3_boyle_outputs(
+                calculation, values, state, now_ms,
+                resolved.get('pumpRunningField')))
         else:
             raise ValueError('unsupported V3 calculation')
     return values, state

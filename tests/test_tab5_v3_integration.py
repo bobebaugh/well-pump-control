@@ -152,7 +152,8 @@ class V3IntegratedApplicationTests(unittest.TestCase):
         value.update(changes)
         return value
 
-    def observation(self, lock=0, voltage=240.0, flag=False, relay=False):
+    def observation(self, lock=0, voltage=240.0, flag=False, relay=False,
+                    sw0=True, shelly1=True):
         return {
             "schemaVersion": 1, "sequence": 1, "observedTicksMs": 0,
             "observedAt": "2026-09-11T12:00:00Z", "source": "tab5",
@@ -160,13 +161,13 @@ class V3IntegratedApplicationTests(unittest.TestCase):
                 "power": 2800.0, "reactive": 10.0, "pf": 0.98,
                 "voltage": voltage, "is_valid": True, "total": 1000.0,
                 "total_returned": 0.0, "shelly1_rly0": relay,
-                "shelly1_sw0": True, "shelly1_lock": lock,
+                "shelly1_sw0": sw0, "shelly1_lock": lock,
                 "shelly1_lockout_count": 0, "adc_raw": 14307,
                 "shelly1_tab5lock": flag,
                 "battery_percent": 78,
             },
             "status": {
-                "shelly_available": True, "shelly1_available": True,
+                "shelly_available": True, "shelly1_available": shelly1,
                 "shelly1_tab5lock_id": self.routing_ids()["Tab5IsLocked"],
                 "pressure_sensor_commissioned": True, "adc_available": True,
                 "clock_synced": True, "wifi_connected": True,
@@ -508,6 +509,92 @@ class V3IntegratedApplicationTests(unittest.TestCase):
             self.assertIn("tab5-main", result["unavailableDeviceIds"])
             self.assertNotIn("PressurePSI", result["snapshot"])
             self.assertEqual(result["snapshot"]["TankFlowQuality"], "PRESSURE_INVALID")
+
+    def fill_boyle_window(self, runtime, cycles=11, start=0, rising=True):
+        """Drive a populated window and return the last cycle's result."""
+        result = None
+        for step in range(cycles):
+            index = start + step
+            observation = self.observation()
+            observation["values"]["adc_raw"] = (12000 + index * 10 if rising
+                                                else 14000 - index * 10)
+            result = self.logic["run_rules_v3_cycle"](
+                runtime, observation, index * 1000)
+        return result
+
+    def test_a_pump_transition_drops_the_window_instead_of_reporting_across_it(self):
+        """A regression spanning a pump edge is wrong, not merely imprecise.
+
+        The manifold steps about 1.5 PSI when the pump starts, and when it stops
+        the tank air begins shedding the heat of its own compression. Neither is
+        water moving, so a window holding samples from both sides reports inflow
+        while the tank is draining - and marks it VALID.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _path = self.start(directory)
+            filling = self.fill_boyle_window(runtime)
+            self.assertEqual(filling["snapshot"]["TankFlowQuality"], "VALID")
+            self.assertGreater(filling["snapshot"]["TankNetFlowGPM"], 0)
+
+            # The contactor opens. This cycle's pressure was read moments apart
+            # from the switch, so which side of the edge it belongs to is not
+            # knowable; it is dropped with the rest of the window.
+            stopping = self.observation(sw0=False)
+            stopping["values"]["adc_raw"] = 12110
+            result = self.logic["run_rules_v3_cycle"](runtime, stopping, 11000)
+            self.assertEqual(result["snapshot"]["TankFlowQuality"],
+                             "INSUFFICIENT_HISTORY")
+            for name in ("PressureSlopePSIPerMinute", "TankNetFlowGPM",
+                         "PumpOffDemandGPM"):
+                self.assertNotIn(name, result["snapshot"])
+            # Gallons is instantaneous, so it survives the flush intact.
+            self.assertIn("TankWaterGallons", result["snapshot"])
+
+            # Rebuilt from post-transition samples only, the sign is now right.
+            draining = None
+            for step in range(11):
+                observation = self.observation(sw0=False)
+                observation["values"]["adc_raw"] = 12110 - step * 10
+                draining = self.logic["run_rules_v3_cycle"](
+                    runtime, observation, 12000 + step * 1000)
+            self.assertEqual(draining["snapshot"]["TankFlowQuality"], "VALID")
+            self.assertLess(draining["snapshot"]["TankNetFlowGPM"], 0)
+            self.assertGreater(draining["snapshot"]["PumpOffDemandGPM"], 0)
+
+    def test_an_unreadable_contactor_is_not_a_transition(self):
+        """Absent evidence freezes the question rather than answering it.
+
+        A failed switch read leaves the field missing. Treating missing as a
+        change would flush the window every time the Shelly went quiet, which
+        is how an availability gap turns into invented flow behaviour.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _path = self.start(directory)
+            self.assertEqual(
+                self.fill_boyle_window(runtime)["snapshot"]["TankFlowQuality"],
+                "VALID")
+            quiet = self.observation(shelly1=False)
+            quiet["values"]["adc_raw"] = 12110
+            result = self.logic["run_rules_v3_cycle"](runtime, quiet, 11000)
+            self.assertIn("shelly-1-main", result["unavailableDeviceIds"])
+            self.assertNotIn("ContactorFlag", result["snapshot"])
+            self.assertEqual(result["snapshot"]["TankFlowQuality"], "VALID")
+
+    def test_the_pump_switch_is_bound_by_object_not_by_its_system_name(self):
+        """The owner may rename the field; the physical switch is still the switch."""
+        body = json.loads(self.raw_a)
+        body = body.get("package", body)
+        switch = [field for device in body["devices"] for field in device["fields"]
+                  if field["object"] == "SW(0)"]
+        self.assertEqual(len(switch), 1, "the fixture must carry one switch input")
+        # An editor rename carries every reference with it, so the whole
+        # document is rewritten rather than the declaration alone. Renaming only
+        # the declaration leaves E002 pointing at a field that no longer exists,
+        # and the package is then correctly refused.
+        renamed = self.raw_a.replace(switch[0]["systemName"], "RenamedByTheOwner")
+        resolved = self.logic["resolve_rules_v3_package"](renamed)
+        self.assertIsNotNone(resolved, "a renamed switch must still resolve")
+        self.assertEqual(resolved["pumpRunningField"], "RenamedByTheOwner")
 
     def test_boyle_coverage_survives_the_acquisition_jitter_the_device_has(self):
         """A window one sample short of its edge is still a covered window.
