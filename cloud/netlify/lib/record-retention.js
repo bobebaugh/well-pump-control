@@ -90,7 +90,11 @@ function significant(record, policy) {
   const reasons = Array.isArray(record?.triggerReasons) ? record.triggerReasons : [];
   const flapOnly = reasons.length > 0 && reasons.every(
     reason => reason?.kind === "change" && reason?.field === "ShellyEMAvailable");
-  if (reasons.length === 0 || !flapOnly) return true;   // heartbeat, delta, event boundary
+  // The heartbeat is an explicit reason, not an absent one: pilot.py emits
+  // {kind: "maximum-interval"} every MAX_DURABLE_OBSERVATION_INTERVAL_MS. An
+  // empty list is not a shape the device produces, and is kept significant
+  // only so an unrecognised record is never silently decimated.
+  if (reasons.length === 0 || !flapOnly) return true;
   if (record?.recordType && record.recordType !== "observation") return true;
 
   const contactor = available(record, "ContactorFlag");

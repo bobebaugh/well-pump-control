@@ -8,7 +8,9 @@ const {
 
 const T0 = Date.parse("2026-09-20T04:00:00Z");
 const FLAP = [{ kind: "change", field: "ShellyEMAvailable", from: true, to: false }];
-const HEARTBEAT = [];
+// What pilot.py actually emits for the 10-minute heartbeat (pilot.py:5257).
+const HEARTBEAT = [{ kind: "maximum-interval" }];
+const NO_REASONS = [];
 
 function v2(offsetMs, fields, { reasons = FLAP, sessionId = "boot_a", sequence = 0 } = {}) {
   return {
@@ -70,6 +72,13 @@ test("flap records are decimated to the floor, not deleted for being flap", () =
   assert.equal(plan.stats.keep, 3);
   assert.ok(plan.maxGapMs <= 300000, `worst gap ${plan.maxGapMs}ms`);
   assert.equal(plan.safe, true);
+});
+
+test("an empty reason list is unrecognised, and kept rather than decimated", () => {
+  const records = flapSeries(300);
+  records[100].triggerReasons = NO_REASONS;
+  const plan = planRetention(records, { floorMs: 300000, maxDeleteFraction: 1 });
+  assert.ok(plan.keep.some(item => item.record.recordId === records[100].recordId));
 });
 
 test("a record published for any other reason is kept whatever the floor", () => {
