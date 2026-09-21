@@ -3388,7 +3388,15 @@ def _rules_v3_boyle_outputs(calculation, fields, state, now_ms):
         return result
     ordered = sorted(history, key=lambda item: time.ticks_diff(item[0], now_ms))
     ages = [time.ticks_diff(now_ms, item[0]) for item in ordered]
-    if max(ages) < max(0, window_ms - tolerance_ms):
+    # The oldest survivor lands wherever the cadence put it, so the window is
+    # covered once it spans everything but the final sample interval. Requiring
+    # coverage within tolerance of the window edge asked that sample to land in
+    # a 700ms zone at a 2000ms cadence, and the timestamp carries the whole
+    # acquisition burst - the ADC batch plus both Shelly reads - which reaches
+    # well past that. Good windows were being discarded for their age alone.
+    # Derived from the cadence, not written as a literal, for the same reason
+    # SAMPLE_GAP_LIMIT_MS is.
+    if max(ages) < max(0, window_ms - SAMPLE_PERIOD_MS - tolerance_ms):
         result[names[4]] = 'INSUFFICIENT_HISTORY'
         return result
     forward = ordered

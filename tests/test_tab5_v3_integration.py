@@ -509,6 +509,47 @@ class V3IntegratedApplicationTests(unittest.TestCase):
             self.assertNotIn("PressurePSI", result["snapshot"])
             self.assertEqual(result["snapshot"]["TankFlowQuality"], "PRESSURE_INVALID")
 
+    def test_boyle_coverage_survives_the_acquisition_jitter_the_device_has(self):
+        """A window one sample short of its edge is still a covered window.
+
+        Every other Boyle test drives a perfect tick grid, which is why this was
+        invisible on the host while the device lost about a quarter of its
+        cycles. A sample's timestamp is taken after acquisition, so it carries
+        the ADC batch plus both Shelly reads; the offsets below are that burst
+        measured on the bench, up to 878ms. The gate used to demand the oldest
+        survivor land within tolerance of the window edge - a zone narrower than
+        one cadence interval - so jitter rejected windows that held a perfectly
+        good regression.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, _path = self.start(directory)
+            calculation = next(item for item in runtime["resolved"]["calculations"]
+                               if item["kind"] == "function")
+            window_ms = int(calculation["parameters"]["regressionWindowSeconds"] * 1000)
+            # Seven offsets, coprime with the sample count a 10s window holds, so
+            # the window edge keeps moving instead of relocking to the grid.
+            offsets = (137, 604, 291, 878, 172, 430, 96)
+            shortened = 0
+            for index in range(26):
+                observation = self.observation()
+                observation["values"]["adc_raw"] = 12000 + index * 10
+                now_ms = index * 1000 + offsets[index % len(offsets)]
+                result = self.logic["run_rules_v3_cycle"](runtime, observation, now_ms)
+                history = runtime["calculations"]["histories"][calculation["id"]]
+                span = max(now_ms - item[0] for item in history)
+                if index < 8:
+                    continue
+                self.assertEqual(result["snapshot"]["TankFlowQuality"], "VALID",
+                                 "cycle {} spanning {}ms was rejected".format(index, span))
+                self.assertGreater(result["snapshot"]["PressureSlopePSIPerMinute"], 0)
+                if span < window_ms - 350:
+                    shortened += 1
+            # Without the cadence term these cycles are exactly the ones that
+            # reported INSUFFICIENT_HISTORY on a full, usable window.
+            self.assertGreater(shortened, 0,
+                               "the jitter no longer shortens any window; this "
+                               "test would pass against the unfixed gate")
+
     def test_boolean_set_accepts_only_http_200_with_a_json_null_body(self):
         """The supported HTTP GET form answers a bare null and nothing else."""
         with tempfile.TemporaryDirectory() as directory:
