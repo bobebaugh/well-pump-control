@@ -254,11 +254,16 @@ const CHECKPOINT_PATH = "sites/well-main/maintenance/recordRetention";
 // property of the data rather than a matter of tuning. firestore.indexes.json
 // carries 9 composite indexes on observations, and with no fieldOverrides
 // Firestore also auto-indexes every field of every document - including all
-// ~26 fields.* entries each durable record carries. A delete is charged for
-// removing every one of those index entries, so deletion here is index-write
-// bound, not document bound, and tens of thousands of records will not clear
-// inside a request timeout. A Netlify background function (the -background
-// name suffix) buys 15 minutes instead of 10 seconds and still may not finish.
+// ~26 fields.* entries each durable record carries. Removing a document
+// removes every one of those index entries with it, so throughput here is
+// bound by index maintenance rather than by document count, and tens of
+// thousands of records will not clear inside a request timeout. A Netlify
+// background function (the -background name suffix) buys 15 minutes instead of
+// 10 seconds and still may not finish.
+//
+// To be precise about which cost this is: BILLING is per document delete and
+// is negligible at this volume. What the index load costs is time, and time is
+// what makes a resumable cursor mandatory rather than tidy.
 //
 // So the executor is a RESUMABLE CURSOR, not a sweep:
 //
@@ -294,6 +299,8 @@ const CHECKPOINT_PATH = "sites/well-main/maintenance/recordRetention";
 // fields.* map from single-field indexing would make this cleanup and every
 // ingest write substantially cheaper. Nothing queries those subfields - the
 // browser filters on deviceId, schemaVersion, observation time and session.
+// Google's own guidance is the same: "If you are not querying based on a large
+// array or map field, you should exempt it from indexing."
 function applyRetention(plan, options = {}) {
   void plan; void options;
   throw new Error("record-retention.applyRetention is a stub: no deletion is implemented");
