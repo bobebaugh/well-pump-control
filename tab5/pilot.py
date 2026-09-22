@@ -1,4 +1,5 @@
 # Release: 2026-09-22 M6.43 — script liveness; truthful Shelly reboot; Boyle pump edge.
+# DIAGNOSTIC BUILD: M6.43 plus edge-triggered PRINTs (tagged DIAG). No logic change.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -3261,6 +3262,11 @@ def resolve_rules_v3_package(package):
             if field.get('access') != 'readWrite':
                 continue
             if inhibition_target is not None:
+                try:
+                    log('DIAG V3 RESOLVE REFUSED: {} bound twice: {} and {}'.format(
+                        RULES_V3_INHIBITION_OBJECT, inhibition_target, field['systemName']))
+                except Exception:
+                    pass
                 return None  # two targets for one physical component
             inhibition_target = field['systemName']
     # Read-only, and bound exactly like the inhibition target above. A second
@@ -3275,6 +3281,11 @@ def resolve_rules_v3_package(package):
                     field['type'] != 'boolean'):
                 continue
             if pump_running_field is not None:
+                try:
+                    log('DIAG V3 RESOLVE REFUSED: {} bound twice: {} and {}'.format(
+                        RULES_V3_PUMP_RUNNING_OBJECT, pump_running_field, field['systemName']))
+                except Exception:
+                    pass
                 return None  # two names for one physical switch
             pump_running_field = field['systemName']
     tab5_objects = {}
@@ -3511,6 +3522,8 @@ def _rules_v3_boyle_outputs(calculation, fields, state, now_ms, pump_field=None)
         previous = pump_states.get(calculation['id'])
         pump_states[calculation['id']] = running
         if isinstance(previous, bool) and previous != running:
+            log('DIAG BOYLE PUMP EDGE: calc={} {} {}->{} dropped={} samples'.format(
+                calculation['id'], pump_field, previous, running, len(history)))
             history[:] = []
             result[names[4]] = 'INSUFFICIENT_HISTORY'
             return result
@@ -4842,7 +4855,7 @@ def service_navigation():
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.43: script liveness; truthful Shelly reboot')
+log('CPU A release M6.43: DIAG build; script liveness; truthful Shelly reboot')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.
@@ -4871,6 +4884,9 @@ if rules_v3_runtime is not None:
     log('V3 ENGINE RUNNING: release={} version={} hash={}'.format(
         active_rules_reference['releaseId'], active_rules_reference['packageVersion'],
         active_rules_reference['contentHash'][:12]))
+    log('DIAG V3 BINDINGS: pumpRunningField={} inhibitionTarget={}'.format(
+        rules_v3_runtime['resolved'].get('pumpRunningField'),
+        rules_v3_runtime['resolved'].get('inhibitionTarget')))
     for _cadence_warning in rules_v3_cadence_warnings(active_rules, SAMPLE_PERIOD_MS):
         log('V3 CADENCE STARVED: {}; its quality output stays INSUFFICIENT_HISTORY'.format(
             _cadence_warning))
@@ -4907,6 +4923,11 @@ last_valid_adc_ms = None
 last_valid_shelly1 = None
 last_valid_shelly1_ms = None
 shelly1_failure_count = 0
+# DIAG: edge-triggered print state. 'unseen' so the first real value always prints.
+diag_script_running = 'unseen'
+diag_slow_s1_logged_ms = None
+DIAG_SLOW_S1_MS = 1000
+DIAG_SLOW_S1_REPEAT_MS = 60000
 # Latched true on the first cycle permitted to reach the network, and never
 # cleared. CPU B holds traffic for a quiet period after boot while CPU A is
 # already cycling; until an attempt has been allowed, "unavailable" would be a
@@ -5082,8 +5103,8 @@ while True:
             last_valid_sample = sample
             last_valid_sample_ms = time.ticks_ms()
             if shelly_resume_confirmation_pending:
-                log('Shelly polling confirmed after connection: ticks_ms={}, connected={}, status={}, IP={}'.format(
-                    last_valid_sample_ms, wifi_connected,
+                log('Shelly polling confirmed after connection: sequence={} ticks_ms={}, connected={}, status={}, IP={}'.format(
+                    observation_sequence, last_valid_sample_ms, wifi_connected,
                     wifi_driver_status, wifi_ip))
                 shelly_resume_confirmation_pending = False
         shelly1_poll_attempted = True
@@ -5098,10 +5119,27 @@ while True:
             last_valid_shelly1 = shelly1_sample
             last_valid_shelly1_ms = time.ticks_ms()
             if shelly1_resume_confirmation_pending:
-                log('Shelly 1 polling confirmed: SW0={}, RLY0={}'.format(
+                log('Shelly 1 polling confirmed: sequence={} SW0={}, RLY0={}'.format(
+                    observation_sequence,
                     'ON' if shelly1_sample['sw0'] else 'OFF',
                     'ON' if shelly1_sample['rly0'] else 'OFF'))
                 shelly1_resume_confirmation_pending = False
+            # DIAG: print script liveness on first read and on every change only.
+            if shelly1_sample.get('script_running') != diag_script_running:
+                log('DIAG SHELLY 1 SCRIPT: running={} (was {}) sequence={}'.format(
+                    shelly1_sample.get('script_running'), diag_script_running,
+                    observation_sequence))
+                diag_script_running = shelly1_sample.get('script_running')
+        # DIAG: a slow filtered read, rate limited. Success or failure alike.
+        if (isinstance(shelly1_acquisition_ms, int) and
+                shelly1_acquisition_ms > DIAG_SLOW_S1_MS and
+                (diag_slow_s1_logged_ms is None or
+                 time.ticks_diff(time.ticks_ms(), diag_slow_s1_logged_ms) >=
+                 DIAG_SLOW_S1_REPEAT_MS)):
+            diag_slow_s1_logged_ms = time.ticks_ms()
+            log('DIAG SHELLY 1 SLOW READ: elapsed_ms={} ok={} sequence={}'.format(
+                shelly1_acquisition_ms, shelly1_sample is not None,
+                observation_sequence))
 
     observation_ticks_ms = time.ticks_ms()
     observation = build_observation(
@@ -5132,6 +5170,13 @@ while True:
             observation['status'].get('shelly1_available'), fresh_lock)
         if confirmation is not None:
             outcome, detail = confirmation
+            log('DIAG SHELLY RESTART RESOLVED: {} {} after_ms={} cycles={} available={} lock={}'.format(
+                outcome, detail,
+                time.ticks_diff(observation_ticks_ms,
+                                shelly_restart_pending.get('startedTicksMs', observation_ticks_ms)),
+                observation_sequence - shelly_restart_pending.get(
+                    'acceptedSequence', observation_sequence),
+                observation['status'].get('shelly1_available'), fresh_lock))
             command = shelly_restart_pending.get('command')
             if command is not None:
                 cloud.submit_operator_result(operator_result(
@@ -5230,6 +5275,9 @@ while True:
             outcome, detail = 'failed', 'shelly-unavailable-before-request'
         else:
             outcome, detail = shelly1_restart_request()
+        log('DIAG SHELLY RESTART REQUEST: {} {} sequence={} source={}'.format(
+            outcome, detail, observation_sequence,
+            'online' if selected_command is not None else 'local'))
         if outcome == 'accepted':
             shelly_restart_pending = {
                 'command': selected_command,

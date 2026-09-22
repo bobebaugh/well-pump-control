@@ -1,4 +1,4 @@
-# Release: 2026-09-22 M6.43 — Wi-Fi modem sleep explicitly disabled.
+# Release: 2026-09-13 M6.37 — repaired short-lived operator command transport.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -1231,54 +1231,12 @@ def _log_connected_ap(wlan):
         rssi, bssid if bssid is not None else 'unavailable'))
 
 
-def _wifi_power_mode(wlan):
-    try:
-        return wlan.config('pm')
-    except Exception as error:
-        return 'unreadable:{}'.format(error)
-
-
-def _disable_wifi_power_save(wlan):
-    """Report the active Wi-Fi power mode, then turn modem sleep off.
-
-    The Tab5 is mains-powered, so modem sleep buys nothing, and the ESP32-C6
-    default is minimum power saving unless something overrides it. The ASUS log
-    for the observed incident held "disassociated due to inactivity" (reason 4)
-    and "previous authentication no longer valid" (reason 2), which is an AP
-    dropping a sleeping client. That is consistent with modem sleep but does not
-    prove it, so the mode is logged before and after: the previous value is the
-    diagnostic issue #1 asks for and cannot be recovered once it is overwritten.
-
-    Reconnect behaviour is deliberately untouched. Two authorities currently
-    recover the link - UIFlow's native disconnect handler and the Python state
-    machine - and reducing that to one is a separate investigation.
-    """
-    before = _wifi_power_mode(wlan)
-    target = getattr(network.WLAN, 'PM_NONE', None)
-    if target is None:
-        log('Wi-Fi power save: pm={} left as found; this firmware exposes no '
-            'PM_NONE'.format(before))
-        return False
-    try:
-        wlan.config(pm=target)
-    except Exception as error:
-        log('Wi-Fi power save: pm={} left as found; PM_NONE rejected: {}'.format(
-            before, error))
-        return False
-    log('Wi-Fi power save disabled: pm={} -> requested PM_NONE={}, now pm={}'.format(
-        before, target, _wifi_power_mode(wlan)))
-    return True
-
-
 def _configure_and_connect(wlan, recovery):
     """Start a fresh credential-free station connection."""
     if recovery:
         wlan.active(False)
         time.sleep_ms(WIFI_RESTART_PAUSE_MS)
     wlan.active(True)
-    # Applied on every connect, initial and recovery: a station restart is not
-    # assumed to preserve the power mode.
-    _disable_wifi_power_save(wlan)
     wlan.config(reconnects=-1)
     wlan.connect()
     if recovery:
@@ -1965,7 +1923,7 @@ def start():
         if _started:
             return False
         _started = True
-        log('CPU B release M6.43: Wi-Fi modem sleep disabled')
+        log('CPU B release M6.37: monotonic operator control transport')
         _thread.start_new_thread(_worker, ())
         return True
     finally:
