@@ -37,7 +37,10 @@ Old branch tips are archived in maintenance/branch-archive-2026-09-16.csv.
    `RESEND_API_KEY`, `NOTIFY_FROM`, `NOTIFY_EMAIL_TO`, `NOTIFY_SMS_TO`, and
    `NOTIFY_DRY_RUN=1` while testing. Missing values leave the notifier inert and log
    the names only; ingestion is unaffected. Verify with a test event, T010-T040,
-   using tests/notification-live.check.cjs.
+   using tests/notification-live.check.cjs. Netlify injects these into a function at
+   deploy time, so adding them to a site that is already deployed changes nothing until
+   the next deploy; trigger one. An event record whose notification field reads
+   not-configured names the variables the running deploy is missing.
 6. The notification transport is proven. On 22 September a live batch send from
    resend.ebaugh.net delivered both legs to the owner: the email, and the text through
    the Verizon gateway a few seconds behind it. A sending domain with no history was

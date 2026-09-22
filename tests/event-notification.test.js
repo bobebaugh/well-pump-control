@@ -108,7 +108,8 @@ test("a thrown send, a missing key and a dry run all resolve to outcomes rather 
     env: { NOTIFY_FROM: "well@resend.ebaugh.net" }, log: { error: (_, detail) => missing.push(detail.missing) },
     fetch: async () => { throw new Error("must not send"); }
   });
-  assert.equal((await unconfigured.notify([record("W07")]))[0].notification.status, "not-configured");
+  assert.deepEqual((await unconfigured.notify([record("W07")]))[0].notification,
+    { status: "not-configured", missing: "RESEND_API_KEY,NOTIFY_EMAIL_TO,NOTIFY_SMS_TO", criteria: "table" });
   assert.equal(missing[0], "RESEND_API_KEY,NOTIFY_EMAIL_TO,NOTIFY_SMS_TO");
 
   const dry = createEventNotifier({

@@ -78,7 +78,7 @@ function createEventNotifier(dependencies = {}) {
       }
       if (missing.length > 0) {
         log.error("Event notification not configured", { missing: missing.join(",") });
-        return [...mark(sending, { status: "not-configured" }), ...skipped];
+        return [...mark(sending, { status: "not-configured", missing: missing.join(",") }), ...skipped];
       }
 
       const body = sending.flatMap((entry, index) => [
