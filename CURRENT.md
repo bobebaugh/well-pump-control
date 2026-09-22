@@ -36,7 +36,14 @@ Old branch tips are archived in maintenance/branch-archive-2026-09-16.csv.
 5. Set the notification environment variables in Netlify before the channel can send:
    `RESEND_API_KEY`, `NOTIFY_FROM`, `NOTIFY_EMAIL_TO`, `NOTIFY_SMS_TO`, and
    `NOTIFY_DRY_RUN=1` while testing. Missing values leave the notifier inert and log
-   the names only; ingestion is unaffected. Verify with a test event, T010-T040.
+   the names only; ingestion is unaffected. Verify with a test event, T010-T040,
+   using tests/notification-live.check.cjs.
+6. Confirm the SMS leg on the phone, not in Resend. The owner's working gateway test
+   was Gmail to the Verizon address; this application is the first to send by API, so
+   a sending domain with no history has never been exercised against that gateway.
+   Carrier gateways drop unknown senders silently, and Resend records the gateway's
+   acceptance as delivered, so metrics cannot establish that a text arrived. Observed
+   Gmail-to-gateway latency is about three minutes, so the email leg arrives first.
 
 No DNS, Netlify settings, Firebase configuration, device upload, restart or source
 promotion was performed by this housekeeping. History is in Git; all deferred work
