@@ -15,19 +15,25 @@ PRESSURE_SENSOR_COMMISSIONED true; the fitted calibration is in main.py.
 The owner believes M6.42 is installed and confirms the Shelly script is fully unit
 tested on the real hardware. The M6.38â€“M6.41 integration verification record and raw
 pressure measurements are retained under docs/ as evidence. They are not competing
-roadmaps. Exact installed file hashes and current rules-package identity are not
-established by this housekeeping.
+roadmaps. Exact installed file hashes are not established by this housekeeping.
+
+The freeze rules package was published and adopted on 22 September 2026: twenty
+events, of which supply-voltage high and low hold a self-releasing inhibition,
+and tank overpressure and long runtime latch one. Its authoring backup is recorded
+under docs/rules-packages/ as the editable record of what was published; the staged
+runtime bytes and their server-minted release identity remain the only authority
+for what the device runs.
 
 ## Known limits
 
 Abandoned-inhibit recovery needs the beta decision in FUTURE. Script liveness is
 now observed and bindable but drives nothing: no event is authored on it, no
 package declares it, and retained zero lock values can still authorize re-enable
-while the script is stopped. Clear Events/Monitor OFF are absent. The shipped flow
-window cannot fill at the current cadence unless the live package has already been
-corrected. Utility capture-path follow-ups remain separate from normal operation.
-RAM history is best effort, not a persistent outbox. See FUTURE for all deferred
-work.
+while the script is stopped. Clear Events/Monitor OFF are absent. The flow window
+is corrected in the live package: twenty seconds and seven samples fills at the
+two-second cadence, where the shipped ten-second window never could. Utility
+capture-path follow-ups remain separate from normal operation. RAM history is best
+effort, not a persistent outbox. See FUTURE for all deferred work.
 
 ## Next owner decisions
 

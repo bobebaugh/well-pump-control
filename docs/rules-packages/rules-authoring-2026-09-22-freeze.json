@@ -1,0 +1,1613 @@
+{
+  "kind": "well-pump-rules-authoring-backup",
+  "backupVersion": 1,
+  "authoringPackage": {
+    "schemaVersion": 3,
+    "devices": [
+      {
+        "id": "shelly-em-main",
+        "label": "Shelly EM",
+        "driver": "shelly-gen1-em",
+        "address": "192.168.50.141",
+        "enabled": true,
+        "fields": [
+          {
+            "systemName": "PumpWatts",
+            "label": "Pump real power",
+            "object": "emeter/0.power",
+            "type": "number",
+            "unit": "W",
+            "access": "read",
+            "logging": {
+              "mode": "delta",
+              "threshold": 10
+            }
+          },
+          {
+            "systemName": "SupplyVoltage",
+            "label": "Supply voltage",
+            "object": "emeter/0.voltage",
+            "type": "number",
+            "unit": "V",
+            "access": "read",
+            "logging": {
+              "mode": "delta",
+              "threshold": 5
+            }
+          },
+          {
+            "systemName": "PowerFactor",
+            "label": "Power factor",
+            "object": "emeter/0.pf",
+            "type": "number",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "always"
+            }
+          },
+          {
+            "systemName": "ShellyEnergyWh",
+            "label": "Shelly cumulative energy",
+            "object": "emeter/0.total",
+            "type": "number",
+            "unit": "Wh",
+            "access": "read",
+            "logging": {
+              "mode": "always"
+            }
+          },
+          {
+            "systemName": "ShellyEMAvailable",
+            "label": "Shelly EM available",
+            "object": "$availability",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          }
+        ]
+      },
+      {
+        "id": "shelly-1-main",
+        "label": "Shelly 1 Gen4",
+        "driver": "shelly-gen4-switch",
+        "address": "192.168.50.201",
+        "enabled": true,
+        "fields": [
+          {
+            "systemName": "PumpEnable",
+            "label": "Pump relay state",
+            "object": "RLY(0)",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          },
+          {
+            "systemName": "ContactorFlag",
+            "label": "Contactor flag",
+            "object": "SW(0)",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          },
+          {
+            "systemName": "IsLocked",
+            "label": "Shelly script lock remaining",
+            "object": "UDF(IsLocked)",
+            "type": "integer",
+            "unit": "s",
+            "access": "read",
+            "logging": {
+              "mode": "delta",
+              "threshold": 10
+            }
+          },
+          {
+            "systemName": "Tab5IsLocked",
+            "label": "Tab5 inhibition",
+            "object": "UDF(Tab5IsLocked)",
+            "type": "boolean",
+            "unit": null,
+            "access": "readWrite",
+            "logging": {
+              "mode": "change"
+            },
+            "write": {
+              "method": "Boolean.Set",
+              "parameters": {
+                "valueParameter": "value"
+              },
+              "normalValue": false
+            }
+          },
+          {
+            "systemName": "Shelly1Available",
+            "label": "Shelly 1 available",
+            "object": "$availability",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          }
+        ]
+      },
+      {
+        "id": "tab5-main",
+        "label": "Tab5",
+        "driver": "tab5-runtime",
+        "address": "local",
+        "enabled": true,
+        "fields": [
+          {
+            "systemName": "PressureADCCounts",
+            "label": "Pressure ADC count",
+            "object": "values.adc_raw",
+            "type": "integer",
+            "unit": "count",
+            "access": "read",
+            "logging": {
+              "mode": "none"
+            }
+          },
+          {
+            "systemName": "PressureSensorCommissioned",
+            "label": "Pressure sensor commissioned",
+            "object": "status.pressure_sensor_commissioned",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          },
+          {
+            "systemName": "ADCValid",
+            "label": "ADC available",
+            "object": "status.adc_available",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          },
+          {
+            "systemName": "ClockValid",
+            "label": "Clock synchronized",
+            "object": "status.clock_synced",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          },
+          {
+            "systemName": "WiFiConnected",
+            "label": "Wi-Fi connected",
+            "object": "status.wifi_connected",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          },
+          {
+            "systemName": "CloudAvailable",
+            "label": "Cloud delivery available",
+            "object": "status.cloud_available",
+            "type": "boolean",
+            "unit": null,
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          },
+          {
+            "systemName": "BatteryPercent",
+            "label": "Battery percent",
+            "object": "values.battery_percent",
+            "type": "number",
+            "unit": "%",
+            "access": "read",
+            "logging": {
+              "mode": "delta",
+              "threshold": 5
+            }
+          },
+          {
+            "systemName": "BufferUsedPercent",
+            "label": "RAM queue used",
+            "object": "status.buffer_used_pct",
+            "type": "number",
+            "unit": "%",
+            "access": "read",
+            "logging": {
+              "mode": "delta",
+              "threshold": 5
+            }
+          },
+          {
+            "systemName": "RecordsLost",
+            "label": "Records lost",
+            "object": "status.records_lost",
+            "type": "integer",
+            "unit": "count",
+            "access": "read",
+            "logging": {
+              "mode": "change"
+            }
+          }
+        ]
+      }
+    ],
+    "calculatedFields": [
+      {
+        "id": "calc-pressure",
+        "label": "Calibrated pressure",
+        "kind": "expression",
+        "expression": "(PressureADCCounts - 3732.02) / 211.492",
+        "output": {
+          "systemName": "PressurePSI",
+          "label": "Calibrated pressure",
+          "type": "number",
+          "unit": "psi",
+          "logging": {
+            "mode": "delta",
+            "threshold": 1
+          }
+        }
+      },
+      {
+        "id": "calc-load-ratio",
+        "label": "Pump load ratio",
+        "kind": "expression",
+        "expression": "(PumpWatts / 2900) * 100",
+        "output": {
+          "systemName": "LoadRatioPercent",
+          "label": "Pump load ratio",
+          "type": "number",
+          "unit": "%",
+          "logging": {
+            "mode": "none"
+          }
+        }
+      },
+      {
+        "id": "calc-tank",
+        "label": "Main tank Boyle-law model",
+        "kind": "function",
+        "functionId": "boyle_tank",
+        "inputs": {
+          "pressure": "PressurePSI"
+        },
+        "parameters": {
+          "effectiveTankGallons": 79.3,
+          "prechargeGaugePsi": 38,
+          "atmosphericPressurePsi": 13.07,
+          "regressionWindowSeconds": 20,
+          "minimumSamples": 7
+        },
+        "outputs": [
+          {
+            "systemName": "TankWaterGallons",
+            "label": "Estimated tank water",
+            "type": "number",
+            "unit": "gal",
+            "logging": {
+              "mode": "delta",
+              "threshold": 2
+            }
+          },
+          {
+            "systemName": "PressureSlopePSIPerMinute",
+            "label": "Pressure slope",
+            "type": "number",
+            "unit": "psi/min",
+            "logging": {
+              "mode": "always"
+            }
+          },
+          {
+            "systemName": "TankNetFlowGPM",
+            "label": "Estimated tank net flow",
+            "type": "number",
+            "unit": "GPM",
+            "logging": {
+              "mode": "delta",
+              "threshold": 1
+            }
+          },
+          {
+            "systemName": "PumpOffDemandGPM",
+            "label": "Estimated pump-off demand",
+            "type": "number",
+            "unit": "GPM",
+            "logging": {
+              "mode": "delta",
+              "threshold": 1
+            }
+          },
+          {
+            "systemName": "TankFlowQuality",
+            "label": "Tank flow quality",
+            "type": "enum",
+            "unit": null,
+            "logging": {
+              "mode": "always"
+            },
+            "enumValues": [
+              "VALID",
+              "INSUFFICIENT_HISTORY",
+              "PRESSURE_INVALID",
+              "SAMPLE_GAP",
+              "TREND_UNRESOLVED",
+              "TANK_MODEL_INVALID"
+            ]
+          }
+        ]
+      }
+    ],
+    "systemFields": [
+      {
+        "id": "system-operating-mode",
+        "systemName": "OperatingMode",
+        "label": "Operating mode",
+        "source": "session",
+        "runtimeRole": "operatingMode",
+        "type": "enum",
+        "unit": null,
+        "enumValues": [
+          "Normal",
+          "Monitor"
+        ],
+        "initialValue": "Normal",
+        "logging": {
+          "mode": "change"
+        },
+        "assignmentTarget": true
+      },
+      {
+        "id": "manual-operator-monitor",
+        "systemName": "OperatorMonitorRequest",
+        "label": "Operator Monitor request",
+        "source": "manualOccurrence",
+        "runtimeRole": "occurrence",
+        "type": "signal",
+        "unit": null,
+        "occurrenceKey": "operatorMonitor",
+        "logging": {
+          "mode": "none"
+        }
+      },
+      {
+        "id": "internal-shelly-em-unavailable",
+        "systemName": "ShellyEMUnavailable",
+        "label": "Shelly EM complete record unavailable",
+        "source": "internalOccurrence",
+        "runtimeRole": "occurrence",
+        "type": "signal",
+        "unit": null,
+        "occurrenceKey": "shellyEmUnavailable",
+        "logging": {
+          "mode": "none"
+        }
+      }
+    ],
+    "events": [
+      {
+        "id": "P001",
+        "systemName": "PumpCycle",
+        "displayName": "Pump drew current — the motor actually ran",
+        "severity": "Info",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "PumpWatts",
+                  "operator": "gt",
+                  "value": 2000
+                }
+              ],
+              "observationCount": 1,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "PumpWatts",
+                "operator": "lt",
+                "value": 1000
+              }
+            ],
+            "observationCount": 1,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": false,
+          "notifyOnClose": false,
+          "openMessage": "P001 — Pump drew current — the motor actually ran",
+          "closeMessage": ""
+        }
+      },
+      {
+        "id": "W01",
+        "systemName": "PumpStarted",
+        "displayName": "Pump started — the contactor closed",
+        "severity": "Info",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "ContactorFlag",
+                  "operator": "eq",
+                  "value": true
+                },
+                {
+                  "field": "Shelly1Available",
+                  "operator": "eq",
+                  "value": true
+                }
+              ],
+              "observationCount": 2,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "ContactorFlag",
+                "operator": "eq",
+                "value": false
+              },
+              {
+                "field": "Shelly1Available",
+                "operator": "eq",
+                "value": true
+              }
+            ],
+            "observationCount": 2,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": false,
+          "openMessage": "W01 — Pump started — the contactor closed",
+          "closeMessage": ""
+        }
+      },
+      {
+        "id": "P013",
+        "systemName": "LongPumpRuntime",
+        "displayName": "Pump has run over six minutes without stopping",
+        "severity": "Red",
+        "enabled": true,
+        "eventClass": "latched",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "PumpWatts",
+                  "operator": "gt",
+                  "value": 500
+                }
+              ],
+              "observationCount": 1,
+              "minimumSeconds": 360
+            }
+          }
+        },
+        "closing": {
+          "policy": "clearEvents"
+        },
+        "onOpen": {
+          "assignments": [
+            {
+              "target": "Tab5IsLocked",
+              "value": true,
+              "ownership": "whileOpen"
+            }
+          ],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": false,
+          "openMessage": "P013 — Pump has run over six minutes without stopping",
+          "closeMessage": "P013 cleared — Pump has run over six minutes without stopping"
+        }
+      },
+      {
+        "id": "W06",
+        "systemName": "ManualBypassInferred",
+        "displayName": "Motor running with the contactor open — HAND or a bypass",
+        "severity": "Yellow",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "PumpWatts",
+                  "operator": "gt",
+                  "value": 500
+                },
+                {
+                  "field": "ContactorFlag",
+                  "operator": "eq",
+                  "value": false
+                }
+              ],
+              "observationCount": 5,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "any",
+            "clauses": [
+              {
+                "field": "PumpWatts",
+                "operator": "lte",
+                "value": 500
+              },
+              {
+                "field": "ContactorFlag",
+                "operator": "eq",
+                "value": true
+              }
+            ],
+            "observationCount": 5,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": true,
+          "openMessage": "W06 — Motor running with the contactor open — HAND or a bypass",
+          "closeMessage": "W06 cleared — Motor running with the contactor open — HAND or a bypass"
+        }
+      },
+      {
+        "id": "W08",
+        "systemName": "PumpOverload",
+        "displayName": "Pump overload — drawing more than 3300 W",
+        "severity": "Red",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "PumpWatts",
+                  "operator": "gt",
+                  "value": 3300
+                }
+              ],
+              "observationCount": 2,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "PumpWatts",
+                "operator": "lte",
+                "value": 3300
+              }
+            ],
+            "observationCount": 2,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": true,
+          "openMessage": "W08 — Pump overload — drawing more than 3300 W - Not Latched now, transient would jitter.",
+          "closeMessage": "W08 cleared — Pump overload — drawing more than 3300 W"
+        }
+      },
+      {
+        "id": "W09",
+        "systemName": "PumpUnderload",
+        "displayName": "Pump running underloaded — under 2600 W, may be pumping air",
+        "severity": "Red",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "PumpWatts",
+                  "operator": "between",
+                  "value": [
+                    100,
+                    2600
+                  ]
+                }
+              ],
+              "observationCount": 5,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "PumpWatts",
+                "operator": "outside",
+                "value": [
+                  100,
+                  2600
+                ]
+              }
+            ],
+            "observationCount": 5,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": true,
+          "openMessage": "W09 — Pump running underloaded — under 2600 W, may be pumping air",
+          "closeMessage": "W09 cleared — Pump running underloaded — under 2600 W, may be pumping air"
+        }
+      },
+      {
+        "id": "E002",
+        "systemName": "PumpDidNotStart",
+        "displayName": "Contactor closed but no motor current — the pump did not start",
+        "severity": "Red",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "ContactorFlag",
+                  "operator": "eq",
+                  "value": true
+                },
+                {
+                  "field": "PumpWatts",
+                  "operator": "lt",
+                  "value": 500
+                }
+              ],
+              "observationCount": 4,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "any",
+            "clauses": [
+              {
+                "field": "ContactorFlag",
+                "operator": "eq",
+                "value": false
+              },
+              {
+                "field": "PumpWatts",
+                "operator": "gte",
+                "value": 500
+              }
+            ],
+            "observationCount": 4,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": false,
+          "openMessage": "E002 — Contactor closed but no motor current — the pump did not start",
+          "closeMessage": ""
+        }
+      },
+      {
+        "id": "E007",
+        "systemName": "UtilityVoltageHigh",
+        "displayName": "Utility voltage high — pump inhibited until it recovers",
+        "severity": "Red",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "SupplyVoltage",
+                  "operator": "gt",
+                  "value": 265
+                }
+              ],
+              "observationCount": 2,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "SupplyVoltage",
+                "operator": "lte",
+                "value": 265
+              }
+            ],
+            "observationCount": 20,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [
+            {
+              "target": "Tab5IsLocked",
+              "value": true,
+              "ownership": "whileOpen"
+            }
+          ],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": true,
+          "openMessage": "E007 — Utility voltage high — pump inhibited until it recovers",
+          "closeMessage": "E007 cleared — Utility voltage high — pump inhibited until it recovers"
+        }
+      },
+      {
+        "id": "E006",
+        "systemName": "UtilityVoltageLow",
+        "displayName": "Utility voltage low — pump inhibited until it recovers",
+        "severity": "Red",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "SupplyVoltage",
+                  "operator": "lt",
+                  "value": 220
+                }
+              ],
+              "observationCount": 2,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "SupplyVoltage",
+                "operator": "gte",
+                "value": 220
+              }
+            ],
+            "observationCount": 20,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [
+            {
+              "target": "Tab5IsLocked",
+              "value": true,
+              "ownership": "whileOpen"
+            }
+          ],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": true,
+          "openMessage": "E006 — Utility voltage low — pump inhibited until it recovers",
+          "closeMessage": "E006 cleared — Utility voltage low — pump inhibited until it recovers"
+        }
+      },
+      {
+        "id": "W07",
+        "systemName": "TankOverPressure",
+        "displayName": "Tank pressure above 70 psi — pump locked off, pressure switch may have failed",
+        "severity": "Red",
+        "enabled": true,
+        "eventClass": "latched",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "PressurePSI",
+                  "operator": "gt",
+                  "value": 70
+                }
+              ],
+              "observationCount": 2,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "clearEvents"
+        },
+        "onOpen": {
+          "assignments": [
+            {
+              "target": "Tab5IsLocked",
+              "value": true,
+              "ownership": "whileOpen"
+            }
+          ],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": true,
+          "openMessage": "W07 — Tank pressure above 70 psi — pump locked off, pressure switch may have failed",
+          "closeMessage": "W07 cleared — Tank pressure above 70 psi — pump locked off, pressure switch may have failed"
+        }
+      },
+      {
+        "id": "W02",
+        "systemName": "TankPressureLow",
+        "displayName": "Tank pressure has fallen below 35 psi with the pump stopped",
+        "severity": "Red",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "PressurePSI",
+                  "operator": "lt",
+                  "value": 35
+                }
+              ],
+              "observationCount": 15,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "PressurePSI",
+                "operator": "gte",
+                "value": 38
+              }
+            ],
+            "observationCount": 15,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": true,
+          "openMessage": "W02 — Tank pressure has fallen below 35 psi with the pump stopped",
+          "closeMessage": "W02 cleared — Tank pressure has fallen below 35 psi with the pump stopped"
+        }
+      },
+      {
+        "id": "W03",
+        "systemName": "ShellyProtectionLock",
+        "displayName": "Shelly protection lock is active — the pump is blocked at the relay",
+        "severity": "Yellow",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "IsLocked",
+                  "operator": "neq",
+                  "value": 0
+                }
+              ],
+              "observationCount": 2,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "IsLocked",
+                "operator": "eq",
+                "value": 0
+              }
+            ],
+            "observationCount": 2,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": true,
+          "openMessage": "W03 — Shelly Anti-Jitter protection lock is active — the pump is blocked at the relay",
+          "closeMessage": "W03 cleared — Shelly protection lock is active — the pump is blocked at the relay"
+        }
+      },
+      {
+        "id": "W04",
+        "systemName": "PressureEvidenceSuspect",
+        "displayName": "Pressure readings suspect — leak detection is blind",
+        "severity": "Yellow",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "any",
+              "clauses": [
+                {
+                  "field": "PressurePSI",
+                  "operator": "outside",
+                  "value": [
+                    10,
+                    100
+                  ]
+                }
+              ],
+              "observationCount": 5,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "PressurePSI",
+                "operator": "between",
+                "value": [
+                  10,
+                  100
+                ]
+              }
+            ],
+            "observationCount": 5,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": true,
+          "openMessage": "W04 — Pressure readings out of range and suspect — leak detection is blind",
+          "closeMessage": "W04 cleared — Pressure readings out of range"
+        }
+      },
+      {
+        "id": "W05",
+        "systemName": "Shelly1NotAnswering",
+        "displayName": "Shelly 1 is not answering — pump start detection is blind",
+        "severity": "Yellow",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "Shelly1Available",
+                  "operator": "eq",
+                  "value": false
+                }
+              ],
+              "observationCount": 5,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "Shelly1Available",
+                "operator": "eq",
+                "value": true
+              }
+            ],
+            "observationCount": 3,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": true,
+          "openMessage": "W05 — Shelly 1 is not answering — pump start detection is blind",
+          "closeMessage": "W05 cleared — Shelly 1 is now answering"
+        }
+      },
+      {
+        "id": "H001",
+        "systemName": "ElectricalSourceInvalid",
+        "displayName": "Power meter is not answering — electrical readings unavailable",
+        "severity": "Yellow",
+        "enabled": true,
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "ShellyEMAvailable",
+                  "operator": "eq",
+                  "value": false
+                }
+              ],
+              "observationCount": 5,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "ShellyEMAvailable",
+                "operator": "eq",
+                "value": true
+              }
+            ],
+            "observationCount": 3,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": true,
+          "openMessage": "H001 — Power meter is not answering — electrical readings unavailable",
+          "closeMessage": "H001 cleared — Power meter is avaiable"
+        }
+      },
+      {
+        "id": "M001",
+        "systemName": "OperatorMonitor",
+        "displayName": "Operator Monitor engaged — inhibition released until restart",
+        "severity": "Info",
+        "enabled": true,
+        "eventClass": "monitor",
+        "opening": {
+          "trigger": {
+            "type": "manual",
+            "occurrenceField": "OperatorMonitorRequest",
+            "qualification": {
+              "observationCount": 1,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "clearEvents"
+        },
+        "onOpen": {
+          "assignments": [
+            {
+              "target": "OperatingMode",
+              "value": "Monitor",
+              "ownership": "whileOpen"
+            }
+          ],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": false,
+          "notifyOnClose": false,
+          "openMessage": "",
+          "closeMessage": ""
+        }
+      },
+      {
+        "id": "T010",
+        "systemName": "TestHVtemp",
+        "displayName": "TEST — high voltage above 260 V",
+        "enabled": true,
+        "severity": "Yellow",
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "SupplyVoltage",
+                  "operator": "gt",
+                  "value": 260
+                }
+              ],
+              "observationCount": 1,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "SupplyVoltage",
+                "operator": "lte",
+                "value": 260
+              }
+            ],
+            "observationCount": 1,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [
+            {
+              "target": "Tab5IsLocked",
+              "value": true,
+              "ownership": "whileOpen"
+            }
+          ],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": false,
+          "openMessage": "T010 — TEST — high voltage above 260 V",
+          "closeMessage": ""
+        }
+      },
+      {
+        "id": "T020",
+        "systemName": "TestHVlock",
+        "displayName": "TEST — high voltage above 265 V",
+        "enabled": false,
+        "severity": "Red",
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "SupplyVoltage",
+                  "operator": "gt",
+                  "value": 265
+                }
+              ],
+              "observationCount": 1,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "SupplyVoltage",
+                "operator": "lte",
+                "value": 265
+              }
+            ],
+            "observationCount": 1,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [
+            {
+              "target": "Tab5IsLocked",
+              "value": true,
+              "ownership": "whileOpen"
+            }
+          ],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": false,
+          "openMessage": "T020 — TEST — high voltage above 265 V",
+          "closeMessage": ""
+        }
+      },
+      {
+        "id": "T030",
+        "systemName": "TestIsLockedTransient",
+        "displayName": "TEST — Shelly lock, transient",
+        "enabled": false,
+        "severity": "Yellow",
+        "eventClass": "transient",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "IsLocked",
+                  "operator": "neq",
+                  "value": 0
+                }
+              ],
+              "observationCount": 2,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "condition",
+          "condition": {
+            "mode": "all",
+            "clauses": [
+              {
+                "field": "IsLocked",
+                "operator": "eq",
+                "value": 0
+              }
+            ],
+            "observationCount": 8,
+            "minimumSeconds": 0
+          }
+        },
+        "onOpen": {
+          "assignments": [
+            {
+              "target": "Tab5IsLocked",
+              "value": true,
+              "ownership": "whileOpen"
+            }
+          ],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": false,
+          "openMessage": "T030 — TEST — Shelly lock, transient",
+          "closeMessage": ""
+        }
+      },
+      {
+        "id": "T040",
+        "systemName": "TestIsLockedLatched",
+        "displayName": "TEST — Shelly lock, latched",
+        "enabled": false,
+        "severity": "Red",
+        "eventClass": "latched",
+        "opening": {
+          "trigger": {
+            "type": "condition",
+            "condition": {
+              "mode": "all",
+              "clauses": [
+                {
+                  "field": "IsLocked",
+                  "operator": "neq",
+                  "value": 0
+                }
+              ],
+              "observationCount": 2,
+              "minimumSeconds": 0
+            }
+          }
+        },
+        "closing": {
+          "policy": "clearEvents"
+        },
+        "onOpen": {
+          "assignments": [
+            {
+              "target": "Tab5IsLocked",
+              "value": true,
+              "ownership": "whileOpen"
+            }
+          ],
+          "guardedGroups": []
+        },
+        "onClose": {
+          "assignments": [],
+          "guardedGroups": []
+        },
+        "summary": {
+          "durationOutput": null,
+          "aggregates": []
+        },
+        "web": {
+          "notifyOnOpen": true,
+          "notifyOnClose": false,
+          "openMessage": "T040 — TEST — Shelly lock, latched",
+          "closeMessage": ""
+        }
+      }
+    ]
+  }
+}
