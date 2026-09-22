@@ -1,4 +1,4 @@
-# Release: 2026-09-13 M6.37 — repaired short-lived operator command transport.
+# Release: 2026-09-22 M6.43 — Wi-Fi modem sleep explicitly disabled.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -1965,7 +1965,7 @@ def start():
         if _started:
             return False
         _started = True
-        log('CPU B release M6.37: monotonic operator control transport')
+        log('CPU B release M6.43: Wi-Fi modem sleep disabled')
         _thread.start_new_thread(_worker, ())
         return True
     finally:

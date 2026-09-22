@@ -328,7 +328,17 @@ class HmiFoundationTests(unittest.TestCase):
         self.assertIsNone(arm("restart-tab5", 2000, action, until, True)[2])
 
     def test_release_matches_the_stamped_software_release(self):
-        self.assertEqual(self.logic["SOFTWARE_RELEASE"], "M6.42")
+        """tab5/AGENTS.md: the header, SOFTWARE_RELEASE and the startup log agree.
+
+        Derived rather than asserted against a literal, so a bump has one place
+        to change and cannot leave two of the three behind.
+        """
+        release = self.logic["SOFTWARE_RELEASE"]
+        source = PILOT_PATH.read_text(encoding="utf-8")
+        header = source.splitlines()[0]
+        self.assertTrue(header.startswith("# Release: "), header)
+        self.assertIn(" {} \u2014 ".format(release), header)
+        self.assertIn("log('CPU A release {}:".format(release), source)
 
     def test_touch_service_is_not_limited_to_remaining_cycle_sleep(self):
         # The ADS1110 stack moved to main.py, which owns board init; the touch

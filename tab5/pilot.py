@@ -1,4 +1,4 @@
-# Release: 2026-09-15 M6.42 — pressure sensor commissioned.
+# Release: 2026-09-22 M6.43 — script liveness; truthful Shelly reboot; Boyle pump edge.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -82,7 +82,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # guards, so while it was False PressurePSI was never produced at all and
 # TankFlowQuality read PRESSURE_INVALID rather than a real quality.
 PRESSURE_SENSOR_COMMISSIONED = True
-SOFTWARE_RELEASE = 'M6.42'
+SOFTWARE_RELEASE = 'M6.43'
 OPERATOR_COMMAND_LIFETIME_MS = 45000
 OPERATOR_CONFIRM_WINDOW_MS = 8000
 SHELLY_RESTART_CONFIRM_MS = 60000
@@ -4842,7 +4842,7 @@ def service_navigation():
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.42: pressure commissioned; V3 authority')
+log('CPU A release M6.43: script liveness; truthful Shelly reboot')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.
