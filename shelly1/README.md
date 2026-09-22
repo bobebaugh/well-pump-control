@@ -87,13 +87,31 @@ cycle needs. The unfiltered call paginates and truncates, so it is never used fo
 acquisition:
 
 ```
-http://192.168.50.201/rpc/Shelly.GetComponents?keys=%5B%22switch%3A0%22%2C%22input%3A0%22%2C%22number%3A201%22%2C%22number%3A202%22%2C%22boolean%3A200%22%5D&include=%5B%22config%22%2C%22status%22%5D
+http://192.168.50.201/rpc/Shelly.GetComponents?keys=%5B%22switch:0%22%2C%22input:0%22%2C%22number:201%22%2C%22number:202%22%2C%22boolean:200%22%2C%22script:1%22%5D&include=%5B%22config%22%2C%22status%22%5D
 ```
+
+The colons are deliberately not percent-encoded: that is what
+`_percent_encode_keys` produces, and this block is pinned to the bytes Tab5 sends
+rather than to a plausible hand-typed equivalent.
 
 The device silently omits a key it does not have — no error, no placeholder — and
 `total` counts only what matched, so a missing component is indistinguishable from
 a short page by the reply alone. Presence-check every key, and look results up by
 key rather than by position.
+
+`script:1` is the exception to both of those. Its id is fixed in the request
+because scripts are not dynamic components: the discovery call above is
+`dynamic_only=true` and cannot resolve a script by name. Tab5 therefore verifies
+`config.name` reads `anti-chatter` on every read and treats a mismatch as absent,
+and an omitted or unidentified `script:1` does not reject the acquisition — the
+liveness field goes absent while the measurements stand. Script 2 is
+`Test-Harness`; an id-only check would be satisfied by the wrong script if it were
+re-enabled or the scripts were renumbered.
+
+Read `status.running`, never `config.enable`. A stopped script keeps `enable` true
+— that only says it should autostart. `running` is also the only field here that
+changes when the script stops: `IsLocked` and `loCntr` retain their last value and
+go on looking healthy without their writer.
 
 Write the Tab5 inhibition flag (`SHELLY_1_BOOLEAN_SET_URL`), `value` true or false:
 

@@ -606,6 +606,20 @@ class DocumentedRpcCommandTests(unittest.TestCase):
         # renumbered must be told that is expected, not a device fault.
         self.assertIn("Component ids are assigned at creation", self.README)
 
+    def test_the_documented_keys_list_is_encoded_the_way_pilot_encodes_it(self):
+        """_percent_encode_keys leaves the colon raw; a hand-typed %3A is drift."""
+        keys = ["switch:0", "input:0", "number:201", "number:202",
+                "boolean:200", "script:1"]
+        expected = "%5B{}%5D".format(
+            "%2C".join("%22{}%22".format(key) for key in keys))
+        self.assertIn(expected, self.README)
+
+    def test_the_script_liveness_rule_is_documented(self):
+        # An id-based or enable-based check is the mistake this prevents: the
+        # script id cannot be discovered and enable stays true when it stops.
+        self.assertIn("`status.running`, never `config.enable`", self.README)
+        self.assertIn("`config.name` reads `anti-chatter`", self.README)
+
     def test_the_boolean_set_acceptance_rule_is_stated(self):
         # The dispatcher accepts only a bare null; a reference that omitted this
         # would let a wrong-but-successful-looking reply pass unnoticed.

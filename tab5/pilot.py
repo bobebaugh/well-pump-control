@@ -45,6 +45,15 @@ SHELLY_1_RESTART_URL = 'http://192.168.50.201/rpc/Shelly.Reboot'
 SHELLY_1_LOCK_NAME = 'IsLocked'
 SHELLY_1_COUNT_NAME = 'loCntr'
 SHELLY_1_FLAG_NAME = 'Tab5IsLocked'
+# The protection script's liveness. The key is fixed because scripts are not
+# dynamic components: the discovery call is dynamic_only=true and cannot resolve
+# them, so an id cannot be discovered by name the way the virtuals are. The name
+# is therefore the only evidence that the answered component really is the
+# protection script, and it is checked on every read. Script 2 is Test-Harness,
+# currently enable:false, and an id-only check would be satisfied by it if the
+# owner re-enabled or renumbered anything.
+SHELLY_1_SCRIPT_KEY = 'script:1'
+SHELLY_1_SCRIPT_NAME = 'anti-chatter'
 # The observation cadence. Five ADS1110 conversions at 15 SPS already cost about
 # 335ms of this before any network I/O, and two Shelly reads may each spend up to
 # SHELLY_TIMEOUT_S. Anything below derived from this constant must stay derived:
@@ -161,6 +170,12 @@ RUNTIME_DIRECT_BINDINGS = {
         'RLY(0)': ('boolean', None, 'read'),
         'UDF(IsLocked)': ('integer', 's', 'read'),
         'UDF(Tab5IsLocked)': ('boolean', None, 'readWrite'),
+        # Whether the protection script is executing, named because the name is
+        # what the acquisition verifies. Device records are accepted atomically,
+        # so a package that declares this field makes an absent or renamed script
+        # reject the whole Shelly 1 record for that cycle. That is a deliberate
+        # authoring decision, not a default: nothing declares it yet.
+        'SCRIPT(anti-chatter)': ('boolean', None, 'read'),
         '$availability': ('boolean', None, 'read'),
     },
     'tab5-runtime': {
@@ -590,14 +605,20 @@ def shelly1_component_routing(data):
 
 
 def shelly1_filtered_keys(routing):
-    """Name every component one acquisition needs, static keys included."""
+    """Name every component one acquisition needs, static keys included.
+
+    The script key is last so the discovered ids keep their positions; it is also
+    the one key whose absence does not reject the acquisition, because script
+    liveness is additional evidence and not a measurement this cycle depends on.
+    """
     if not isinstance(routing, dict):
         return None
     try:
         return ['switch:0', 'input:0',
                 'number:{}'.format(routing[SHELLY_1_LOCK_NAME]),
                 'number:{}'.format(routing[SHELLY_1_COUNT_NAME]),
-                'boolean:{}'.format(routing[SHELLY_1_FLAG_NAME])]
+                'boolean:{}'.format(routing[SHELLY_1_FLAG_NAME]),
+                SHELLY_1_SCRIPT_KEY]
     except Exception:
         return None
 
@@ -613,6 +634,32 @@ def shelly1_filtered_url(routing):
     if keys is None:
         return None
     return SHELLY_1_FILTERED_URL.format(_percent_encode_keys(keys))
+
+
+def _shelly1_script_running(component):
+    """Return the protection script's own running flag, or None when absent.
+
+    status.running is read, never config.enable. A stopped script keeps enable
+    true - that only says it should autostart - and the bench capture of 22 Sep
+    shows running:false with enable:true. running is also the one field here that
+    genuinely flips: IsLocked and loCntr retain their last value and go on looking
+    healthy after the script that maintains them has stopped, which is the whole
+    reason this field exists.
+
+    The component is pinned by config.name, which arrives in the same payload. A
+    name that does not match reads as absent rather than as healthy: a wrong or
+    renumbered script is not evidence about this one.
+    """
+    if not isinstance(component, dict):
+        return None
+    config = component.get('config')
+    status = component.get('status')
+    if not isinstance(config, dict) or not isinstance(status, dict):
+        return None
+    if config.get('name') != SHELLY_1_SCRIPT_NAME:
+        return None
+    running = status.get('running')
+    return running if isinstance(running, bool) else None
 
 
 def normalize_shelly1_filtered(data, routing):
@@ -639,7 +686,7 @@ def normalize_shelly1_filtered(data, routing):
         if key in by_key:
             return None  # a duplicated key is not usable evidence
         by_key[key] = component
-    if any(key not in by_key for key in keys):
+    if any(key not in by_key for key in keys if key != SHELLY_1_SCRIPT_KEY):
         return None  # incomplete page; never interpreted as absence
     switch_status = by_key['switch:0'].get('status')
     input_status = by_key['input:0'].get('status')
@@ -670,6 +717,11 @@ def normalize_shelly1_filtered(data, routing):
         'is_locked': named[SHELLY_1_LOCK_NAME],
         'lockout_count': named[SHELLY_1_COUNT_NAME],
         'tab5_is_locked': named[SHELLY_1_FLAG_NAME],
+        # Liveness of the script that writes the two numbers above. Absent rather
+        # than False when the script is missing or answers under another name, so
+        # a stopped script and an unidentified one are never reported as running.
+        'script_running': _shelly1_script_running(
+            by_key.get(SHELLY_1_SCRIPT_KEY)),
         # Dynamic routing travels with the acquisition that proved it, and is kept
         # out of the authored rule values.
         'flag_id': routing[SHELLY_1_FLAG_NAME],
@@ -984,6 +1036,11 @@ def build_observation(sequence, observed_ticks_ms, clock_is_synced, shelly,
                                       if isinstance(shelly1, dict) else None),
             'shelly1_tab5lock': (shelly1.get('tab5_is_locked')
                                  if isinstance(shelly1, dict) else None),
+            # True, False, or absent. Absent covers a failed cycle, a missing
+            # script and one answering under another name; none of those is
+            # evidence that protection is executing.
+            'shelly1_script_running': (shelly1.get('script_running')
+                                       if isinstance(shelly1, dict) else None),
         },
         'status': {
             'shelly_available': shelly_is_available,
@@ -1093,6 +1150,7 @@ RUNTIME_OBJECT_PATHS = {
         'SW(0)': 'values.shelly1_sw0', 'RLY(0)': 'values.shelly1_rly0',
         'UDF(IsLocked)': 'values.shelly1_lock',
         'UDF(Tab5IsLocked)': 'values.shelly1_tab5lock',
+        'SCRIPT(anti-chatter)': 'values.shelly1_script_running',
         '$availability': 'status.shelly1_available',
     },
 }

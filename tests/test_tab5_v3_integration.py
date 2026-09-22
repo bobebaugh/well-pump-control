@@ -82,6 +82,7 @@ def load_logic(targets):
 
 TARGETS = {
     "read_shelly", "read_shelly1", "normalize_shelly1_filtered",
+    "RUNTIME_OBJECT_PATHS", "RUNTIME_DIRECT_BINDINGS",
     "shelly1_component_routing", "shelly1_filtered_keys", "shelly1_filtered_url",
     "start_rules_v3_runtime", "stage_rules_v3_release", "run_rules_v3_cycle",
     "rules_v3_state_report", "issue_rules_v3_action", "dispatch_rules_v3_actions",
@@ -120,7 +121,7 @@ class V3IntegratedApplicationTests(unittest.TestCase):
 
     @classmethod
     def filtered(cls, locked=0, counter=0, flag=False, output=True, state=True,
-                 drop=None, rename=None):
+                 drop=None, rename=None, script_running=True):
         """One filtered reply, adjusted per case. Keys come from the fixture."""
         reply = copy.deepcopy(SHELLY_DOC["filteredResponse"])
         ids = cls.routing_ids()
@@ -138,6 +139,8 @@ class V3IntegratedApplicationTests(unittest.TestCase):
                 component["status"]["state"] = state
             elif key in values:
                 component["status"]["value"] = values[key]
+            elif key == "script:1":
+                component["status"]["running"] = script_running
             if rename and key == rename[0]:
                 component["config"]["name"] = rename[1]
             kept.append(component)
@@ -216,7 +219,10 @@ class V3IntegratedApplicationTests(unittest.TestCase):
             "switch:0", "input:0",
             "number:{}".format(ids["IsLocked"]),
             "number:{}".format(ids["loCntr"]),
-            "boolean:{}".format(ids["Tab5IsLocked"])])
+            "boolean:{}".format(ids["Tab5IsLocked"]),
+            # The protection script rides the same request. Last, so the
+            # discovered ids keep their positions.
+            "script:1"])
         url = self.logic["shelly1_filtered_url"](ids)
         for key in keys:
             self.assertIn("%22{}%22".format(key), url)
@@ -290,6 +296,96 @@ class V3IntegratedApplicationTests(unittest.TestCase):
         self.assertIsNone(accept("bad", ids))
         self.assertIsNone(accept(self.filtered(), None))
 
+    def test_script_liveness_reads_running_and_never_enable(self):
+        """Against the 22 Sep bench captures of the script in both states."""
+        accept = self.logic["normalize_shelly1_filtered"]
+        ids = self.routing_ids()
+        running = copy.deepcopy(SHELLY_DOC["capturedScriptComponentRunning"])
+        stopped = copy.deepcopy(SHELLY_DOC["capturedScriptComponentStopped"])
+        # Both captures carry config.enable true. enable says "should it
+        # autostart", not "is it executing", so it cannot stand in for running.
+        self.assertIs(running["config"]["enable"], True)
+        self.assertIs(stopped["config"]["enable"], True)
+        self.assertIs(running["status"]["running"], True)
+        self.assertIs(stopped["status"]["running"], False)
+
+        for component, expected in ((running, True), (stopped, False)):
+            reply = self.filtered(drop="script:1")
+            reply["components"].append(copy.deepcopy(component))
+            record = accept(reply, ids)
+            self.assertIsNotNone(record)
+            self.assertIs(record["script_running"], expected)
+            # The measurements a stopped script leaves behind are unchanged: they
+            # retain their last value, which is exactly why running is read.
+            self.assertEqual(record["is_locked"], 0)
+            self.assertEqual(record["lockout_count"], 0)
+
+    def test_script_liveness_is_pinned_by_name_and_absent_when_unproven(self):
+        accept = self.logic["normalize_shelly1_filtered"]
+        ids = self.routing_ids()
+        # A name that does not match is not evidence about this script. Absent,
+        # never False and never trusted: id 2 on the device is Test-Harness, and
+        # an id-only check would be satisfied by the wrong script.
+        renamed = accept(self.filtered(rename=("script:1", "Test-Harness")), ids)
+        self.assertIsNotNone(renamed, "a wrong name does not reject the cycle")
+        self.assertIsNone(renamed["script_running"])
+        # Absent entirely, malformed, and a non-boolean running all read absent.
+        self.assertIsNone(accept(self.filtered(drop="script:1"),
+                                 ids)["script_running"])
+        for broken in ({"key": "script:1"},
+                       {"key": "script:1", "config": {"name": "anti-chatter"},
+                        "status": {"running": "true"}},
+                       {"key": "script:1", "config": {"name": "anti-chatter"},
+                        "status": {"enable": True}}):
+            reply = self.filtered(drop="script:1")
+            reply["components"].append(broken)
+            record = accept(reply, ids)
+            self.assertIsNotNone(record, broken)
+            self.assertIsNone(record["script_running"], broken)
+
+    def built(self, shelly1, available):
+        """One real observation record, so the field is proved where it travels."""
+        return self.logic["build_observation"](
+            sequence=1, observed_ticks_ms=0, clock_is_synced=True,
+            shelly=self.em(), shelly_is_available=True,
+            shelly_poll_was_attempted=True, shelly_last_valid_ticks_ms=0,
+            adc_last_valid_ticks_ms=0, battery_voltage=4.0,
+            battery_current=0.1, battery_percent=80, battery_is_charging=False,
+            battery_is_valid=True, battery_charge_is_enabled=False,
+            battery_sample_ticks_ms=0, wifi_is_connected=True,
+            traffic_is_allowed=True, wifi_status=None, wifi_address="1.2.3.4",
+            wifi_disconnect_count=0, shelly_failures=0, shelly1=shelly1,
+            shelly1_is_available=available)
+
+    def test_script_liveness_reaches_the_observation_and_is_bindable(self):
+        ids = self.routing_ids()
+        for running in (True, False):
+            urls = []
+
+            def get(url, running=running):
+                urls.append(url)
+                return self.filtered(script_running=running)
+
+            record, routing = self.logic["read_shelly1"](get, ids)
+            self.assertEqual(routing, ids)
+            # Liveness rides the acquisition the cycle already makes. A second
+            # request was the condition for not doing this at all.
+            self.assertEqual(len(urls), 1)
+            self.assertIn("%22script:1%22", urls[0])
+            observation = self.built(record, True)
+            self.assertIs(observation["values"]["shelly1_script_running"], running)
+        # Bindable by name, on the path the observation actually carries, and read
+        # only. Nothing declares it yet; no event is authored on it here.
+        self.assertEqual(
+            self.logic["RUNTIME_OBJECT_PATHS"]["shelly-gen4-switch"][
+                "SCRIPT(anti-chatter)"], "values.shelly1_script_running")
+        self.assertEqual(
+            self.logic["RUNTIME_DIRECT_BINDINGS"]["shelly-gen4-switch"][
+                "SCRIPT(anti-chatter)"], ("boolean", None, "read"))
+        # A failed cycle leaves it absent rather than reporting a stopped script.
+        self.assertIsNone(
+            self.built(None, False)["values"]["shelly1_script_running"])
+
     def test_the_captured_device_response_parses(self):
         """Against the owner-captured filtered reply, not a description of one.
 
@@ -324,7 +420,10 @@ class V3IntegratedApplicationTests(unittest.TestCase):
         record = self.logic["normalize_shelly1_filtered"](complete, routing)
         self.assertEqual(record, {
             "sw0": False, "rly0": True, "is_locked": 0, "lockout_count": 0,
-            "tab5_is_locked": False, "flag_id": 250})
+            "tab5_is_locked": False,
+            # This capture predates the script key being requested, so the reply
+            # carries no script:1 and liveness is absent rather than assumed.
+            "script_running": None, "flag_id": 250})
 
         # Order must not matter, and acceptance must not depend on total.
         reversed_order = copy.deepcopy(complete)

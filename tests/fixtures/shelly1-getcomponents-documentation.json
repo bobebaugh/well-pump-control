@@ -78,7 +78,25 @@
       "a false-to-true transition, which is the only shape Tab5 ever issues - it",
       "short-circuits on `if observed is value` and never writes a redundant value.",
       "The HTTP status line was not in the captured frame, but a bare null is the",
-      "success reply on this RPC surface; an RPC error returns an error object."
+      "success reply on this RPC surface; an RPC error returns an error object.",
+      "",
+      "2026-09-22, THE PROTECTION SCRIPT'S LIVENESS, captured on the bench in both",
+      "states and recorded below as capturedScriptComponentRunning and",
+      "capturedScriptComponentStopped. It establishes three things:",
+      "  - script:1 comes back from the SAME filtered Shelly.GetComponents call the",
+      "    cycle already makes, carrying both config and status. No second request.",
+      "    That was the condition for reading liveness at all;",
+      "  - status.running genuinely flips true -> false when the script is stopped,",
+      "    unlike IsLocked and loCntr, which retain their last value and go on",
+      "    looking healthy after their writer has stopped;",
+      "  - config.enable stayed TRUE in the stopped capture. enable means 'should it",
+      "    autostart', not 'is it executing', so running is the field read and enable",
+      "    is never substituted for it.",
+      "The id is fixed in the request because scripts are NOT dynamic components: the",
+      "discovery call is dynamic_only=true and cannot resolve them by name. config.name",
+      "is therefore verified on every read, and a mismatch reads as absent. Script 2 on",
+      "this device is 'Test-Harness' with enable false; the owner may re-enable it, and",
+      "an id-only check would then be satisfied by the wrong script."
     ],
     "notCaptured": [
       "Observed relay behavior across a Shelly reboot with an inhibition outstanding.",
@@ -335,6 +353,20 @@
           "owner": "script:1",
           "role": "tab5IsLocked"
         }
+      },
+      {
+        "key": "script:1",
+        "status": {
+          "id": 1,
+          "running": true,
+          "cpu": 7,
+          "mem_free": 22022
+        },
+        "config": {
+          "id": 1,
+          "name": "anti-chatter",
+          "enable": true
+        }
       }
     ],
     "cfg_rev": 131,
@@ -475,5 +507,33 @@
     "request": "GET http://192.168.50.201/rpc/Boolean.Set?id=200&value=true",
     "responseBody": null,
     "note": "A bare JSON null, not an object. Recorded as null here because that is literally what the device returned; do not 'fix' it to {} or omit it."
+  },
+  "capturedScriptComponentRunning": {
+    "key": "script:1",
+    "status": {
+      "id": 1,
+      "running": true,
+      "cpu": 7,
+      "mem_free": 22022
+    },
+    "config": {
+      "id": 1,
+      "name": "anti-chatter",
+      "enable": true
+    }
+  },
+  "capturedScriptComponentStopped": {
+    "key": "script:1",
+    "status": {
+      "id": 1,
+      "running": false,
+      "cpu": 0,
+      "mem_free": 25200
+    },
+    "config": {
+      "id": 1,
+      "name": "anti-chatter",
+      "enable": true
+    }
   }
 }
