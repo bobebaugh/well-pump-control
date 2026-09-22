@@ -38,12 +38,16 @@ Old branch tips are archived in maintenance/branch-archive-2026-09-16.csv.
    `NOTIFY_DRY_RUN=1` while testing. Missing values leave the notifier inert and log
    the names only; ingestion is unaffected. Verify with a test event, T010-T040,
    using tests/notification-live.check.cjs.
-6. Confirm the SMS leg on the phone, not in Resend. The owner's working gateway test
-   was Gmail to the Verizon address; this application is the first to send by API, so
-   a sending domain with no history has never been exercised against that gateway.
-   Carrier gateways drop unknown senders silently, and Resend records the gateway's
-   acceptance as delivered, so metrics cannot establish that a text arrived. Observed
-   Gmail-to-gateway latency is about three minutes, so the email leg arrives first.
+6. The notification transport is proven. On 22 September a live batch send from
+   resend.ebaugh.net delivered both legs to the owner: the email, and the text through
+   the Verizon gateway a few seconds behind it. A sending domain with no history was
+   therefore not filtered, and the path is far faster than the owner's earlier
+   Gmail-to-gateway route at about three minutes. The application's own send is covered
+   by tests but has not yet made a live call - the transport was exercised directly
+   against the same endpoint and envelope - so the first T010 after deployment closes
+   that last gap. Only the short T010 message has been sent: the display names carry an
+   em-dash, which is outside the GSM-7 alphabet and forces UCS-2 at seventy characters
+   per segment, so watch how a full-length name such as W07 arrives during the soak.
 
 No DNS, Netlify settings, Firebase configuration, device upload, restart or source
 promotion was performed by this housekeeping. History is in Git; all deferred work
