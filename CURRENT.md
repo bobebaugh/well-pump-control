@@ -10,6 +10,11 @@ User Monitor/Tab5 restart/Shelly restart requests. The owner reports the latest
 home-page fix is promoted and appears to work. Existing Firestore and RTDB remain
 the intended shared stores for Pilot and Main. No database move is planned.
 
+For troubleshooting, maintenance/firestore-peek.cjs reads any collection from the
+command line - read-only by construction - so a record can be inspected without copying
+it out of the Firebase console. It needs FIREBASE_SERVICE_ACCOUNT_JSON in the
+environment, ideally from a viewer-scoped account, and adds no public route.
+
 The latest device working source is M6.42; the owner believes it is installed.
 The owner confirms the Shelly 1 protection script is fully unit tested on real
 hardware. Exact installed files/package identity still need a release receipt.
