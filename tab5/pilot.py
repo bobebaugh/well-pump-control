@@ -464,13 +464,12 @@ def _read_json(url):
              if url.startswith(SHELLY_1_FILTERED_PREFIX) else 'Shelly.read')
     started = time.ticks_ms()
     phase, http_status = 'transport', None
+    r = None
     try:
         r = requests.get(url, timeout=SHELLY_TIMEOUT_S)
         http_status = getattr(r, 'status_code', None)
         phase = 'json-decode'
         data = r.json()
-        phase = 'response-close'
-        r.close()
     except Exception as error:
         # Do not print arbitrary exception text, response bodies, or URLs.
         errno = getattr(error, 'errno', None)
@@ -479,6 +478,15 @@ def _read_json(url):
         reason = '{}:{}:errno={}'.format(phase, type(error).__name__, errno)
         _shelly_read_diagnostic(label, time.ticks_diff(time.ticks_ms(), started), reason, http_status)
         return None
+    finally:
+        # A successful connect followed by a bad body - truncated, non-JSON, or a
+        # read timeout mid-body - used to drop the response with its socket still
+        # open, which is exactly what a rebooting Shelly produces.
+        if r is not None:
+            try:
+                r.close()
+            except Exception:
+                pass
     _shelly_read_diagnostic(label, time.ticks_diff(time.ticks_ms(), started),
                             _shelly_read_reason(url, data), http_status)
     return data
@@ -718,7 +726,18 @@ def shelly1_restart_request(request_get=None):
         if not isinstance(status_code, int) or not 200 <= status_code < 300:
             return 'failed', 'shelly-restart-http-error'
         body = response.json()
-        if not isinstance(body, dict) or body.get('error') is not None:
+        # Shelly.Reboot's RPC result is null, so the supported /rpc/<Method> form
+        # answers a successful reboot with HTTP 200 and no object body. Requiring
+        # an object classified every working reboot as an RPC error, and because
+        # the request then returned failed, shelly_restart_pending was never set
+        # and the later fresh islocked=0 confirmation never armed. Only an
+        # explicit RPC error is a failure.
+        #
+        # This does widen accepted to any 2xx with a non-object body. That is
+        # deliberate: accepted has never meant the device rebooted, only that a
+        # recognized success response arrived, and confirmed completion still
+        # requires the separate fresh lock read this finally enables.
+        if isinstance(body, dict) and body.get('error') is not None:
             return 'failed', 'shelly-restart-rpc-error'
         return 'accepted', 'shelly-restart-acknowledged'
     except Exception:
@@ -1358,16 +1377,22 @@ def issue_runtime_stop(observation):
         return 'shelly-unavailable'
     if values.get('shelly1_rly0') is not True:
         return 'already-off'
+    reply = None
     try:
         # The installed UIFlow requests client has been proven with GET-only
         # Shelly RPC/status calls. Shelly RPC accepts this idempotent command
         # as a query URL, avoiding an unproven requests.post code path.
         reply = requests.get(SHELLY_1_STOP_URL, timeout=SHELLY_TIMEOUT_S)
         data = reply.json()
-        reply.close()
         return 'requested' if isinstance(data, dict) else 'invalid-response'
     except Exception as error:
         return 'request-failed:{}'.format(error)
+    finally:
+        if reply is not None:
+            try:
+                reply.close()
+            except Exception:
+                pass
 
 
 def _issue_boolean_set(observation, value):
@@ -1445,10 +1470,10 @@ def issue_rules_v3_action(resolved, action, observation):
         return 'lock-evidence-unavailable-or-locked'
     switch_id = spec.get('parameters', {}).get('id', 0)
     url = SHELLY_1_SWITCH_URL.format(switch_id, 'true' if value else 'false')
+    reply = None
     try:
         reply = requests.get(url, timeout=SHELLY_TIMEOUT_S)
         data = reply.json()
-        reply.close()
         if not isinstance(data, dict):
             return 'invalid-response'
         if 'error' in data or ('code' in data and 'message' in data):
@@ -1458,6 +1483,12 @@ def issue_rules_v3_action(resolved, action, observation):
                 isinstance(result.get('was_on'), bool) else 'invalid-response')
     except Exception as error:
         return 'request-failed:{}'.format(error)
+    finally:
+        if reply is not None:
+            try:
+                reply.close()
+            except Exception:
+                pass
 
 
 def rules_v3_field_values(resolved, observation):

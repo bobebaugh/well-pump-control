@@ -66,6 +66,20 @@ class FakeResponse:
         self.closed = True
 
 
+class NullResult(FakeResponse):
+    """HTTP 200 with a bare JSON null, which is what Shelly.Reboot returns."""
+
+    def json(self):
+        return None
+
+
+class Undecodable(FakeResponse):
+    """A connect that succeeded followed by a body that cannot be read."""
+
+    def json(self):
+        raise ValueError("truncated body")
+
+
 class OperatorControlTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -133,6 +147,39 @@ class OperatorControlTests(unittest.TestCase):
         self.assertEqual(self.logic["shelly1_restart_request"](
             lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("timeout"))),
             ("unknown", "shelly-restart-outcome-unknown"))
+
+    def test_shelly_reboot_null_result_is_accepted_and_an_rpc_error_is_not(self):
+        # Shelly.Reboot's RPC result is null, so the supported /rpc/<Method> form
+        # answers a successful reboot with HTTP 200 and a bare null body. That is
+        # the response a working reboot produces and it must not read as failure.
+        null_body = NullResult()
+        self.assertEqual(self.logic["shelly1_restart_request"](
+            lambda *_args, **_kwargs: null_body),
+            ("accepted", "shelly-restart-acknowledged"))
+        self.assertTrue(null_body.closed)
+        # Only an explicit RPC error fails.
+        rpc_error = FakeResponse(200, {"error": {"code": -103, "message": "x"}})
+        self.assertEqual(self.logic["shelly1_restart_request"](
+            lambda *_args, **_kwargs: rpc_error),
+            ("failed", "shelly-restart-rpc-error"))
+        self.assertTrue(rpc_error.closed)
+        # An error-free object body still reads as accepted, unchanged.
+        self.assertEqual(self.logic["shelly1_restart_request"](
+            lambda *_args, **_kwargs: FakeResponse(200, {"error": None})),
+            ("accepted", "shelly-restart-acknowledged"))
+        # Non-2xx is rejected before the body is ever consulted.
+        never_decoded = Undecodable(503)
+        self.assertEqual(self.logic["shelly1_restart_request"](
+            lambda *_args, **_kwargs: never_decoded),
+            ("failed", "shelly-restart-http-error"))
+        self.assertTrue(never_decoded.closed)
+
+    def test_a_decode_failure_after_a_successful_connect_still_closes(self):
+        undecodable = Undecodable()
+        self.assertEqual(self.logic["shelly1_restart_request"](
+            lambda *_args, **_kwargs: undecodable),
+            ("unknown", "shelly-restart-outcome-unknown"))
+        self.assertTrue(undecodable.closed)
 
     def test_shelly_restart_completion_requires_later_fresh_zero(self):
         confirm = self.logic["shelly_restart_confirmation"]
