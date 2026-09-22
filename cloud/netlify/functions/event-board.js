@@ -5,6 +5,7 @@ const { ConfigurationError, getPilotFirestore } = require("../lib/firebase");
 const { EventBoardError, validateEventBoard } = require("../lib/event-board-contract");
 const { EventBoardStoreError, createEventBoardStore } = require("../lib/event-board-store");
 const { createEventBoardMirror } = require("../lib/event-board-mirror");
+const { createEventNotifier } = require("../lib/event-notifier");
 
 const SITE_ID = "well-main";
 const DEVICE_ID = "tab5-well-main";
@@ -21,11 +22,27 @@ function parseBody(event) {
   if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) throw new EventBoardError("payload_too_large", "body");
   try { return JSON.parse(text); } catch { throw new EventBoardError("invalid_json", "body"); }
 }
+// Reporting, never protection. A send failure cannot change what the device is told and no
+// inhibition is ever gated on delivery, so every outcome is swallowed here.
+//
+// This runs before the mirror deliberately. A mirror failure returns 503, the device
+// retries the POST, and the reducer answers "duplicate" with no records - so a send ordered
+// after the mirror would be dropped for a commit that had already happened.
+async function notifyQuietly(notifierProvider, store, records) {
+  try {
+    const outcomes = await notifierProvider().notify(records);
+    if (outcomes.length > 0) await store.markNotified(outcomes);
+  } catch {
+    console.error("Event notification failed", { category: "notification" });
+  }
+}
+
 function createHandler(dependencies = {}) {
   const env = dependencies.env || process.env;
   const firestoreProvider = dependencies.getPilotFirestore || getPilotFirestore;
   const clock = dependencies.clock || (() => new Date());
   const mirrorProvider = dependencies.createMirror || (() => createEventBoardMirror({ env }));
+  const notifierProvider = dependencies.createNotifier || (() => createEventNotifier({ env }));
   return async function eventBoard(event) {
     if (event.httpMethod !== "POST") return { ...response(405, { status: "error", code: "method_not_allowed" }), headers: { ...headers, Allow: "POST" } };
     if (!env.PILOT_INGEST_TOKEN) return response(503, { status: "error", code: "configuration_missing" });
@@ -38,6 +55,9 @@ function createHandler(dependencies = {}) {
       const received = clock();
       const store = createEventBoardStore(db, SITE_ID, DEVICE_ID);
       const outcome = await store.reconcile(board, received.toISOString());
+      if (outcome.changed && outcome.records.length > 0) {
+        await notifyQuietly(notifierProvider, store, outcome.records);
+      }
       if (outcome.decision !== "stale-ignored") {
         const acceptedBoard = outcome.projection.lastBoard;
         await mirrorProvider().mirror(

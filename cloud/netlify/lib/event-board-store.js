@@ -12,6 +12,7 @@ function historyIdentity(record) {
   delete copy.firstReportedAt;
   delete copy.detectedAt;
   delete copy.restartDetectedAt;
+  delete copy.notification;
   return copy;
 }
 
@@ -44,6 +45,15 @@ function createEventBoardStore(db, siteId, deviceId) {
         transaction.set(projectionRef, outcome.projection);
         return outcome;
       });
+    },
+    // Delivery outcome for a record that has already been committed. Best effort and
+    // never part of the transaction: it exists so a failed send is visible beside the
+    // event it belongs to, not so anything can depend on it. historyIdentity ignores the
+    // field, so a later recomputation of the same record still compares equal.
+    async markNotified(outcomes) {
+      const written = await Promise.all(outcomes.map(outcome => history.doc(outcome.recordId)
+        .update({ notification: outcome.notification }).then(() => true, () => false)));
+      return { written: written.filter(Boolean).length, failed: written.filter(value => !value).length };
     }
   };
 }

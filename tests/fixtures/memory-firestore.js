@@ -9,6 +9,7 @@ function fakeFirestore(options = {}) {
     async get() { return snapshot(this.path); }
     async set(value) { values.set(this.path, structuredClone(value)); }
     async create(value) { if (values.has(this.path)) throw new Error("already_exists"); values.set(this.path, structuredClone(value)); }
+    async update(value) { if (!values.has(this.path)) throw new Error("not_found"); values.set(this.path, { ...values.get(this.path), ...structuredClone(value) }); }
   }
   class Collection {
     constructor(path) { this.path = path; }

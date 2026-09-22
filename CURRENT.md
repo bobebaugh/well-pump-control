@@ -33,6 +33,10 @@ Old branch tips are archived in maintenance/branch-archive-2026-09-16.csv.
 4. Record the web deploy, actual device file set, running package/hash, authoring
    backup, Shelly settings and applied Firebase rules/indexes. Do not substitute an
    old package number or this source revision for installed evidence.
+5. Set the notification environment variables in Netlify before the channel can send:
+   `RESEND_API_KEY`, `NOTIFY_FROM`, `NOTIFY_EMAIL_TO`, `NOTIFY_SMS_TO`, and
+   `NOTIFY_DRY_RUN=1` while testing. Missing values leave the notifier inert and log
+   the names only; ingestion is unaffected. Verify with a test event, T010-T040.
 
 No DNS, Netlify settings, Firebase configuration, device upload, restart or source
 promotion was performed by this housekeeping. History is in Git; all deferred work

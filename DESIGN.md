@@ -112,6 +112,17 @@ records. Silence never closes an event; disappearance/restart closes have unknow
 device close times. A revision guards the RTDB mirror from delayed overwrites.
 Events entirely between delivered boards may be absent from cloud history.
 
+Open and close records notify by event ID from a cloud-side criteria table, which is
+authoritative; the package's `web` blocks carry the same intent but are stripped at
+compile and can drift. The message is the event number in a marked subject and the
+event's display name in the body, taken from the record so the name is the one the
+device ran. Two emails go out per record through Resend, in one batch, between the
+transaction and the mirror so a mirror retry cannot drop a send; a Resend idempotency
+key derived from the records makes a repeat a no-op. Delivery is at-most-once and is
+reporting only: a send failure is recorded on the event record and never changes the
+response to the device, and no inhibition is gated on it. Nothing polls or is scheduled,
+so an unreachable function is not detectable from the cloud.
+
 The web home displays live RTDB observations and event state. Every live reading,
 the pump badge and the Tab5/meter/Shelly 1 health rows come from one observation
 record, so the state and the numbers beside it are the same instant. The badge
