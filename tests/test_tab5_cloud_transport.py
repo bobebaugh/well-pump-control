@@ -871,5 +871,82 @@ class CloudTransportTests(unittest.TestCase):
         self.assertGreater(actions.count("global-enable"), 1)
 
 
+class WifiPowerSaveTests(unittest.TestCase):
+    """Power mode only. These tests prove no Wi-Fi, radio or timing behavior."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cloud, _ = load_cloud()
+
+    def setUp(self):
+        self.lines = []
+        self.original_log = self.cloud.log
+        self.original_wlan = self.cloud.network.WLAN
+        self.cloud.log = self.lines.append
+
+    def tearDown(self):
+        self.cloud.log = self.original_log
+        self.cloud.network.WLAN = self.original_wlan
+
+    def station(self, pm=1, reject=False, readable=True):
+        calls = []
+
+        class Station:
+            PM_NONE = 0
+
+            def config(inner, *names, **settings):
+                calls.append((names, settings))
+                if names:
+                    if not readable:
+                        raise OSError("pm unreadable")
+                    return pm
+                if "pm" in settings and reject:
+                    raise OSError("pm rejected")
+                return None
+
+        self.cloud.network.WLAN = Station
+        return Station(), calls
+
+    def test_previous_mode_is_logged_before_pm_none_is_requested(self):
+        wlan, calls = self.station(pm=1)
+        self.assertIs(self.cloud._disable_wifi_power_save(wlan), True)
+        # Read, then write, then read back: the previous value is the diagnostic
+        # and is gone once it is overwritten.
+        self.assertEqual([("pm",), (), ("pm",)],
+                         [names for names, _ in calls])
+        self.assertEqual({"pm": 0}, calls[1][1])
+        self.assertEqual(1, len(self.lines))
+        self.assertIn("pm=1", self.lines[0])
+        self.assertIn("PM_NONE=0", self.lines[0])
+
+    def test_reconnect_configuration_is_left_alone(self):
+        wlan, calls = self.station()
+        self.cloud._disable_wifi_power_save(wlan)
+        self.assertFalse([settings for _, settings in calls
+                          if "reconnects" in settings])
+
+    def test_unsupported_or_rejected_pm_none_leaves_the_mode_as_found(self):
+        wlan, calls = self.station(pm=1, reject=True)
+        self.assertIs(self.cloud._disable_wifi_power_save(wlan), False)
+        self.assertIn("left as found", self.lines[-1])
+        self.assertIn("pm=1", self.lines[-1])
+
+        class NoPowerMode:
+            pass
+
+        self.cloud.network.WLAN = NoPowerMode
+        self.assertIs(self.cloud._disable_wifi_power_save(wlan), False)
+        self.assertIn("no PM_NONE", self.lines[-1])
+        # Nothing was written on either path.
+        self.assertEqual([("pm",), (), ("pm",)],
+                         [names for names, _ in calls])
+
+    def test_an_unreadable_mode_does_not_prevent_disabling_power_save(self):
+        wlan, calls = self.station(readable=False)
+        self.assertIs(self.cloud._disable_wifi_power_save(wlan), True)
+        self.assertIn("unreadable", self.lines[-1])
+        self.assertIn({"pm": 0}, [settings for _, settings in calls])
+
+
 if __name__ == "__main__":
     unittest.main()
