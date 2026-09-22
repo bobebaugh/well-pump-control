@@ -20,10 +20,16 @@ describe behavior that has since changed. Do not reinstate those old semantics.
 ## Small repairs when their feature is needed
 
 - **Flow window:** the shipped calc-tank asks for eight samples in ten seconds;
-  two-second cadence permits six. Inspect the real running package; if still present,
-  consider a 20-second window retaining eight samples, followed by normal publication,
-  staging/restart and verification. Pressure is commissioned in M6.42; do not repeat
-  the old instruction to enable its constant. This is package work, not a new estimator.
+  two-second cadence permits six, so that pairing pins the quality output and must be
+  corrected in the package. Inspect the real running package. Coverage no longer
+  penalises a window that cadence jitter left one sample short, so the choice is now
+  what the estimate is for — a shorter window reaches a step change sooner, a longer
+  one resolves a smaller one — rather than making the window large enough to fill.
+  Keep the minimum sample count under what the cadence actually delivers; a count the
+  loop cannot reach is the failure being corrected here, not a safeguard against it.
+  Follow with normal publication, staging/restart and verification. Pressure is
+  commissioned in M6.42; do not repeat the old instruction to enable its constant.
+  This is package work, not a new estimator.
 - **Authoring warnings/simulator:** derive inhibition targets by binding rather than
   PumpEnable, and distinguish unsupported internal occurrences/Clear Events from the
   operator occurrences already connected. [#10](https://github.com/bobebaugh/well-pump-control/issues/10).

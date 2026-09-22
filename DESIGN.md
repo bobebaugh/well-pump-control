@@ -78,8 +78,26 @@ M6.42 enables pressure commissioning. ADC counts are the primary evidence; the
 qualified local fit is PSI = (counts - 3732.02) / 211.492, qualified approximately
 40–61 PSI. Pressure availability still requires valid ADC evidence. Package pressure
 expressions must match the local calibration. Tank flow is a model-derived estimate,
-not a flow-meter measurement. Invalid pressure breaks its history. The shipped
-eight-sample/ten-second window cannot fill at two-second cadence; see FUTURE.
+not a flow-meter measurement. Invalid pressure breaks its history. A window counts as
+covered once its samples span all but the final cadence interval; the allowance is
+derived from the observation cadence rather than fixed, because a sample's timestamp
+carries the acquisition that preceded it and a literal silently changes meaning when
+the loop period moves. The package sets the window length and minimum sample count,
+and a window a slower cadence cannot fill is reported at startup rather than refused.
+
+A pump transition ends the current window. The switch input the contactor drives is
+resolved by its device binding rather than by an editable system name, and a change
+in it drops the retained history together with the cycle's own sample. The manifold
+steps as the pump starts, and at a stop the tank air begins shedding the heat of its
+own compression; neither is water moving, and a regression spanning either reports
+flow that is wrong rather than imprecise. One cycle is also not one instant, since
+the ADC burst, the switch and the energy meter are read moments apart, so on the edge
+cycle nothing establishes which side of the transition the pressure belongs to.
+Quality reads INSUFFICIENT_HISTORY until post-transition samples rebuild the window.
+Estimated gallons is unaffected, being instantaneous and true whenever the pressure
+is; only the slope needs clean provenance. Absent evidence is not a transition: a
+switch read that failed leaves the field missing, and a missing field neither drops
+the window nor advances the remembered pump state.
 
 RTDB holds replaceable current observations, device presence, operator coordination,
 package pointers and device package state. Firestore holds selected observations,
