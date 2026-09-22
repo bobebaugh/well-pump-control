@@ -67,13 +67,18 @@ function createEventNotifier(dependencies = {}) {
       const messages = sending.map(({ record }) => composeMessage(record));
       const key = batchKey(sending.map(({ record }) => record.recordId));
 
+      // A dry run composes and reports without sending, and still names anything missing -
+      // so it answers both "what would go out" and "is this deployment actually able to
+      // send", which is the pair you want before flipping the flag off in Netlify.
+      if (dryRun) {
+        log.warn("Event notification dry run", { subjects: messages.map(message => message.subject), missing: missing.join(",") });
+        const notification = { status: "dry-run" };
+        if (missing.length > 0) notification.missing = missing.join(",");
+        return [...mark(sending, notification), ...skipped];
+      }
       if (missing.length > 0) {
         log.error("Event notification not configured", { missing: missing.join(",") });
         return [...mark(sending, { status: "not-configured" }), ...skipped];
-      }
-      if (dryRun) {
-        log.warn("Event notification dry run", { subjects: messages.map(message => message.subject) });
-        return [...mark(sending, { status: "dry-run" }), ...skipped];
       }
 
       const body = sending.flatMap((entry, index) => [

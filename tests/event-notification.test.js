@@ -115,7 +115,15 @@ test("a thrown send, a missing key and a dry run all resolve to outcomes rather 
     env: { ...configured, NOTIFY_DRY_RUN: "1" }, log: quiet,
     fetch: async () => { throw new Error("must not send"); }
   });
-  assert.equal((await dry.notify([record("W07"), record("M001")]))[0].notification.status, "dry-run");
+  assert.deepEqual((await dry.notify([record("W07"), record("M001")]))[0].notification,
+    { status: "dry-run", criteria: "table" });
+
+  // A dry run composes without a key, and still reports that it could not have sent.
+  const dryUnconfigured = createEventNotifier({
+    env: { NOTIFY_DRY_RUN: "1" }, log: quiet, fetch: async () => { throw new Error("must not send"); }
+  });
+  assert.deepEqual((await dryUnconfigured.notify([record("W07")]))[0].notification,
+    { status: "dry-run", missing: "RESEND_API_KEY,NOTIFY_FROM,NOTIFY_EMAIL_TO,NOTIFY_SMS_TO", criteria: "table" });
 });
 
 test("more than four notifiable records in one reconciliation send four and mark the rest", async () => {
