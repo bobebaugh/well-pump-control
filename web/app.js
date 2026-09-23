@@ -8,6 +8,7 @@ const pumpState = document.querySelector("#pump-state");
 const pressureValue = document.querySelector("#pressure-value");
 const tankPressure = document.querySelector("#tank-pressure");
 const tankGallons = document.querySelector("#tank-gallons");
+const tankFlow = document.querySelector("#tank-flow");
 const historyTitle = document.querySelector("#history-title");
 const historyHero = document.querySelector("#history-hero");
 const historyChart = document.querySelector("#history-chart");
@@ -91,6 +92,24 @@ function tankFillPercent(psi) {
     return (water / tankModel.effectiveTankGallons) * 100;
   }
   return ((water - low) / (high - low)) * 100;
+}
+
+// Net tank flow is the pressure slope through the Boyle model, so it is all the
+// page has: pump inflow and house demand cannot be separated. Below this the
+// slope is inside the sensor's noise -- one ADC count is about 0.005 psi, and
+// over a six-sample window that is a few hundredths of a GPM at mid-band before
+// real noise is added -- so it reads zero rather than a drift in either
+// direction. A starting value, to be tuned against the promoted package.
+const FLOW_FLOOR_GPM = 0.2;
+
+// Zero when the calculation ran but could not resolve a slope (settling after a
+// pump edge, too few samples, a gap) or the flow is below the floor. A dash only
+// when the record has no flow calculation at all, which is not the same claim.
+function tankFlowText(values) {
+  if (typeof values.tankFlowQuality !== "string") return "—";
+  const gpm = values.tankFlowQuality === "VALID" ? values.tankNetFlowGpm : null;
+  if (!Number.isFinite(gpm) || Math.abs(gpm) < FLOW_FLOOR_GPM) return "0.0 gpm";
+  return `${gpm > 0 ? "+" : "−"}${Math.abs(gpm).toFixed(1)} gpm`;
 }
 
 function formatTime(date) {
@@ -341,6 +360,7 @@ function renderObservation(data) {
     tankPressure.textContent = `${text} psi`;
     const water = tankWaterGallons(psi);
     tankGallons.textContent = water === null ? "—" : `${water.toFixed(1)} gal`;
+    tankFlow.textContent = tankFlowText(values);
     const fill = tankFillPercent(psi);
     if (fill === null) {
       tankWater.style.height = "";
@@ -356,6 +376,7 @@ function renderObservation(data) {
     pressureValue.textContent = "—";
     tankPressure.textContent = "— psi";
     tankGallons.textContent = "—";
+    tankFlow.textContent = "—";
     tankWater.style.height = "";
     tankWater.classList.remove("live");
     const reason = data.pressureCommissioned === false
@@ -390,6 +411,7 @@ function clearObservation() {
   pressureValue.textContent = "—";
   tankPressure.textContent = "— psi";
   tankGallons.textContent = "—";
+  tankFlow.textContent = "—";
   tankWater.style.height = "";
   tankWater.classList.remove("live");
   pressureTag.textContent = "Pressure telemetry unavailable";

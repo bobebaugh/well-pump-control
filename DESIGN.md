@@ -129,7 +129,10 @@ record, so the state and the numbers beside it are the same instant. The badge
 reads SW(0) directly and falls back to meter watts only when Shelly 1 is
 unavailable; unknown is a distinct state and is never shown as stopped. The page
 displays a disagreement between the contactor and motor current without judging
-it; the rules engine owns what one means. The record browser supports selected
+it; the rules engine owns what one means. The tank shows the device's net flow estimate
+(TankNetFlowGPM, signed, positive filling) from the same record. It reads zero when
+TankFlowQuality is not VALID or the magnitude is under a provisional noise floor,
+and a dash only when the record carries no flow calculation. The record browser supports selected
 columns, event/session navigation, paging, date anchors and daily CSV export.
 Reporting time, acquisition time, inferred closure and transport age must remain
 distinct. Device age on screen is the server-stamped receipt, so a resent

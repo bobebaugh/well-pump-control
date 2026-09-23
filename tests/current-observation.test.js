@@ -61,12 +61,27 @@ test("every live reading comes from the one record, so they share an instant", a
   const reply = await body(observation());
   assert.deepEqual(reply.values, {
     pressurePsi: 50.0018, adcRaw: 14307, powerW: 2800, voltageV: 240,
-    powerFactor: 0.98, isValid: true, batteryPercent: 78
+    powerFactor: 0.98, isValid: true, batteryPercent: 78,
+    tankNetFlowGpm: null, tankFlowQuality: null
   });
   assert.deepEqual(reply.shelly1, {
     available: true, sw0: true, rly0: false,
     isLocked: 0, lockoutCount: 0, tab5IsLocked: false
   });
+});
+
+test("tank flow passes through by field name, with its quality beside it", async () => {
+  const valid = await body(observation({
+    values: { ...observation().values, TankNetFlowGPM: -1.37, TankFlowQuality: "VALID" }
+  }));
+  assert.equal(valid.values.tankNetFlowGpm, -1.37);
+  assert.equal(valid.values.tankFlowQuality, "VALID");
+  // An unresolved cycle carries the quality and no number.
+  const settling = await body(observation({
+    values: { ...observation().values, TankFlowQuality: "INSUFFICIENT_HISTORY" }
+  }));
+  assert.equal(settling.values.tankNetFlowGpm, null);
+  assert.equal(settling.values.tankFlowQuality, "INSUFFICIENT_HISTORY");
 });
 
 test("age is measured from the server stamp, not the device clock", async () => {

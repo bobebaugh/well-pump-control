@@ -148,7 +148,14 @@ function createHandler(dependencies = {}) {
         // the numbers it gave are usable. A dropout leaves this null rather than
         // false, so absent evidence never reads as a bad measurement.
         isValid: booleanOrNull(values.is_valid),
-        batteryPercent: numberOrNull(values.battery_percent)
+        batteryPercent: numberOrNull(values.battery_percent),
+        // The rules engine's Boyle calculation, merged into the same record by
+        // name. Net flow from the pressure slope: positive fills the tank,
+        // negative drains it. The device writes a number only on a VALID
+        // cycle, and the quality alongside it on every cycle it runs.
+        tankNetFlowGpm: numberOrNull(values.TankNetFlowGPM),
+        tankFlowQuality: typeof values.TankFlowQuality === "string"
+          ? values.TankFlowQuality : null
       },
       shelly1: {
         available: booleanOrNull(status.shelly1_available),

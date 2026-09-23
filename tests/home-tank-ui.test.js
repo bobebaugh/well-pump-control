@@ -98,6 +98,22 @@ test("the tank shows gallons beside the pressure", () => {
   assert.match(app, /tankGallons\.textContent = water === null \? "—" : `\$\{water\.toFixed\(1\)\} gal`/);
 });
 
+test("the tank shows signed net flow, and zero when it cannot be resolved", () => {
+  assert.match(html, /id="tank-flow"/);
+  const tankFlowText = new Function(
+    `${app.match(/const FLOW_FLOOR_GPM = [\d.]+;/)[0]}\n${lift("tankFlowText")}\nreturn tankFlowText;`)();
+  assert.equal(tankFlowText({ tankFlowQuality: "VALID", tankNetFlowGpm: 6.24 }), "+6.2 gpm");
+  assert.equal(tankFlowText({ tankFlowQuality: "VALID", tankNetFlowGpm: -1.37 }), "\u22121.4 gpm");
+  // Below the floor is noise, not a direction.
+  assert.equal(tankFlowText({ tankFlowQuality: "VALID", tankNetFlowGpm: -0.05 }), "0.0 gpm");
+  // The calculation ran but could not resolve a slope.
+  assert.equal(tankFlowText({ tankFlowQuality: "INSUFFICIENT_HISTORY", tankNetFlowGpm: null }), "0.0 gpm");
+  // A quality that is not VALID never lets a number through.
+  assert.equal(tankFlowText({ tankFlowQuality: "SAMPLE_GAP", tankNetFlowGpm: 5 }), "0.0 gpm");
+  // No flow calculation in the record at all is not a zero.
+  assert.equal(tankFlowText({}), "\u2014");
+});
+
 test("the motor-power placeholder is gone, replaced by the history panel", () => {
   // "Not worth graphing" -- the panel that never had a data source.
   assert.doesNotMatch(html, /Motor power/);
