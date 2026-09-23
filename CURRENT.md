@@ -1,6 +1,6 @@
 # Current beta status â€” web/cloud
 
-As of 16 September 2026. This records source and owner evidence, not assumed deployment.
+As of 23 September 2026. This records source and owner evidence, not assumed deployment.
 
 ## Available now
 
@@ -19,6 +19,31 @@ The latest device working source is M6.42; the owner believes it is installed.
 The owner confirms the Shelly 1 protection script is fully unit tested on real
 hardware. Exact installed files/package identity still need a release receipt.
 
+## Production activated, 23 September 2026
+
+The owner replaced main with pilot through the GitHub web interface (default branch
+switched, main deleted and recreated from pilot). main = pilot = 69601cc. The old main
+was 3a8b2f3: a README and a netlify.toml whose ignore command cancelled every production
+build. It was not archived under a tag; this session could not push one. Netlify built
+production from the new main within seconds.
+
+Checked from the cloud the same day: the netlify.app home, records, health,
+current-observation and record-browser routes return 200; current-observation read a
+2-second-old live record, so the production Functions context has the Firebase
+variables. mfwell.ebaugh.net (Cloudflare CNAME, DNS only) answers 200 and redirects
+http to https; the owner confirms the certificate in Netlify.
+
+The Tab5 still posts ingest, event boards, releases and device sync to the pilot branch
+deploy (pilot--well-pump-control.netlify.app), so that branch deploy must stay enabled
+and device-driven functions, the notifier included, run in its context. Browsers may use
+either address. A pilot push now updates the pilot deploy only; production changes when
+main is advanced to match.
+
+Same-day web changes now live on both: tank net flow under the gallons (zero below a
+provisional 0.2 GPM floor or when not VALID; tune FLOW_FLOOR_GPM in web/app.js), record
+browser columns from the records with a Standard default and a pinned header, and a
+cloud-session start hook (.claude/hooks/session-start.sh).
+
 ## Maintenance baseline
 
 Before housekeeping: pilot = 150bb8ab6297062ca6a8157708f05700c6cd74d0;
@@ -31,10 +56,11 @@ Old branch tips are archived in maintenance/branch-archive-2026-09-16.csv.
 
 1. Review the remaining beta reliability choices in FUTURE. No application fix was
    authorized or applied by housekeeping.
-2. Promote the accepted working candidates to pilot/Tab5 when ready. Main remains
-   intentionally suppressed until the owner authorizes public-beta activation.
-3. Choose the ebaugh.net hostname; verify Netlify production environment scope,
-   shared database access, password strength/access checks and HTTPS using BETA.
+2. Promote the accepted working candidates to pilot/Tab5 when ready, and advance main
+   to pilot when production should follow.
+3. Finish activation from BETA: confirm the mfwell.ebaugh.net certificate, owner access
+   and rejection of a missing or wrong password on production, and that Netlify branch
+   deploys remain restricted to pilot.
 4. Record the web deploy, actual device file set, running package/hash, authoring
    backup, Shelly settings and applied Firebase rules/indexes. Do not substitute an
    old package number or this source revision for installed evidence.
