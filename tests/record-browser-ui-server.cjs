@@ -20,12 +20,12 @@ http.createServer((request, response) => {
     const session = url.searchParams.get("view") === "session";
     const cursor = url.searchParams.get("cursor");
     let body;
-    if (session && cursor === "before-first") body = { status: "empty", catalog, defaultColumns: ["PumpWatts", "ClockValid"], records: [], nextCursor: null, previousCursor: null };
-    else if (session && cursor === "after-last") body = { status: "empty", catalog, defaultColumns: ["PumpWatts", "ClockValid"], records: [], nextCursor: null, previousCursor: null };
-    else if (session && cursor === "after-first") body = { status: "ok", catalog, defaultColumns: ["PumpWatts", "ClockValid"], records: [record("session-last")], nextCursor: "after-last", previousCursor: "back-first" };
-    else if (session && cursor === "back-first") body = { status: "ok", catalog, defaultColumns: ["PumpWatts", "ClockValid"], records: [record("session-first")], nextCursor: "after-first", previousCursor: "before-first" };
-    else if (session) body = { status: "ok", catalog, defaultColumns: ["PumpWatts", "ClockValid"], records: [record("session-first")], nextCursor: "after-first", previousCursor: "before-first" };
-    else body = { status: "ok", source: receipt ? "receipt-time-fallback" : undefined, catalog, defaultColumns: ["PumpWatts", "ClockValid"], records: [record(receipt ? "receipt-row" : url.searchParams.has("anchor") ? "observation-anchored" : "observation-row")], nextCursor: null, previousCursor: null };
+    if (session && cursor === "before-first") body = { status: "empty", catalog, eventTriggerField: url.searchParams.get("event") ? "ClockValid" : null, records: [], nextCursor: null, previousCursor: null };
+    else if (session && cursor === "after-last") body = { status: "empty", catalog, eventTriggerField: url.searchParams.get("event") ? "ClockValid" : null, records: [], nextCursor: null, previousCursor: null };
+    else if (session && cursor === "after-first") body = { status: "ok", catalog, eventTriggerField: url.searchParams.get("event") ? "ClockValid" : null, records: [record("session-last")], nextCursor: "after-last", previousCursor: "back-first" };
+    else if (session && cursor === "back-first") body = { status: "ok", catalog, eventTriggerField: url.searchParams.get("event") ? "ClockValid" : null, records: [record("session-first")], nextCursor: "after-first", previousCursor: "before-first" };
+    else if (session) body = { status: "ok", catalog, eventTriggerField: url.searchParams.get("event") ? "ClockValid" : null, records: [record("session-first")], nextCursor: "after-first", previousCursor: "before-first" };
+    else body = { status: "ok", source: receipt ? "receipt-time-fallback" : undefined, catalog, eventTriggerField: url.searchParams.get("event") ? "ClockValid" : null, records: [record(receipt ? "receipt-row" : url.searchParams.has("anchor") ? "observation-anchored" : "observation-row")], nextCursor: null, previousCursor: null };
     response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify(body)); return;
   }
   const files = { "/": "web/index.html", "/index.html": "web/index.html", "/app.js": "web/app.js", "/records.html": "web/records.html", "/records.js": "web/records.js", "/styles.css": "web/styles.css" };

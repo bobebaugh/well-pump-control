@@ -135,9 +135,11 @@ TankFlowQuality is not VALID or the magnitude is under a provisional noise floor
 and a dash only when the record carries no flow calculation. The record browser supports selected
 columns, event/session navigation, paging, date anchors and daily CSV export. Its
 columns are the fields the records on the page carry, so they follow the package
-that wrote them rather than the draft being edited. Presets and a custom selection
-are kept by name in the browser; a field absent from the page stays selected and
-greyed. Only an event link reads the rules, to choose that event's fields.
+that wrote them rather than the draft being edited. Standard (contactor, watts,
+pressure, tank water, net flow) is the default on every screen; presets and a
+custom selection are kept by name in the browser, and a field absent from the page
+stays selected and greyed. An event link adds that event's first trigger field for
+the visit only; it is the one read of the rules.
 Reporting time, acquisition time, inferred closure and transport age must remain
 distinct. Device age on screen is the server-stamped receipt, so a resent
 observation cannot present itself as fresh.

@@ -33,24 +33,13 @@ function requestedColumns(raw) {
   return [...new Set(names)].slice(0, MAX_COLUMNS);
 }
 
-function conditionFields(condition) { return (condition?.clauses || []).map(item => item?.field).filter(Boolean); }
-function guardedFields(phase) {
-  return (phase?.guardedGroups || []).flatMap(group => [
-    ...conditionFields(group?.guard),
-    ...(group?.assignments || []).map(item => item?.target)
-  ]).filter(Boolean);
-}
-function eventDefaultColumns(events, eventDefinitionId, catalog) {
+// An event link adds the field that opens the event: the first clause of its
+// opening trigger. The rest of the view is the viewer's own selection.
+function eventTriggerField(events, eventDefinitionId) {
+  if (!eventDefinitionId) return null;
   const event = (events || []).find(item => item?.id === eventDefinitionId);
-  const requested = new Set([
-    ...conditionFields(event?.opening?.trigger?.condition),
-    ...conditionFields(event?.closing?.condition),
-    ...(event?.onOpen?.assignments || []).map(item => item?.target),
-    ...(event?.onClose?.assignments || []).map(item => item?.target),
-    ...guardedFields(event?.onOpen),
-    ...guardedFields(event?.onClose)
-  ]);
-  return (catalog || []).filter(item => requested.has(item.name)).map(item => item.name);
+  const field = event?.opening?.trigger?.condition?.clauses?.[0]?.field;
+  return typeof field === "string" && /^[A-Za-z][A-Za-z0-9_]{1,63}$/.test(field) ? field : null;
 }
 
 function fieldState(record, name) {
@@ -140,4 +129,4 @@ function exportRows(records) {
   return lines.join("\r\n") + "\r\n";
 }
 
-module.exports = { MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor: decodeCursor, _encodeCursor: encodeCursor, eventDefaultColumns, exportRows, fieldState, iso, joinOccurrences, observationView, pageFields, requestedColumns };
+module.exports = { MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor: decodeCursor, _encodeCursor: encodeCursor, eventTriggerField, exportRows, fieldState, iso, joinOccurrences, observationView, pageFields, requestedColumns };

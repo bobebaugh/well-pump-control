@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { initializeApp, deleteApp } = require("firebase-admin/app");
 const { FieldPath, getFirestore } = require("firebase-admin/firestore");
-const { _decodeCursor, _encodeCursor, eventDefaultColumns, exportRows, fieldState, joinOccurrences, observationView, pageFields, requestedColumns } = require("../cloud/netlify/lib/record-browser");
+const { _decodeCursor, _encodeCursor, eventTriggerField, exportRows, fieldState, joinOccurrences, observationView, pageFields, requestedColumns } = require("../cloud/netlify/lib/record-browser");
 const { _createHandler, _initialSessionFollowingQuery } = require("../cloud/netlify/functions/record-browser");
 
 test("columns on offer are the fields the page's records carry, not the rules draft", () => {
@@ -18,8 +18,11 @@ test("columns on offer are the fields the page's records carry, not the rules dr
   const catalog = pageFields(records);
   assert.deepEqual(catalog, [{ name: "ClockValid" }, { name: "PressurePSI" }, { name: "PumpWatts" }]);
   assert.deepEqual(pageFields([]), []);
-  const selected = eventDefaultColumns([{ id: "E1", opening: { trigger: { condition: { clauses: [{ field: "PumpWatts" }] } } }, closing: { condition: { clauses: [{ field: "ClockValid" }] } }, onOpen: { assignments: [{ target: "NotLogged" }] } }], "E1", catalog);
-  assert.deepEqual(selected, ["ClockValid", "PumpWatts"]);
+  const events = [{ id: "E1", opening: { trigger: { condition: { clauses: [{ field: "PumpWatts" }, { field: "PressurePSI" }] } } }, closing: { condition: { clauses: [{ field: "ClockValid" }] } } }];
+  // An event adds only the first field of its opening trigger.
+  assert.equal(eventTriggerField(events, "E1"), "PumpWatts");
+  assert.equal(eventTriggerField(events, "Unknown"), null);
+  assert.equal(eventTriggerField(events, undefined), null);
 });
 
 test("a requested column is kept even when absent, bounded to field-shaped names", () => {
@@ -214,7 +217,7 @@ test("endpoint keeps Timestamp observation cursors and string closure cursors di
   const first = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { limit: "1", columns: "PumpWatts" } })).body);
   assert.equal(first.records[0].recordId, "v2-b");
   assert.deepEqual(first.catalog, [{ name: "PumpWatts" }]);
-  assert.deepEqual(first.defaultColumns, []);
+  assert.equal(first.eventTriggerField, null);
   const next = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { limit: "1", cursor: first.nextCursor, columns: "PumpWatts" } })).body);
   assert.equal(next.records[0].recordId, "v1-a");
   const malformed = await handler({ httpMethod: "GET", queryStringParameters: { cursor: "not-a-cursor" } });
@@ -251,4 +254,21 @@ test("endpoint keeps Timestamp observation cursors and string closure cursors di
   assert.deepEqual(following.records.map(record => record.recordId), ["v2-e"]);
   const missingPrevious = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { view: "session", session: "session001", cycle: "9", cursor: nearby.previousCursor, direction: "before", limit: "1", columns: "PumpWatts" } })).body);
   assert.equal(missingPrevious.status, "empty");
+});
+
+test("an event link returns its trigger field's values without a second read", async () => {
+  const root = "sites/well-main";
+  const seed = {
+    [`${root}/rulesEngineV3Draft/events`]: { items: [{ id: "E1", opening: { trigger: { condition: { clauses: [{ field: "PumpWatts" }] } } } }] },
+    [`${root}/observations/v2-a`]: { schemaVersion: 2, recordId: "v2-a", deviceId: "tab5-well-main", sessionId: "session001", cycleSequence: 3, time: { uptimeMs: 3, observedAt: timestamp("2026-03-08T01:00:00.000Z") }, receivedAt: timestamp("2026-03-08T01:00:01.000Z"), fields: { PumpWatts: { state: "available", value: 2900 }, ClockValid: { state: "available", value: true } } }
+  };
+  const handler = _createHandler({ getPilotFirestore: () => ({ db: browserFirestore(seed), projectId: "well-pump-control", databaseId: "(default)" }) });
+  const call = async queryStringParameters => JSON.parse((await handler({ httpMethod: "GET", queryStringParameters })).body);
+  const linked = await call({ view: "session", session: "session001", cycle: "3", event: "E1", columns: "ClockValid" });
+  assert.equal(linked.eventTriggerField, "PumpWatts");
+  assert.deepEqual(Object.keys(linked.records[0].fields), ["ClockValid", "PumpWatts"]);
+  // Without the link the rules are not read and nothing is added.
+  const plain = await call({ columns: "ClockValid" });
+  assert.equal(plain.eventTriggerField, null);
+  assert.deepEqual(Object.keys(plain.records[0].fields), ["ClockValid"]);
 });

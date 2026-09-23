@@ -2,7 +2,7 @@
 
 const { FieldPath, Timestamp } = require("firebase-admin/firestore");
 const { ConfigurationError, getPilotFirestore } = require("../lib/firebase");
-const { MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor, _encodeCursor, eventDefaultColumns, exportRows, iso, joinOccurrences, observationView, pageFields, requestedColumns } = require("../lib/record-browser");
+const { MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor, _encodeCursor, eventTriggerField, exportRows, iso, joinOccurrences, observationView, pageFields, requestedColumns } = require("../lib/record-browser");
 
 const SITE_ID = "well-main";
 const DEVICE_ID = "tab5-well-main";
@@ -23,17 +23,18 @@ function cursor(query, kind) {
 }
 function serialise(snapshot) { return { ...snapshot.data(), recordId: snapshot.data().recordId || snapshot.id, receivedAt: iso(snapshot.data().receivedAt), observedAt: iso(snapshot.data().observedAt), firstReportedAt: iso(snapshot.data().firstReportedAt), detectedAt: iso(snapshot.data().detectedAt), restartDetectedAt: iso(snapshot.data().restartDetectedAt), time: { ...snapshot.data().time, observedAt: iso(snapshot.data().time?.observedAt) } }; }
 function requireApprovedDb(provider) { const result = provider(); if (result.projectId !== "well-pump-control" || result.databaseId !== "(default)") throw new ConfigurationError("Firestore target is not the approved pilot database"); return result.db; }
-// Only an event link needs the rules, to choose that event's fields; the
+// Only an event link needs the rules, to find that event's trigger field; the
 // column list itself comes from the records. One document, and only then.
 async function eventDefinitions(site, query) {
   if (!query.event) return [];
   const snapshot = await site.collection("rulesEngineV3Draft").doc("events").get();
   return snapshot.exists && Array.isArray(snapshot.data().items) ? snapshot.data().items : [];
 }
+// The trigger field's values come with the page so the link needs one read.
 function columnView(records, query, events) {
-  const catalog = pageFields(records);
-  const columns = requestedColumns(query.columns);
-  return { catalog, defaultColumns: eventDefaultColumns(events, query.event, catalog), records: records.map(item => observationView(item, columns)) };
+  const trigger = eventTriggerField(events, query.event);
+  const columns = [...new Set([...requestedColumns(query.columns), ...(trigger ? [trigger] : [])])];
+  return { catalog: pageFields(records), eventTriggerField: trigger, records: records.map(item => observationView(item, columns)) };
 }
 function timeQuery(observations, schemaVersion, field, before, count) {
   let query = observations.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", schemaVersion).orderBy(field, "desc").orderBy(idField, "desc");

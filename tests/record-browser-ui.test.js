@@ -20,7 +20,7 @@ class Element {
 }
 async function settle() { for (let index = 0; index < 6; index += 1) await new Promise(resolve => setImmediate(resolve)); }
 function response(query, recordId, extra = {}) {
-  return { status: "ok", catalog: [{ name: "ClockValid" }, { name: "PumpWatts" }], defaultColumns: query.get("event") ? ["PumpWatts", "ClockValid"] : [], records: [{ recordId, schemaVersion: 2, sessionId: "session001", cycleSequence: 4, observationTime: "2026-03-08T01:00:00.000Z", receiptTime: "2026-03-08T01:01:00.000Z", rulesRelease: {}, triggerReasons: [{ kind: recordId }], fields: { PumpWatts: { state: "available", value: 0 }, ClockValid: { state: "available", value: false } } }], ...extra };
+  return { status: "ok", catalog: [{ name: "ClockValid" }, { name: "PumpWatts" }], eventTriggerField: query.get("event") ? "ClockValid" : null, records: [{ recordId, schemaVersion: 2, sessionId: "session001", cycleSequence: 4, observationTime: "2026-03-08T01:00:00.000Z", receiptTime: "2026-03-08T01:01:00.000Z", rulesRelease: {}, triggerReasons: [{ kind: recordId }], fields: { PumpWatts: { state: "available", value: 0 }, ClockValid: { state: "available", value: false } } }], ...extra };
 }
 function page(search, stored = null) {
   const ids = ["records-status", "records-table", "column-picker", "record-day", "record-at", "newer-records", "older-records", "latest-records", "receipt-records", "export-day", "timezone-label", "history-older", "history-newer", "history-panel", "history-list"];
@@ -29,7 +29,7 @@ function page(search, stored = null) {
   // The picker delegates: one listener sees the event from whichever control changed.
   const change = async (kind, value, checked = true) => { picker.listeners.get("change")({ target: { dataset: { kind }, value, checked } }); await settle(); };
   const remove = async name => { picker.listeners.get("click")({ target: { dataset: { remove: name } } }); await settle(); };
-  const store = new Map(stored ? [["recordBrowserColumns.v1", JSON.stringify(stored)]] : []);
+  const store = new Map(stored ? [["recordBrowserColumns.v2", JSON.stringify(stored)]] : []);
   const localStorage = { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, String(value)) };
   const requests = [];
   const document = {
@@ -52,7 +52,7 @@ function page(search, stored = null) {
   };
   const context = { URL, URLSearchParams, Intl, Date, Promise, setImmediate, document, location: { search }, fetch, console, Blob: class {}, localStorage };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "web", "records.js"), "utf8"), context, { filename: "web/records.js" });
-  const saved = () => JSON.parse(store.get("recordBrowserColumns.v1") || "null");
+  const saved = () => JSON.parse(store.get("recordBrowserColumns.v2") || "null");
   return { elements, change, remove, saved, requests, ready: settle };
 }
 
@@ -114,16 +114,16 @@ test("optional metadata columns default hidden and remain selected across naviga
 
 function headers(view) { return [...view.elements["records-table"].innerHTML.split("</div>")[0].matchAll(/<strong>([^<]+)<\/strong>/g)].map(match => match[1]); }
 
-test("with nothing saved the page opens on Pump & tank, showing the preset fields the records carry", async () => {
+test("with nothing saved every screen opens on Standard, showing the fields the records carry", async () => {
   const view = page(""); await view.ready();
   assert.equal(view.requests.length, 1, "no second read to discover defaults");
-  assert.match(view.requests[0].columns, /^PressurePSI,TankWaterGallons,TankNetFlowGPM,/);
-  // Only PumpWatts of the preset is on this page; ClockValid is not in the preset.
+  assert.equal(view.requests[0].columns, "ContactorFlag,PumpWatts,PressurePSI,TankWaterGallons,TankNetFlowGPM");
+  // Only PumpWatts of Standard is on this page.
   assert.deepEqual(headers(view), ["Observation time", "Reasons", "PumpWatts"]);
   const picker = view.elements["column-picker"].innerHTML;
-  assert.match(picker, /<option value="pump" selected>Pump &amp; tank|<option value="pump" selected>Pump & tank/);
+  assert.match(picker, /<option value="standard" selected>Standard/);
   // A preset field absent from these records stays visible as a dashed chip.
-  assert.match(picker, /column-chip absent"[^>]*>PressurePSI/);
+  assert.match(picker, /column-chip absent"[^>]*>ContactorFlag/);
   assert.equal(view.saved(), null, "opening the page saves nothing");
 });
 
@@ -139,7 +139,7 @@ test("a custom selection is saved by name, restored in order, and may be empty",
   const reopened = page("", view.saved()); await reopened.ready();
   assert.deepEqual(headers(reopened), ["Observation time", "Reasons", "ClockValid"]);
   // Preset fields absent from this page stay in the selection; order is kept.
-  assert.deepEqual(reopened.saved().columns, ["PressurePSI", "TankWaterGallons", "TankNetFlowGPM", "TankFlowQuality", "ContactorFlag", "PumpEnable", "ClockValid"]);
+  assert.deepEqual(reopened.saved().columns, ["ContactorFlag", "PressurePSI", "TankWaterGallons", "TankNetFlowGPM", "ClockValid"]);
   const cleared = page("", { preset: "custom", columns: [], metadata: [] }); await cleared.ready();
   assert.deepEqual(headers(cleared), ["Observation time", "Reasons"]);
   assert.match(cleared.elements["column-picker"].innerHTML, /No field columns selected/);
@@ -152,13 +152,27 @@ test("a field that has stopped being logged stays selected and returns when it d
   assert.match(view.elements["column-picker"].innerHTML, /column-chip absent"[^>]*>Retired/);
 });
 
-test("an event link shows that event's fields without overwriting the saved selection", async () => {
-  const stored = { preset: "custom", columns: ["ClockValid"], metadata: [] };
+test("an event link adds its trigger field for the visit only, in one read", async () => {
+  const stored = { preset: "custom", columns: ["PumpWatts"], metadata: [] };
   const view = page("?session=session001&cycle=4&event=E1", stored); await view.ready();
+  assert.equal(view.requests.length, 1);
   assert.deepEqual(headers(view), ["Observation time", "Reasons", "PumpWatts", "ClockValid"]);
-  assert.match(view.elements["column-picker"].innerHTML, /<option value="event" selected>Event fields/);
-  assert.deepEqual(view.saved(), stored, "the visit alone leaves the saved selection alone");
-  await view.change("preset", "health");
-  assert.equal(view.saved().preset, "health");
-  assert.deepEqual(headers(view), ["Observation time", "Reasons", "ClockValid"]);
+  assert.match(view.elements["column-picker"].innerHTML, /column-chip trigger"[^>]*>ClockValid/);
+  // Metadata saved from an event page carries the selection, never the trigger.
+  await view.change("metadata", "release");
+  assert.deepEqual(view.saved(), { preset: "custom", columns: ["PumpWatts"], metadata: ["release"] });
+  // Leaving the event's session drops the trigger field.
+  await view.elements["latest-records"].fire("click");
+  assert.deepEqual(headers(view), ["Observation time", "Release", "Reasons", "PumpWatts"]);
+});
+
+test("removing the trigger field saves nothing; an event already in the selection adds nothing", async () => {
+  const stored = { preset: "custom", columns: ["PumpWatts"], metadata: [] };
+  const view = page("?session=session001&cycle=4&event=E1", stored); await view.ready();
+  await view.remove("ClockValid");
+  assert.deepEqual(headers(view), ["Observation time", "Reasons", "PumpWatts"]);
+  assert.deepEqual(view.saved(), stored);
+  const covered = page("?session=session001&cycle=4&event=E1", { preset: "custom", columns: ["ClockValid"], metadata: [] }); await covered.ready();
+  assert.deepEqual(headers(covered), ["Observation time", "Reasons", "ClockValid"]);
+  assert.doesNotMatch(covered.elements["column-picker"].innerHTML, /column-chip trigger/);
 });
