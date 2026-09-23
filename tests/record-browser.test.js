@@ -4,21 +4,28 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { initializeApp, deleteApp } = require("firebase-admin/app");
 const { FieldPath, getFirestore } = require("firebase-admin/firestore");
-const { _decodeCursor, _encodeCursor, catalogFromSavedDraft, eventDefaultColumns, exportRows, fieldState, joinOccurrences, observationView } = require("../cloud/netlify/lib/record-browser");
+const { _decodeCursor, _encodeCursor, eventDefaultColumns, exportRows, fieldState, joinOccurrences, observationView, pageFields, requestedColumns } = require("../cloud/netlify/lib/record-browser");
 const { _createHandler, _initialSessionFollowingQuery } = require("../cloud/netlify/functions/record-browser");
 
-const draft = {
-  devices: [{ enabled: true, fields: [{ systemName: "PumpWatts", label: "Pump watts", unit: "W", logging: { mode: "delta" } }, { systemName: "Hidden", logging: { mode: "none" } }] }],
-  calculatedFields: [{ output: { systemName: "PressurePSI", label: "Pressure", unit: "psi", logging: { mode: "change" } } }],
-  systemFields: [{ systemName: "ClockValid", label: "Clock", logging: { mode: "change" } }]
-};
+test("columns on offer are the fields the page's records carry, not the rules draft", () => {
+  const records = [
+    { schemaVersion: 2, fields: { PumpWatts: { state: "available", value: 0 }, PressurePSI: { state: "unavailable", reason: "adc" } } },
+    // A later package stopped logging PressurePSI and started logging ClockValid.
+    { schemaVersion: 2, fields: { PumpWatts: { state: "available", value: 1 }, ClockValid: { state: "available", value: true } } },
+    // Legacy raw keys are not rules fields and are not offered.
+    { schemaVersion: 1, values: { power: 2800 } }
+  ];
+  const catalog = pageFields(records);
+  assert.deepEqual(catalog, [{ name: "ClockValid" }, { name: "PressurePSI" }, { name: "PumpWatts" }]);
+  assert.deepEqual(pageFields([]), []);
+  const selected = eventDefaultColumns([{ id: "E1", opening: { trigger: { condition: { clauses: [{ field: "PumpWatts" }] } } }, closing: { condition: { clauses: [{ field: "ClockValid" }] } }, onOpen: { assignments: [{ target: "NotLogged" }] } }], "E1", catalog);
+  assert.deepEqual(selected, ["ClockValid", "PumpWatts"]);
+});
 
-test("browser catalog is read-only shaped from logging-enabled saved rules", () => {
-  const catalog = catalogFromSavedDraft(draft);
-  assert.deepEqual(catalog.map(item => item.name), ["ClockValid", "PressurePSI", "PumpWatts"]);
-  assert.equal(catalogFromSavedDraft({ devices: [] }), null);
-  const selected = eventDefaultColumns([{ id: "E1", opening: { trigger: { condition: { clauses: [{ field: "PumpWatts" }] } } }, closing: { condition: { clauses: [{ field: "ClockValid" }] } }, onOpen: { assignments: [{ target: "PressurePSI" }] } }], "E1", catalog);
-  assert.deepEqual(selected, ["ClockValid", "PressurePSI", "PumpWatts"]);
+test("a requested column is kept even when absent, bounded to field-shaped names", () => {
+  assert.deepEqual(requestedColumns("PumpWatts,Gone,PumpWatts,,bad name,1Bad"), ["PumpWatts", "Gone"]);
+  assert.equal(requestedColumns(Array.from({ length: 80 }, (_, index) => `Field${index}`).join(",")).length, 64);
+  assert.deepEqual(observationView({ schemaVersion: 2, fields: {} }, ["Gone"]).fields.Gone, { state: "missing", reason: "field_absent_from_record" });
 });
 
 test("browser distinguishes available false/zero from unavailable and older missing fields", () => {
@@ -206,6 +213,8 @@ test("endpoint keeps Timestamp observation cursors and string closure cursors di
   const handler = _createHandler({ getPilotFirestore: () => ({ db: browserFirestore(seed), projectId: "well-pump-control", databaseId: "(default)" }) });
   const first = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { limit: "1", columns: "PumpWatts" } })).body);
   assert.equal(first.records[0].recordId, "v2-b");
+  assert.deepEqual(first.catalog, [{ name: "PumpWatts" }]);
+  assert.deepEqual(first.defaultColumns, []);
   const next = JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: { limit: "1", cursor: first.nextCursor, columns: "PumpWatts" } })).body);
   assert.equal(next.records[0].recordId, "v1-a");
   const malformed = await handler({ httpMethod: "GET", queryStringParameters: { cursor: "not-a-cursor" } });

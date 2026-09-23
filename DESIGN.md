@@ -133,7 +133,11 @@ it; the rules engine owns what one means. The tank shows the device's net flow e
 (TankNetFlowGPM, signed, positive filling) from the same record. It reads zero when
 TankFlowQuality is not VALID or the magnitude is under a provisional noise floor,
 and a dash only when the record carries no flow calculation. The record browser supports selected
-columns, event/session navigation, paging, date anchors and daily CSV export.
+columns, event/session navigation, paging, date anchors and daily CSV export. Its
+columns are the fields the records on the page carry, so they follow the package
+that wrote them rather than the draft being edited. Presets and a custom selection
+are kept by name in the browser; a field absent from the page stays selected and
+greyed. Only an event link reads the rules, to choose that event's fields.
 Reporting time, acquisition time, inferred closure and transport age must remain
 distinct. Device age on screen is the server-stamped receipt, so a resent
 observation cannot present itself as fresh.

@@ -11,29 +11,26 @@ function iso(value) {
   return null;
 }
 
-function loggingField(field, kind) {
-  if (!field || field.logging?.mode === "none" || !field.systemName) return null;
-  return { name: field.systemName, label: field.label || field.systemName, unit: field.unit || null, kind };
+// The columns on offer are the fields the records themselves carry. A v2
+// record holds every field that was logging-enabled in the package that wrote
+// it, so this follows the running package -- not the draft being edited -- and
+// fields that come and go with logging settings come and go here too. Legacy v1
+// records carry raw device keys rather than rules fields and offer none.
+function pageFields(records) {
+  const names = new Set();
+  for (const record of records || []) {
+    if (record?.schemaVersion === 2) Object.keys(record.fields || {}).forEach(name => names.add(name));
+  }
+  return [...names].sort((left, right) => left.localeCompare(right)).map(name => ({ name }));
 }
 
-function catalogFromSavedDraft(draft) {
-  if (!draft || !Array.isArray(draft.devices) || !Array.isArray(draft.calculatedFields) || !Array.isArray(draft.systemFields)) return null;
-  const catalog = [];
-  for (const device of draft.devices) {
-    if (device?.enabled === false) continue;
-    for (const field of device?.fields || []) {
-      const item = loggingField(field, "device"); if (item) catalog.push(item);
-    }
-  }
-  for (const calculated of draft.calculatedFields) {
-    for (const output of calculated?.outputs || (calculated?.output ? [calculated.output] : [])) {
-      const item = loggingField(output, "calculated"); if (item) catalog.push(item);
-    }
-  }
-  for (const field of draft.systemFields) {
-    const item = loggingField(field, "system"); if (item) catalog.push(item);
-  }
-  return catalog.sort((left, right) => left.name.localeCompare(right.name));
+// A requested column need not be on this page: a saved selection keeps names
+// that are absent for now, and each reads back as missing. Names are bounded to
+// the durable-record field pattern.
+const MAX_COLUMNS = 64;
+function requestedColumns(raw) {
+  const names = String(raw || "").split(",").filter(name => /^[A-Za-z][A-Za-z0-9_]{1,63}$/.test(name));
+  return [...new Set(names)].slice(0, MAX_COLUMNS);
 }
 
 function conditionFields(condition) { return (condition?.clauses || []).map(item => item?.field).filter(Boolean); }
@@ -143,4 +140,4 @@ function exportRows(records) {
   return lines.join("\r\n") + "\r\n";
 }
 
-module.exports = { MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor: decodeCursor, _encodeCursor: encodeCursor, catalogFromSavedDraft, eventDefaultColumns, exportRows, fieldState, iso, joinOccurrences, observationView };
+module.exports = { MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor: decodeCursor, _encodeCursor: encodeCursor, eventDefaultColumns, exportRows, fieldState, iso, joinOccurrences, observationView, pageFields, requestedColumns };

@@ -2,7 +2,7 @@
 
 const { FieldPath, Timestamp } = require("firebase-admin/firestore");
 const { ConfigurationError, getPilotFirestore } = require("../lib/firebase");
-const { MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor, _encodeCursor, catalogFromSavedDraft, eventDefaultColumns, exportRows, iso, joinOccurrences, observationView } = require("../lib/record-browser");
+const { MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor, _encodeCursor, eventDefaultColumns, exportRows, iso, joinOccurrences, observationView, pageFields, requestedColumns } = require("../lib/record-browser");
 
 const SITE_ID = "well-main";
 const DEVICE_ID = "tab5-well-main";
@@ -22,15 +22,18 @@ function cursor(query, kind) {
   return kind === "timestamp" ? { ...parsed, time: new Date(parsed.time) } : parsed;
 }
 function serialise(snapshot) { return { ...snapshot.data(), recordId: snapshot.data().recordId || snapshot.id, receivedAt: iso(snapshot.data().receivedAt), observedAt: iso(snapshot.data().observedAt), firstReportedAt: iso(snapshot.data().firstReportedAt), detectedAt: iso(snapshot.data().detectedAt), restartDetectedAt: iso(snapshot.data().restartDetectedAt), time: { ...snapshot.data().time, observedAt: iso(snapshot.data().time?.observedAt) } }; }
-function draftFromSnapshots(snapshots) { return Object.fromEntries(snapshots.map(snapshot => [snapshot.id, snapshot.exists ? snapshot.data().items : null])); }
 function requireApprovedDb(provider) { const result = provider(); if (result.projectId !== "well-pump-control" || result.databaseId !== "(default)") throw new ConfigurationError("Firestore target is not the approved pilot database"); return result.db; }
-
-async function savedCatalog(site) {
-  const drafts = site.collection("rulesEngineV3Draft");
-  const snapshots = await Promise.all(["devices", "calculatedFields", "systemFields", "events"].map(name => drafts.doc(name).get()));
-  const draft = draftFromSnapshots(snapshots);
-  const catalog = catalogFromSavedDraft(draft);
-  return catalog ? { catalog, events: draft.events || [] } : { catalog: null, events: [] };
+// Only an event link needs the rules, to choose that event's fields; the
+// column list itself comes from the records. One document, and only then.
+async function eventDefinitions(site, query) {
+  if (!query.event) return [];
+  const snapshot = await site.collection("rulesEngineV3Draft").doc("events").get();
+  return snapshot.exists && Array.isArray(snapshot.data().items) ? snapshot.data().items : [];
+}
+function columnView(records, query, events) {
+  const catalog = pageFields(records);
+  const columns = requestedColumns(query.columns);
+  return { catalog, defaultColumns: eventDefaultColumns(events, query.event, catalog), records: records.map(item => observationView(item, columns)) };
 }
 function timeQuery(observations, schemaVersion, field, before, count) {
   let query = observations.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", schemaVersion).orderBy(field, "desc").orderBy(idField, "desc");
@@ -44,26 +47,21 @@ async function observationPage(site, query) {
   const observations = site.collection("observations"); let pageCursor = cursor(query, "timestamp");
   if (!pageCursor && query.anchor !== undefined) { const anchor = date(query.anchor); if (!anchor) throw new BrowserInputError("invalid_anchor"); pageCursor = { time: anchor, id: "\uffff" }; }
   const count = limit(query.limit);
-  const [one, two] = await Promise.all([timeQuery(observations, 1, "observedAt", pageCursor, count), timeQuery(observations, 2, "time.observedAt", pageCursor, count)]);
-  const catalogState = await savedCatalog(site);
-  if (!catalogState.catalog) return { status: "configuration", code: "saved_rules_missing", records: [], catalog: [] };
+  const [one, two, events] = await Promise.all([timeQuery(observations, 1, "observedAt", pageCursor, count), timeQuery(observations, 2, "time.observedAt", pageCursor, count), eventDefinitions(site, query)]);
   const records = [...one.docs, ...two.docs].map(serialise).sort((a, b) => {
     const left = a.schemaVersion === 2 ? a.time.observedAt : a.observedAt; const right = b.schemaVersion === 2 ? b.time.observedAt : b.observedAt;
     return right.localeCompare(left) || b.recordId.localeCompare(a.recordId);
   }).slice(0, count);
-  const columns = String(query.columns || "").split(",").filter(name => catalogState.catalog.some(item => item.name === name));
   const next = records.at(-1); const nextTime = next && (next.schemaVersion === 2 ? next.time.observedAt : next.observedAt);
-  return { status: records.length ? "ok" : "empty", catalog: catalogState.catalog, defaultColumns: eventDefaultColumns(catalogState.events, query.event, catalogState.catalog), records: records.map(item => observationView(item, columns)), nextCursor: next ? _encodeCursor({ time: nextTime, id: next.recordId }) : null, previousCursor: pageCursor ? _encodeCursor({ time: pageCursor.time.toISOString(), id: pageCursor.id }) : null };
+  return { status: records.length ? "ok" : "empty", ...columnView(records, query, events), nextCursor: next ? _encodeCursor({ time: nextTime, id: next.recordId }) : null, previousCursor: pageCursor ? _encodeCursor({ time: pageCursor.time.toISOString(), id: pageCursor.id }) : null };
 }
 async function receiptPage(site, query) {
   const observations = site.collection("observations"); const pageCursor = cursor(query, "timestamp"); const count = limit(query.limit);
   const read = schema => { let request = observations.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", schema).orderBy("receivedAt", "desc").orderBy(idField, "desc"); if (pageCursor) request = request.startAfter(Timestamp.fromDate(pageCursor.time), pageCursor.id); return request.limit(count).get(); };
-  const [one, two, catalogState] = await Promise.all([read(1), read(2), savedCatalog(site)]);
-  if (!catalogState.catalog) return { status: "configuration", code: "saved_rules_missing", records: [], catalog: [] };
-  const columns = String(query.columns || "").split(",").filter(name => catalogState.catalog.some(item => item.name === name));
+  const [one, two, events] = await Promise.all([read(1), read(2), eventDefinitions(site, query)]);
   const records = [...one.docs, ...two.docs].map(serialise).sort((left, right) => right.receivedAt.localeCompare(left.receivedAt) || right.recordId.localeCompare(left.recordId)).slice(0, count);
   const last = records.at(-1);
-  return { status: records.length ? "ok" : "empty", source: "receipt-time-fallback", catalog: catalogState.catalog, defaultColumns: eventDefaultColumns(catalogState.events, query.event, catalogState.catalog), records: records.map(item => observationView(item, columns)), nextCursor: last ? _encodeCursor({ time: last.receivedAt, id: last.recordId }) : null, previousCursor: pageCursor ? _encodeCursor({ time: pageCursor.time.toISOString(), id: pageCursor.id }) : null };
+  return { status: records.length ? "ok" : "empty", source: "receipt-time-fallback", ...columnView(records, query, events), nextCursor: last ? _encodeCursor({ time: last.receivedAt, id: last.recordId }) : null, previousCursor: pageCursor ? _encodeCursor({ time: pageCursor.time.toISOString(), id: pageCursor.id }) : null };
 }
 async function sessionPage(site, query) {
   const sessionId = typeof query.session === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(query.session) ? query.session : null;
@@ -82,9 +80,7 @@ async function sessionPage(site, query) {
     ]);
     return [...previous.docs.reverse(), ...following.docs];
   };
-  const [one, two, catalogState] = await Promise.all([around(1, "sequence"), around(2, "cycleSequence"), savedCatalog(site)]);
-  if (!catalogState.catalog) return { status: "configuration", code: "saved_rules_missing", records: [], catalog: [] };
-  const columns = String(query.columns || "").split(",").filter(name => catalogState.catalog.some(item => item.name === name));
+  const [one, two, events] = await Promise.all([around(1, "sequence"), around(2, "cycleSequence"), eventDefinitions(site, query)]);
   const records = [...one, ...two].map(serialise).sort((left, right) => {
     const leftSequence = left.schemaVersion === 2 ? left.cycleSequence : left.sequence;
     const rightSequence = right.schemaVersion === 2 ? right.cycleSequence : right.sequence;
@@ -96,7 +92,7 @@ async function sessionPage(site, query) {
     ...records.filter(record => sequence(record) >= cycle).slice(0, count)
   ];
   const first = selected.at(0); const last = selected.at(-1);
-  return { status: selected.length ? "ok" : "empty", catalog: catalogState.catalog, defaultColumns: eventDefaultColumns(catalogState.events, query.event, catalogState.catalog), records: selected.map(item => observationView(item, columns)), nextCursor: last ? _encodeCursor({ sequence: sequence(last), id: last.recordId }) : null, previousCursor: first ? _encodeCursor({ sequence: sequence(first), id: first.recordId }) : null, navigation: { sessionId, cycle } };
+  return { status: selected.length ? "ok" : "empty", ...columnView(selected, query, events), nextCursor: last ? _encodeCursor({ sequence: sequence(last), id: last.recordId }) : null, previousCursor: first ? _encodeCursor({ sequence: sequence(first), id: first.recordId }) : null, navigation: { sessionId, cycle } };
 }
 function closureTime(record) { return iso(record.closeReason === "ended-by-restart" ? record.restartDetectedAt : record.detectedAt); }
 function closureQuery(history, reason, field, pageCursor, count) {

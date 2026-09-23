@@ -19,18 +19,18 @@ class Element {
   }
 }
 async function settle() { for (let index = 0; index < 6; index += 1) await new Promise(resolve => setImmediate(resolve)); }
-function response(recordId, extra = {}) {
-  return { status: "ok", catalog: [{ name: "PumpWatts", label: "Pump watts", unit: "W" }, { name: "ClockValid", label: "Clock", unit: null }], defaultColumns: ["PumpWatts", "ClockValid"], records: [{ recordId, schemaVersion: 2, sessionId: "session001", cycleSequence: 4, observationTime: "2026-03-08T01:00:00.000Z", receiptTime: "2026-03-08T01:01:00.000Z", rulesRelease: {}, triggerReasons: [{ kind: recordId }], fields: { PumpWatts: { state: "available", value: 0 }, ClockValid: { state: "available", value: false } } }], ...extra };
+function response(query, recordId, extra = {}) {
+  return { status: "ok", catalog: [{ name: "ClockValid" }, { name: "PumpWatts" }], defaultColumns: query.get("event") ? ["PumpWatts", "ClockValid"] : [], records: [{ recordId, schemaVersion: 2, sessionId: "session001", cycleSequence: 4, observationTime: "2026-03-08T01:00:00.000Z", receiptTime: "2026-03-08T01:01:00.000Z", rulesRelease: {}, triggerReasons: [{ kind: recordId }], fields: { PumpWatts: { state: "available", value: 0 }, ClockValid: { state: "available", value: false } } }], ...extra };
 }
-function page(search) {
+function page(search, stored = null) {
   const ids = ["records-status", "records-table", "column-picker", "record-day", "record-at", "newer-records", "older-records", "latest-records", "receipt-records", "export-day", "timezone-label", "history-older", "history-newer", "history-panel", "history-list"];
   const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
-  const input = new Element("PumpWatts"); input.value = "PumpWatts"; input.dataset.kind = "data";
-  const clock = new Element("ClockValid"); clock.value = "ClockValid"; clock.dataset.kind = "data";
-  const session = new Element("session-cycle"); session.value = "session-cycle"; session.dataset.kind = "metadata"; session.checked = false;
-  const release = new Element("release"); release.value = "release"; release.dataset.kind = "metadata"; release.checked = false;
-  const receipt = new Element("receipt-time"); receipt.value = "receipt-time"; receipt.dataset.kind = "metadata"; receipt.checked = false;
-  elements["column-picker"].inputs = [session, release, receipt, input, clock];
+  const picker = elements["column-picker"];
+  // The picker delegates: one listener sees the event from whichever control changed.
+  const change = async (kind, value, checked = true) => { picker.listeners.get("change")({ target: { dataset: { kind }, value, checked } }); await settle(); };
+  const remove = async name => { picker.listeners.get("click")({ target: { dataset: { remove: name } } }); await settle(); };
+  const store = new Map(stored ? [["recordBrowserColumns.v1", JSON.stringify(stored)]] : []);
+  const localStorage = { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, String(value)) };
   const requests = [];
   const document = {
     querySelector(selector) { return elements[selector.slice(1)] || null; },
@@ -40,19 +40,20 @@ function page(search) {
     const url = new URL(raw, "http://browser.test"); const query = url.searchParams; requests.push(Object.fromEntries(query));
     let body;
     if (query.get("view") === "session") {
-      if (query.get("session") === "empty000") body = { ...response("unused"), status: "empty", records: [], nextCursor: null, previousCursor: null };
-      else if (query.get("cursor") === "before-first") body = { ...response("unused"), status: "empty", records: [], nextCursor: null, previousCursor: null };
-      else if (query.get("cursor") === "after-last") body = { ...response("unused"), status: "empty", records: [], nextCursor: null, previousCursor: null };
-      else if (query.get("cursor") === "after-first") body = response("session-last", { nextCursor: "after-last", previousCursor: "back-first" });
-      else if (query.get("cursor") === "back-first") body = response("session-first", { nextCursor: "after-first", previousCursor: "before-first" });
-      else body = response("session-first", { nextCursor: "after-first", previousCursor: "before-first" });
-    } else if (query.get("view") === "receipt") body = response("receipt-row", { source: "receipt-time-fallback", nextCursor: null, previousCursor: null });
-    else body = response(query.has("anchor") ? "observation-anchored" : "observation-row", { nextCursor: null, previousCursor: null });
+      if (query.get("session") === "empty000") body = { ...response(query, "unused"), status: "empty", records: [], nextCursor: null, previousCursor: null };
+      else if (query.get("cursor") === "before-first") body = { ...response(query, "unused"), status: "empty", records: [], nextCursor: null, previousCursor: null };
+      else if (query.get("cursor") === "after-last") body = { ...response(query, "unused"), status: "empty", records: [], nextCursor: null, previousCursor: null };
+      else if (query.get("cursor") === "after-first") body = response(query, "session-last", { nextCursor: "after-last", previousCursor: "back-first" });
+      else if (query.get("cursor") === "back-first") body = response(query, "session-first", { nextCursor: "after-first", previousCursor: "before-first" });
+      else body = response(query, "session-first", { nextCursor: "after-first", previousCursor: "before-first" });
+    } else if (query.get("view") === "receipt") body = response(query, "receipt-row", { source: "receipt-time-fallback", nextCursor: null, previousCursor: null });
+    else body = response(query, query.has("anchor") ? "observation-anchored" : "observation-row", { nextCursor: null, previousCursor: null });
     return { ok: true, json: async () => body };
   };
-  const context = { URL, URLSearchParams, Intl, Date, Promise, setImmediate, document, location: { search }, fetch, console, Blob: class {}, URLSearchParams };
+  const context = { URL, URLSearchParams, Intl, Date, Promise, setImmediate, document, location: { search }, fetch, console, Blob: class {}, localStorage };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "web", "records.js"), "utf8"), context, { filename: "web/records.js" });
-  return { elements, input, session, release, receipt, requests, ready: settle };
+  const saved = () => JSON.parse(store.get("recordBrowserColumns.v1") || "null");
+  return { elements, change, remove, saved, requests, ready: settle };
 }
 
 test("browser JavaScript preserves a populated session page at both boundaries", async () => {
@@ -70,9 +71,9 @@ test("browser JavaScript preserves a populated session page at both boundaries",
   assert.match(view.elements["records-table"].innerHTML, /session-last/);
   assert.equal(view.elements["newer-records"].disabled, true);
   assert.equal(view.elements["older-records"].disabled, false);
-  view.input.checked = false; await view.input.fire("change");
+  await view.change("data", "PumpWatts", false);
   assert.match(view.elements["records-table"].innerHTML, /session-last/);
-  assert.doesNotMatch(view.elements["records-table"].innerHTML, /PUMPWATTS/);
+  assert.doesNotMatch(view.elements["records-table"].innerHTML, /<strong>PumpWatts<\/strong>/);
   await view.elements["older-records"].fire("click");
   assert.match(view.elements["records-table"].innerHTML, /session-first/);
   await view.elements["latest-records"].fire("click");
@@ -96,18 +97,68 @@ test("optional metadata columns default hidden and remain selected across naviga
   const table = view.elements["records-table"];
   assert.match(table.innerHTML, /Observation time/);
   assert.doesNotMatch(table.innerHTML, /Session \/ cycle|Receipt time|<strong>Release<\/strong>/);
-  view.session.checked = true; view.release.checked = true; view.receipt.checked = true;
-  await view.session.fire("change");
+  await view.change("metadata", "session-cycle"); await view.change("metadata", "release"); await view.change("metadata", "receipt-time");
   assert.match(table.innerHTML, /Session \/ cycle/);
   assert.match(table.innerHTML, /Receipt time/);
   assert.match(table.innerHTML, /<strong>Release<\/strong>/);
   await view.elements["newer-records"].fire("click");
   assert.match(table.innerHTML, /Session \/ cycle/);
-  view.input.checked = false; await view.input.fire("change");
+  await view.change("data", "PumpWatts", false);
   assert.match(table.innerHTML, /Receipt time/);
   await view.elements["latest-records"].fire("click");
   assert.match(table.innerHTML, /<strong>Release<\/strong>/);
   await view.elements["receipt-records"].fire("click");
   assert.match(table.innerHTML, /Session \/ cycle/);
   assert.match(table.style.values["--record-grid-template"], /170px 180px 190px/);
+});
+
+function headers(view) { return [...view.elements["records-table"].innerHTML.split("</div>")[0].matchAll(/<strong>([^<]+)<\/strong>/g)].map(match => match[1]); }
+
+test("with nothing saved the page opens on Pump & tank, showing the preset fields the records carry", async () => {
+  const view = page(""); await view.ready();
+  assert.equal(view.requests.length, 1, "no second read to discover defaults");
+  assert.match(view.requests[0].columns, /^PressurePSI,TankWaterGallons,TankNetFlowGPM,/);
+  // Only PumpWatts of the preset is on this page; ClockValid is not in the preset.
+  assert.deepEqual(headers(view), ["Observation time", "Reasons", "PumpWatts"]);
+  const picker = view.elements["column-picker"].innerHTML;
+  assert.match(picker, /<option value="pump" selected>Pump &amp; tank|<option value="pump" selected>Pump & tank/);
+  // A preset field absent from these records stays visible as a dashed chip.
+  assert.match(picker, /column-chip absent"[^>]*>PressurePSI/);
+  assert.equal(view.saved(), null, "opening the page saves nothing");
+});
+
+test("a custom selection is saved by name, restored in order, and may be empty", async () => {
+  const view = page(""); await view.ready();
+  await view.change("data", "ClockValid");
+  assert.equal(view.requests.length, 2, "adding a field reads it");
+  assert.deepEqual(headers(view), ["Observation time", "Reasons", "PumpWatts", "ClockValid"]);
+  assert.equal(view.saved().preset, "custom");
+  await view.remove("PumpWatts");
+  assert.equal(view.requests.length, 2, "removing a field needs no read");
+  assert.deepEqual(headers(view), ["Observation time", "Reasons", "ClockValid"]);
+  const reopened = page("", view.saved()); await reopened.ready();
+  assert.deepEqual(headers(reopened), ["Observation time", "Reasons", "ClockValid"]);
+  // Preset fields absent from this page stay in the selection; order is kept.
+  assert.deepEqual(reopened.saved().columns, ["PressurePSI", "TankWaterGallons", "TankNetFlowGPM", "TankFlowQuality", "ContactorFlag", "PumpEnable", "ClockValid"]);
+  const cleared = page("", { preset: "custom", columns: [], metadata: [] }); await cleared.ready();
+  assert.deepEqual(headers(cleared), ["Observation time", "Reasons"]);
+  assert.match(cleared.elements["column-picker"].innerHTML, /No field columns selected/);
+});
+
+test("a field that has stopped being logged stays selected and returns when it does", async () => {
+  const view = page("", { preset: "custom", columns: ["Retired", "PumpWatts"], metadata: [] }); await view.ready();
+  assert.equal(view.requests[0].columns, "Retired,PumpWatts");
+  assert.deepEqual(headers(view), ["Observation time", "Reasons", "PumpWatts"]);
+  assert.match(view.elements["column-picker"].innerHTML, /column-chip absent"[^>]*>Retired/);
+});
+
+test("an event link shows that event's fields without overwriting the saved selection", async () => {
+  const stored = { preset: "custom", columns: ["ClockValid"], metadata: [] };
+  const view = page("?session=session001&cycle=4&event=E1", stored); await view.ready();
+  assert.deepEqual(headers(view), ["Observation time", "Reasons", "PumpWatts", "ClockValid"]);
+  assert.match(view.elements["column-picker"].innerHTML, /<option value="event" selected>Event fields/);
+  assert.deepEqual(view.saved(), stored, "the visit alone leaves the saved selection alone");
+  await view.change("preset", "health");
+  assert.equal(view.saved().preset, "health");
+  assert.deepEqual(headers(view), ["Observation time", "Reasons", "ClockValid"]);
 });

@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const record = (id, session = "session001", cycle = 4) => ({ recordId: id, schemaVersion: 2, sessionId: session, cycleSequence: cycle, observationTime: "2026-03-08T01:00:00.000Z", receiptTime: "2026-03-08T01:01:00.000Z", observationTimeStatus: "reported-device-time", rulesRelease: { releaseId: "20260308000000-event-v3-v1" }, triggerReasons: [{ kind: id }], fields: { PumpWatts: { state: "available", value: 0 }, ClockValid: { state: "available", value: false } } });
-const catalog = [{ name: "PumpWatts", label: "Pump watts", unit: "W" }, { name: "ClockValid", label: "Clock", unit: null }];
+const catalog = [{ name: "ClockValid" }, { name: "PumpWatts" }];
 http.createServer((request, response) => {
   const url = new URL(request.url, "http://localhost");
   if (url.pathname === "/.netlify/functions/operator-control") {
