@@ -17,6 +17,11 @@ rules-engine-defaults.js seeds a fresh draft; tests/fixtures/ holds dated
 snapshots. The authoritative package is the saved Firestore draft and the
 authoritative device files are the installed ones.
 
+A code comment is not evidence for a physical or electrical fact. A comment sits
+inside deployed source, so it reads as satisfying the rule above while describing
+something that was never true or has since changed. Confirm those against the
+hardware, a capture, or the owner.
+
 ## Small fixes with minimum overhead
 
 - Use pilot-working for web/cloud and tab5-working for device/Shelly work. Retain
