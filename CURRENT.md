@@ -36,8 +36,11 @@ http to https; the owner confirms the certificate in Netlify.
 The Tab5 still posts ingest, event boards, releases and device sync to the pilot branch
 deploy (pilot--well-pump-control.netlify.app), so that branch deploy must stay enabled
 and device-driven functions, the notifier included, run in its context. Browsers may use
-either address. A pilot push now updates the pilot deploy only; production changes when
-main is advanced to match.
+either address. Pilot is therefore not a test deploy: it is production for the device,
+as main is production for the screens. A pilot push changes production behavior for the
+Tab5 immediately. Main may lag pilot but never lead it, and advances only by
+fast-forwarding to a pilot commit, only for a screen change. See BETA for the three
+change categories and the recovery steps.
 
 Same-day web changes now live on both: tank net flow under the gallons (zero below a
 provisional 0.2 GPM floor or when not VALID; tune FLOW_FLOOR_GPM in web/app.js), record

@@ -33,6 +33,11 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   before reopening the issue. Do not assume older deployment-failure notes remain true.
 - **Network migration:** keep current Shelly DHCP reservations until package addresses
   actually drive acquisition. Preserve bootstrap polling without an adopted package.
+- **Tab5 Netlify endpoint:** the device is hard-coded to the pilot branch deploy, which
+  is why pilot is production for the device. Repoint it to the production netlify.app
+  host at the next authorized Tab5 install. Not urgent and not free: it moves the
+  device's dependency from a branch deploy to production, so the change categories in
+  BETA move with it.
 - **Battery and diagnostics:** retain 75/80 charge policy pending a deliberate change;
   investigate percentage/current interpretation, brief pending-record cloud-yellow
   indication, and Wi-Fi/reconnect behavior only if observed. [#1](https://github.com/bobebaugh/well-pump-control/issues/1).
