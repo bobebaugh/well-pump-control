@@ -12,13 +12,15 @@ const REQUIRED = ["RESEND_API_KEY", "NOTIFY_FROM", "NOTIFY_EMAIL_TO", "NOTIFY_SM
 
 function transition(recordType) { return recordType === "event-open" ? "Open" : "Close"; }
 
-// Event number in the subject, display name in the body, nothing else. The marker is what
-// the mailbox filters on. The display name is #24's wording, taken from the event record
-// so it is the name the device actually ran rather than a second copy that can drift.
-function composeMessage(record) {
+// Event number in the subject, the event's own open or close message in the body. The
+// marker is what the mailbox filters on. Without a message from the release - the table
+// fallback, or a message left empty - the body is the display name on the event record,
+// the name the device actually ran.
+function composeMessage(record, decision = null) {
+  const message = typeof decision?.message === "string" ? decision.message.trim() : "";
   return {
     subject: `${SUBJECT_MARKER} ${transition(record.recordType)}: ${record.eventDefinitionId}`,
-    text: record.displayName
+    text: message || record.displayName
   };
 }
 
@@ -54,17 +56,19 @@ function createEventNotifier(dependencies = {}) {
   return {
     // Never throws and never reports anything but outcomes: delivery is reporting, and no
     // caller may make ingestion or inhibition depend on it.
-    async notify(records) {
+    // policies[i] is record i's notification settings from its release, or null for the
+    // table fallback (see event-notification-criteria).
+    async notify(records, policies = []) {
       const selected = [];
-      for (const record of records) {
-        const decision = notificationDecision(record.eventDefinitionId, record.recordType);
+      for (const [index, record] of records.entries()) {
+        const decision = notificationDecision(record.eventDefinitionId, record.recordType, policies[index] || null);
         if (decision.send) selected.push({ record, decision });
       }
       if (selected.length === 0) return [];
 
       const sending = selected.slice(0, MAX_RECORDS);
       const skipped = mark(selected.slice(MAX_RECORDS), { status: "skipped", reason: "burst-cap" });
-      const messages = sending.map(({ record }) => composeMessage(record));
+      const messages = sending.map(({ record, decision }) => composeMessage(record, decision));
       const key = batchKey(sending.map(({ record }) => record.recordId));
 
       // A dry run composes and reports without sending, and still names anything missing -

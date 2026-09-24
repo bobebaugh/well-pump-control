@@ -47,6 +47,18 @@ provisional 0.2 GPM floor or when not VALID; tune FLOW_FLOOR_GPM in web/app.js),
 browser columns from the records with a Standard default and a pinned header, and a
 cloud-session start hook (.claude/hooks/session-start.sh).
 
+## Lost event boards and notification text, 24 September 2026
+
+Events with a non-ASCII display name (the em dashes in W01, W03-W08, E006) opened on the
+device and wrote event-boundary durable records but never reached event history: the
+board carrying them was rejected. Owner test: W03 renamed to plain ASCII, republished and
+restarted, then opened, closed and emailed normally. pilot-working now rejects non-ASCII
+event display names and enum choices at Validate/Publish, and the notifier sends each
+event's own Notify on open/close and Open/Close message from the release on the record,
+with the criteria table only as fallback. Both take effect on the device path only after
+promotion to pilot. Until the package is republished with plain names, W04, W06, W07, W08
+and E006 still carry em dashes on the Tab5; a latched W07 would block every board.
+
 ## Maintenance baseline
 
 Before housekeeping: pilot = 150bb8ab6297062ca6a8157708f05700c6cd74d0;

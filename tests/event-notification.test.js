@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { CRITERIA, notificationDecision } = require("../cloud/netlify/lib/event-notification-criteria");
+const { CRITERIA, notificationDecision, releaseNotificationPolicy } = require("../cloud/netlify/lib/event-notification-criteria");
 const { MAX_RECORDS, batchKey, composeMessage, createEventNotifier } = require("../cloud/netlify/lib/event-notifier");
 const { historyIdentity } = require("../cloud/netlify/lib/event-board-store");
 const { _createHandler } = require("../cloud/netlify/functions/event-board");
@@ -192,4 +192,65 @@ test("a notifier that throws leaves ingestion and the mirror untouched", async (
   assert.equal(result.statusCode, 201);
   assert.equal(JSON.parse(result.body).decision, "accepted-new-session");
   assert.equal(mirrored, 1);
+});
+
+function releaseDoc(web, overrides = {}) {
+  return { ...release, authoringPackage: { schemaVersion: 3, events: [
+    { id: "W07", displayName: "Tank pressure above 70 psi", web },
+    { id: "P001", displayName: "Pump Cycle > 100W" }
+  ] }, ...overrides };
+}
+
+test("the event's own settings in the reported release decide and word the message", () => {
+  const web = { notifyOnOpen: true, notifyOnClose: false, openMessage: "  W07 - tank over 70 psi  ", closeMessage: "" };
+  const opened = { ...record("W07"), rulesRelease: release };
+  const policy = releaseNotificationPolicy(releaseDoc(web), opened);
+  assert.deepEqual(policy, { notifyOnOpen: true, notifyOnClose: false, openMessage: "W07 - tank over 70 psi", closeMessage: "" });
+  const openDecision = notificationDecision("W07", "event-open", policy);
+  assert.deepEqual(openDecision, { send: true, criteria: "release", transition: "open", message: "W07 - tank over 70 psi" });
+  assert.deepEqual(composeMessage(opened, openDecision), { subject: "MF-Well Open: W07", text: "W07 - tank over 70 psi" });
+  // The table would send this close; the event's own setting says not to.
+  assert.equal(notificationDecision("W07", "event-close", policy).send, false);
+  // An empty message falls back to the display name the device ran.
+  const emptied = releaseNotificationPolicy(releaseDoc({ ...web, openMessage: "" }), opened);
+  assert.equal(composeMessage(opened, notificationDecision("W07", "event-open", emptied)).text, "W07 display name");
+
+  // Anything that is not provably the package the device ran falls back to the table.
+  assert.equal(releaseNotificationPolicy(releaseDoc(web, { contentHash: "b".repeat(64) }), opened), null);
+  assert.equal(releaseNotificationPolicy(releaseDoc(web), { ...opened, rulesRelease: undefined }), null);
+  assert.equal(releaseNotificationPolicy(releaseDoc(web), { ...record("P001"), rulesRelease: release }), null);
+  assert.equal(releaseNotificationPolicy(null, opened), null);
+});
+
+test("the endpoint words an email from the release, and falls back to the table without one", async () => {
+  const run = async seedRelease => {
+    const { db, values } = fakeFirestore();
+    if (seedRelease) values.set(`sites/well-main/rulesEngineV3Releases/${release.releaseId}`, seedRelease);
+    const sent = [];
+    const handler = _createHandler({
+      env: { PILOT_INGEST_TOKEN: "test-token" },
+      getPilotFirestore: () => ({ db, projectId: "well-pump-control", databaseId: "(default)" }),
+      clock: () => new Date("2026-09-12T16:00:02.100Z"),
+      createMirror: () => ({ mirror: async () => ({ written: true }) }),
+      createNotifier: () => createEventNotifier({
+        env: configured, log: quiet,
+        fetch: async (url, options) => { sent.push(...JSON.parse(options.body)); return okResponse(2); }
+      })
+    });
+    const post = (sequence, open) => handler({ httpMethod: "POST", headers: { "x-pilot-key": "test-token" },
+      body: JSON.stringify(board(sequence, open ? { W07: slot("r15:W07:1", "Tank pressure above 70 psi") } : {})) });
+    await post(2, true);
+    await post(3, false);
+    const stored = [...values.entries()].filter(([path]) => path.includes("/eventRecords/")).map(([, value]) => value);
+    return { sent: sent.filter(mail => mail.to[0] === "owner@example.net"), stored };
+  };
+
+  const fromRelease = await run(releaseDoc({ notifyOnOpen: true, notifyOnClose: false, openMessage: "W07 - tank over 70 psi", closeMessage: "" }));
+  assert.deepEqual(fromRelease.sent.map(mail => [mail.subject, mail.text]), [["MF-Well Open: W07", "W07 - tank over 70 psi"]]);
+  assert.equal(fromRelease.stored.find(item => item.recordType === "event-open").notification.criteria, "release");
+
+  const fallback = await run(null);
+  assert.deepEqual(fallback.sent.map(mail => [mail.subject, mail.text]), [
+    ["MF-Well Open: W07", "Tank pressure above 70 psi"], ["MF-Well Close: W07", "Tank pressure above 70 psi"]]);
+  assert.equal(fallback.stored.find(item => item.recordType === "event-open").notification.criteria, "table");
 });

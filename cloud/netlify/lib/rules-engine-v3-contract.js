@@ -28,6 +28,31 @@ class RulesEngineV3ContractError extends Error {
 
 function isObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
 function issue(path, code, message) { return { path, code, message }; }
+
+// Text the Tab5 posts back to the cloud: event display names ride every event board, and
+// enum choices ride durable records. The device sends those bodies with a character-count
+// Content-Length, so any character over one byte truncates the body and the cloud rejects
+// it - silently losing every event on that board. Plain ASCII holds until the device sends bytes.
+// Invisible characters get a name, since the author cannot see what to delete.
+const NON_ASCII_NAMES = {
+  0x00a0: "non-breaking space", 0x202f: "narrow no-break space", 0x2009: "thin space",
+  0x200b: "zero-width space", 0xfeff: "byte order mark", 0x2013: "en dash", 0x2014: "em dash",
+  0x2212: "minus sign", 0x2018: "curly quote", 0x2019: "curly apostrophe", 0x201c: "curly quote",
+  0x201d: "curly quote", 0x2026: "ellipsis"
+};
+function validateDeviceText(value, path, what, errors) {
+  if (typeof value !== "string") return;
+  let position = 0;
+  for (const character of value) {
+    position += 1;
+    const code = character.codePointAt(0);
+    if (code <= 0x7e) continue;
+    const hex = `U+${code.toString(16).toUpperCase().padStart(4, "0")}`;
+    const shown = NON_ASCII_NAMES[code] ? `${NON_ASCII_NAMES[code]} (${hex})` : `"${character}" (${hex})`;
+    errors.push(issue(path, "non_ascii_text", `${what}: character ${position} is not plain text: ${shown}. The Tab5 can only send plain keyboard characters; replace it (a dash with -, a quote with ' or ").`));
+    return;
+  }
+}
 function hasOnly(value, keys) { return isObject(value) && Object.keys(value).every(key => keys.has(key)); }
 function sameValue(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
 function canonical(value) {
@@ -83,6 +108,7 @@ function validateSystemFields(systemFields, fields, writable, occurrences, error
       } else if (field.runtimeRole === "working") {
         if (!["number", "integer", "boolean", "enum"].includes(field.type)) errors.push(issue(`${path}.type`, "invalid_working_field_type", "Working fields use number, integer, boolean, or enum."));
         if (field.type === "enum" && (!Array.isArray(field.enumValues) || field.enumValues.length < 2 || field.enumValues.length > 32 || field.enumValues.some(value => typeof value !== "string" || !value) || new Set(field.enumValues).size !== field.enumValues.length)) errors.push(issue(`${path}.enumValues`, "invalid_working_enum_values", "Enum working fields need two through 32 unique non-empty choices."));
+        else if (field.type === "enum") field.enumValues.forEach((value, choice) => validateDeviceText(value, `${path}.enumValues[${choice}]`, `${field.systemName || "System field"} choice`, errors));
         if (typeof field.assignmentTarget !== "boolean") errors.push(issue(`${path}.assignmentTarget`, "invalid_assignment_target", "Working field assignment eligibility must be true or false."));
       } else {
         errors.push(issue(`${path}.runtimeRole`, "invalid_session_role", "Session fields use operatingMode or working."));
@@ -219,6 +245,7 @@ function validateEvents(events, fields, writable, occurrences, errors) {
     if (!NAME_PATTERN.test(event.systemName || "")) errors.push(issue(`${path}.systemName`, "invalid_event_name", "Event system name is required."));
     else if (names.has(event.systemName)) errors.push(issue(`${path}.systemName`, "duplicate_event_name", "Event system names must be unique.")); else names.add(event.systemName);
     if (typeof event.displayName !== "string" || !event.displayName.trim()) errors.push(issue(`${path}.displayName`, "missing_display_name", "Display name is required."));
+    else validateDeviceText(event.displayName, `${path}.displayName`, `${event.id || "Event"} display name`, errors);
     if (!["Info", "Yellow", "Red"].includes(event.severity)) errors.push(issue(`${path}.severity`, "invalid_severity", "Severity must be Info, Yellow, or Red."));
     if (typeof event.enabled !== "boolean") errors.push(issue(`${path}.enabled`, "invalid_enabled", "Enabled must be true or false."));
     if (!["transient", "latched", "monitor"].includes(event.eventClass)) errors.push(issue(`${path}.eventClass`, "invalid_event_class", "Event class must be transient, latched, or monitor."));

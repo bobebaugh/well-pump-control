@@ -175,3 +175,29 @@ test("V3 retains authoring summaries but blocks publication to the current Tab5"
   assert.ok(codes(result).includes("summary_source_type"));
   assert.deepEqual(result.warnings, []);
 });
+
+test("text the Tab5 posts back must be plain ASCII, and an invisible character is named", () => {
+  const dashed = defaults();
+  dashed.events.find(event => event.id === "E007").displayName = "Utility voltage high — pump inhibited";
+  const result = validateAndCompileV3(dashed);
+  assert.equal(result.valid, false);
+  const error = result.errors.find(item => item.code === "non_ascii_text");
+  assert.equal(error.path, `events[${dashed.events.findIndex(event => event.id === "E007")}].displayName`);
+  assert.match(error.message, /^E007 display name: character 22 is not plain text: em dash \(U\+2014\)/);
+
+  const spaced = defaults();
+  spaced.events[0].displayName = "Utility voltage";
+  assert.match(validateAndCompileV3(spaced).errors.find(item => item.code === "non_ascii_text").message, /non-breaking space \(U\+00A0\)/);
+
+  const choice = defaults();
+  choice.systemFields.push({ id: "system-stage", systemName: "Stage", label: "Stage — notes are free", source: "session",
+    runtimeRole: "working", type: "enum", unit: null, enumValues: ["Idle", "Café"], initialValue: "Idle",
+    logging: { mode: "change" }, assignmentTarget: false });
+  const choiceErrors = validateAndCompileV3(choice).errors.filter(item => item.code === "non_ascii_text");
+  assert.deepEqual(choiceErrors.map(item => item.path), [`systemFields[${choice.systemFields.length - 1}].enumValues[1]`]);
+
+  // Notification messages stay in the cloud, so they may carry any character.
+  const messaged = defaults();
+  messaged.events[0].web = { notifyOnOpen: true, notifyOnClose: false, openMessage: "E007 — high", closeMessage: "" };
+  assert.equal(validateAndCompileV3(messaged).errors.some(item => item.code === "non_ascii_text"), false);
+});

@@ -30,7 +30,8 @@ function parseBody(event) {
 // after the mirror would be dropped for a commit that had already happened.
 async function notifyQuietly(notifierProvider, store, records) {
   try {
-    const outcomes = await notifierProvider().notify(records);
+    const policies = await store.notificationPolicies(records).catch(() => []);
+    const outcomes = await notifierProvider().notify(records, policies);
     if (outcomes.length > 0) await store.markNotified(outcomes);
   } catch {
     console.error("Event notification failed", { category: "notification" });

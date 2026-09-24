@@ -1,16 +1,14 @@
 "use strict";
 
-// Authoritative notification criteria. This table, and nothing else, decides whether an
-// event open or close is delivered. It is cloud-side on purpose: changing it is an edit
-// here plus a deploy - no package republish, no runtime release, no device restart.
+// Whether an event open or close is delivered, and what it says, comes from the event's own
+// notification settings (its `web` block) in the release the device reported on the record.
+// The compiler strips `web` from the runtime package, but every release in Firestore keeps
+// its full authoring package, and the record's rulesRelease names exactly the one the Tab5
+// ran. So the editor's Notify on open/close and Open/Close message are what gets sent.
 //
-// The `web` blocks in the V3 authoring package carry the same intent so the package reads
-// completely on its own, but they are stripped at compile and never reach the device or
-// this function. The two copies can drift silently and nothing reports it. This copy wins.
-// Rows are issue #24, "Notification criteria".
-//
-// Muting P001 and P013 at departure - the pump should go to zero runs over the winter - is
-// two `open: false` edits below and a deploy. No package change, no device involvement.
+// The table below is the fallback, used only when that release or event cannot be read -
+// a Firestore failure, a hash mismatch, or a release older than its web block. Rows are
+// issue #24, "Notification criteria".
 
 const CRITERIA = {
   W07: { open: true, close: true },    // the one latch; the close means someone restarted Tab5
@@ -40,14 +38,37 @@ const CRITERIA = {
 // rather than silent.
 const UNKNOWN_DEFAULT = { open: true, close: true };
 
-function notificationDecision(eventDefinitionId, recordType) {
+// The event's web block from the release the record names, or null when it cannot be
+// trusted: absent, a different package than the device reported, or malformed.
+function releaseNotificationPolicy(release, record) {
+  const reported = record?.rulesRelease;
+  if (!release || typeof release !== "object" || !reported) return null;
+  if (release.releaseId !== reported.releaseId || release.contentHash !== reported.contentHash) return null;
+  const events = release.authoringPackage?.events;
+  if (!Array.isArray(events)) return null;
+  const event = events.find(item => item && item.id === record.eventDefinitionId);
+  const web = event?.web;
+  if (!web || typeof web.notifyOnOpen !== "boolean" || typeof web.notifyOnClose !== "boolean") return null;
+  return {
+    notifyOnOpen: web.notifyOnOpen, notifyOnClose: web.notifyOnClose,
+    openMessage: typeof web.openMessage === "string" ? web.openMessage.trim() : "",
+    closeMessage: typeof web.closeMessage === "string" ? web.closeMessage.trim() : ""
+  };
+}
+
+function notificationDecision(eventDefinitionId, recordType, policy = null) {
   if (recordType !== "event-open" && recordType !== "event-close") {
     return { send: false, criteria: "not-an-event", transition: null };
   }
   const transition = recordType === "event-open" ? "open" : "close";
+  if (policy) {
+    const send = transition === "open" ? policy.notifyOnOpen : policy.notifyOnClose;
+    const message = transition === "open" ? policy.openMessage : policy.closeMessage;
+    return { send, criteria: "release", transition, message };
+  }
   const listed = typeof eventDefinitionId === "string" && Object.hasOwn(CRITERIA, eventDefinitionId)
     ? CRITERIA[eventDefinitionId] : null;
   return { send: (listed || UNKNOWN_DEFAULT)[transition], criteria: listed ? "table" : "unknown", transition };
 }
 
-module.exports = { CRITERIA, UNKNOWN_DEFAULT, notificationDecision };
+module.exports = { CRITERIA, UNKNOWN_DEFAULT, notificationDecision, releaseNotificationPolicy };

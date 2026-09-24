@@ -112,11 +112,18 @@ records. Silence never closes an event; disappearance/restart closes have unknow
 device close times. A revision guards the RTDB mirror from delayed overwrites.
 Events entirely between delivered boards may be absent from cloud history.
 
-Open and close records notify by event ID from a cloud-side criteria table, which is
-authoritative; the package's `web` blocks carry the same intent but are stripped at
-compile and can drift. The message is the event number in a marked subject and the
-event's display name in the body, taken from the record so the name is the one the
-device ran. Two emails go out per record through Resend, in one batch, between the
+Open and close records notify from the event's own `web` block (Notify on open/close,
+Open/Close message) in the release the record names. The compiler strips `web` from the
+runtime package, but each Firestore release keeps its authoring package, and the record's
+releaseId and content hash identify the one the device ran. The message is the event
+number in a marked subject and that open or close message in the body, or the record's
+display name when the message is empty. If the release cannot be read or does not match
+the reported hash, a cloud-side table keyed by event ID decides instead.
+
+Event display names and enum choices are text the Tab5 posts back, and it sends those
+bodies with a character-count Content-Length, so a character over one byte truncates the
+body and the cloud rejects the whole board. Validation therefore rejects non-ASCII in
+those strings; publication is the only path to the device, so no such package runs. Two emails go out per record through Resend, in one batch, between the
 transaction and the mirror so a mirror retry cannot drop a send; a Resend idempotency
 key derived from the records makes a repeat a no-op. Delivery is at-most-once and is
 reporting only: a send failure is recorded on the event record and never changes the
