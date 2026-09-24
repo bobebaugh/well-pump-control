@@ -55,9 +55,26 @@ board carrying them was rejected. Owner test: W03 renamed to plain ASCII, republ
 restarted, then opened, closed and emailed normally. pilot-working now rejects non-ASCII
 event display names and enum choices at Validate/Publish, and the notifier sends each
 event's own Notify on open/close and Open/Close message from the release on the record,
-with the criteria table only as fallback. Both take effect on the device path only after
-promotion to pilot. Until the package is republished with plain names, W04, W06, W07, W08
-and E006 still carry em dashes on the Tab5; a latched W07 would block every board.
+with the criteria table only as fallback. Promoted to pilot on the owner's direction, so
+both are live on the device path. Until the package is republished with plain names, W04,
+W06, W07, W08 and E006 still carry em dashes on the Tab5; a latched W07 would block every
+board. The owner will publish the corrected rules from the pilot deploy's editor.
+
+## On pilot, not yet on main
+
+Main last matched pilot at 69601cc. Keep this list current on every pilot promotion and
+clear it when main is fast-forwarded to pilot. Docs-only commits change no behavior.
+
+| Pilot commit | Change | Kind |
+|---|---|---|
+| 0a1f097 | Record production activation and where the Tab5 posts | docs |
+| 6ff3d7e | Catch the docs up with production | docs |
+| 948e5fd | Record that pilot is production for the device | docs |
+| 6e5b9c8 | Record the notification channel as live | docs |
+| af8d8e2 | Reject non-ASCII event display names and enum choices at Validate/Publish; notify from each event's own settings in its release | cloud + rules editor screen |
+
+Main's rules editor still accepts non-ASCII display names and still says notification
+settings are authoring only; publish rules from the pilot deploy until main follows.
 
 ## Maintenance baseline
 
