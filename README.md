@@ -20,9 +20,9 @@ software never creates ordinary pump demand.
 | `pilot` | Accepted web/cloud test deployment; uses live data |
 | `tab5-working` | Small Tab5/Shelly fixes |
 | `Tab5` | Accepted device source for installation/recovery |
-| `main` | Intended public beta web/cloud release; activation is pending |
+| `main` | Live public web/cloud release at mfwell.ebaugh.net |
 
-The two applications have different source trees. Main will receive the web/cloud
+The two applications have different source trees. Main carries the web/cloud
 application; the complete device upload source stays on Tab5. Do not merge the
 device tree wholesale into Main. Branch names are case-sensitive.
 

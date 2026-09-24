@@ -67,24 +67,36 @@ redesign is required for the stated beta scope. This password does not protect l
 Shelly administration or LAN WebREPL. Keep those on the trusted LAN with no public
 port forwarding; device management has its own credentials/access boundary.
 
-## Main and ebaugh.net — prepared plan, not executed
+## Main and ebaugh.net — activated, September 2026
 
-Use the existing Netlify project well-pump-control. Main currently has a build-ignore
-safeguard (`ignore = "exit 0"`); merely changing a branch label will not activate it.
-When authorized, merge the accepted WEB/CLOUD candidate into main with its deployable
-netlify.toml, deliberately resolving that safeguard. Preserve the device line on Tab5.
+Live on the existing Netlify project well-pump-control. The build-ignore safeguard
+(`ignore = "exit 0"`) is gone: main was not merged into but replaced, so main = pilot
+and the deployable netlify.toml came with it. The replacement took four steps because
+GitHub refuses to delete a default branch - switch the default to pilot, delete main,
+recreate main from pilot, switch the default back. Main's history is therefore pilot's
+history, and the old stub tip survives only if archived under a tag. Preserve the
+device line on Tab5.
 
-Choose a hostname under ebaugh.net (for example well.ebaugh.net) with the owner.
-Do not change the apex site or existing DNS/mail records as a housekeeping action.
-Add the chosen hostname to Netlify, set only its required DNS records, issue/verify
-HTTPS and make it the primary application domain. Existing branch URLs may remain.
+The hostname is mfwell.ebaugh.net, a Cloudflare CNAME in DNS-only mode; it answers 200
+and redirects http to https. Do not change the apex site or existing DNS/mail records
+as a housekeeping action. Existing branch URLs remain, and one of them is load bearing:
+the Tab5 still posts ingest, event boards, releases and device sync to the pilot branch
+deploy, so that deploy must stay enabled and device-driven functions run in its context
+rather than production's.
 
-Before activation, configure the production Functions context with the same existing
+The production Functions context is configured with the same existing
 Firebase project/database/RTDB and password as pilot: FIREBASE_PROJECT_ID,
 FIRESTORE_DATABASE_ID, FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_WEB_API_KEY,
 FIREBASE_RTDB_URL and PILOT_INGEST_TOKEN. Check any explicitly configured device ID.
 Use the provider's secret management; do not copy values into docs, source or CLI logs.
 Keep branch deployment restricted to pilot; working branches are source maintenance.
+
+The notification variables are a separate set: RESEND_API_KEY, NOTIFY_FROM,
+NOTIFY_EMAIL_TO, NOTIFY_SMS_TO, and NOTIFY_DRY_RUN while testing. Set them for the
+context the notifier actually runs in. Because the Tab5 posts to the pilot branch
+deploy, production-only values leave the channel inert while everything else looks
+healthy. Netlify injects variables at deploy time, so a site that is already deployed
+does not see a new variable until it is redeployed.
 
 Changing the public hostname does not automatically update the Tab5's configured
 Netlify endpoint. Keep its proven endpoint until a separate authorized device change
