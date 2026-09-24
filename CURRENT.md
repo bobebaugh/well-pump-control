@@ -67,14 +67,24 @@ Old branch tips are archived in maintenance/branch-archive-2026-09-16.csv.
 4. Record the web deploy, actual device file set, running package/hash, authoring
    backup, Shelly settings and applied Firebase rules/indexes. Do not substitute an
    old package number or this source revision for installed evidence.
-5. Set the notification environment variables in Netlify before the channel can send:
-   `RESEND_API_KEY`, `NOTIFY_FROM`, `NOTIFY_EMAIL_TO`, `NOTIFY_SMS_TO`, and
-   `NOTIFY_DRY_RUN=1` while testing. Missing values leave the notifier inert and log
-   the names only; ingestion is unaffected. Verify with a test event, T010-T040,
-   using tests/notification-live.check.cjs. Netlify injects these into a function at
-   deploy time, so adding them to a site that is already deployed changes nothing until
-   the next deploy; trigger one. An event record whose notification field reads
-   not-configured names the variables the running deploy is missing.
+5. The notification channel is live and sending from the device. The variables
+   `RESEND_API_KEY`, `NOTIFY_FROM`, `NOTIFY_EMAIL_TO`, `NOTIFY_SMS_TO` and
+   `NOTIFY_DRY_RUN` are set on both main and pilot, and a text arrives on every pump
+   run. One message per event is correct, not a half failure: only pilot serves the
+   device, so only pilot sends. Two would mean main had started receiving device
+   events. Main's copy stays inert until the device is repointed, and then carries the
+   channel over without a settings change.
+
+   Netlify injects these into a function at deploy time, so a site already deployed
+   sees a new variable only after a redeploy, and "Trigger deploy" rebuilds production
+   only - pilot's latest deploy must be retried separately. An event record whose
+   notification field reads not-configured names the variables the running deploy is
+   missing. Verify with a test event, T010-T040, using
+   tests/notification-live.check.cjs, opened through event-board on the pilot deploy:
+   a send proved by any other entry proves a path the device does not take.
+
+   Pilot's deploy is currently behind on diagnostic logging only. The missing code
+   writes function-log detail and changes no behaviour; it rides the next pilot push.
 6. The notification transport is proven. On 22 September a live batch send from
    resend.ebaugh.net delivered both legs to the owner: the email, and the text through
    the Verizon gateway a few seconds behind it. A sending domain with no history was
