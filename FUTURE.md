@@ -60,6 +60,35 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   demand estimate needs a separately qualified inflow model. No weather dependency or
   automatic calibration from one cycle. [#3](https://github.com/bobebaugh/well-pump-control/issues/3).
 
+## Firestore reads (next summer)
+
+Durable observations never change once written, so a copy kept by the browser never
+goes stale. Measured shape on 25 September 2026: about 100-250 records a day.
+
+- **Dashboard history refresh, smallest step first:** every 5 minutes the home page
+  re-reads the whole 1-day (about 100-250 records) or 7-day (about 700-1,700) window to
+  pick up 2-3 new records - about 1,200-20,000 reads an hour while the tab is visible,
+  roughly 98% of them repeats. Read only records received since the last refresh and
+  merge them. One function plus the page; no browser storage.
+- **Read once, then read only what is new or out of range:** keep records and events
+  in the browser (IndexedDB, shared by the dashboard and records page on one device),
+  load the last 1,000-5,000 once, then read only newer records or ranges outside the
+  copy. Key "newer" on receipt time, not observation time: records delayed by a cloud
+  outage arrive late and would otherwise be skipped. Fetch in chunks (a Netlify
+  function reply is capped at 6 MB; full records are about 3 KB) or keep only the
+  fields the screens use and fetch a full record when a row is opened. Event-open
+  records are immutable; open occurrences must still be re-checked for their close.
+- **Check first:** whether the Firebase project is on the free (Spark) plan. There a
+  day over 50,000 reads makes screens fail until the quota resets, not just cost more.
+
+## Owner password and device credential
+
+The owner password checked by the browser-called functions is the same
+PILOT_INGEST_TOKEN the Tab5 uses to post telemetry, event boards and device sync, so
+anyone holding the owner password could post device data. Separating them changes the
+Tab5-to-Netlify interface, which the owner has ruled out for the beta. Reads open by
+default reduce how often the password is typed.
+
 ## Larger ideas to leave parked
 
 - Package-derived network addresses with a boot fallback (former TAB5-15).
