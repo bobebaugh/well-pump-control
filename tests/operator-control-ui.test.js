@@ -73,3 +73,10 @@ test("the protection line shows lockout, inhibit and mode from the live record, 
   assert.match(app, /shelly1\.tab5IsLocked === true\) setProtection\(protTab5, "SET", "alert"\)/);
   assert.match(app, /if \(!fresh\) \{\s*setProtection\(protShelly, "Unknown", "unknown"\)/);
 });
+
+test("the last pump run reads off the day's history, and says so when there was none or records are missing", () => {
+  assert.match(html, /id="last-run"/);
+  assert.match(app, /historyData\["1d"\]\?\.runs\?\.at\(-1\)/);
+  assert.match(app, /None in the last 24 h/);
+  assert.match(app, /records missing during the run; figures partial/);
+});

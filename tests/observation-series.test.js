@@ -491,3 +491,38 @@ test("two pressure bands are not enough to fit a line through", () => {
   const curve = deliveryCurve(fill(40, 44));
   assert.equal(curve.basis, "reference");
 });
+
+// The pump run of 2026-09-25 as the durable records carried it (UTC).
+const RUN_0925 = [
+  ["12:48:26", 12.21, 39.746, 2.62], ["12:48:39", 12.19, 39.202, 1.82], ["12:48:41", 2972.33, 39.783, 2.68],
+  ["12:48:43", 2965.57, 40.166, 3.23], ["12:49:03", 2952.24, 44.516, 8.97], ["12:49:30", 2941.69, 50.351, 15.44],
+  ["12:50:00", 2919.58, 57.278, 21.73], ["12:50:12", 2914.25, 60.238, 24.06], ["12:50:18", 12.58, 61.77, 25.19],
+  ["12:50:24", 12.17, 60.687, 24.39], ["12:50:27", 12.07, 60.579, 24.31], ["12:51:02", 12.16, 59.203, 23.26]
+].map(([clock, watts, psi, gallons]) => ({ timeMs: Date.parse(`2026-09-25T${clock}Z`), watts, psi, gallons }));
+
+test("each run is kept with its times and the pressures the switch actually used", () => {
+  const startMs = Date.parse("2026-09-25T12:00:00Z");
+  const series = buildSeries(RUN_0925, { startMs, endMs: startMs + 3600000, bucketMs: 300000 });
+  assert.equal(series.runs.length, 1);
+  const [run] = series.runs;
+  assert.equal(new Date(run.startMs).toISOString(), "2026-09-25T12:48:41.000Z");
+  assert.equal(new Date(run.stopMs).toISOString(), "2026-09-25T12:50:18.000Z");
+  assert.equal(run.seconds, 97);
+  assert.equal(run.cutInPsi, 39.2, "the last settled reading before current flowed");
+  assert.equal(run.tripPsi, 60.2, "the last reading while running");
+  assert.equal(run.settledPsi, 59.2);
+  assert.ok(run.averageWatts > 2900 && run.averageWatts < 2960);
+  assert.ok(run.deliveredGallons > 20);
+  assert.equal(run.complete, true);
+  assert.equal(run.running, false);
+});
+
+test("a run with a silence inside it is marked incomplete, and one still going has no duration", () => {
+  const gap = RUN_0925.filter(sample => sample.timeMs < Date.parse("2026-09-25T12:49:03Z") || sample.timeMs >= Date.parse("2026-09-25T12:50:12Z"));
+  const startMs = Date.parse("2026-09-25T12:00:00Z");
+  assert.equal(buildSeries(gap, { startMs, endMs: startMs + 3600000, bucketMs: 300000 }).runs[0].complete, false);
+  const open = RUN_0925.slice(0, 6);
+  const [running] = buildSeries(open, { startMs, endMs: startMs + 3600000, bucketMs: 300000 }).runs;
+  assert.equal(running.running, true);
+  assert.equal(running.seconds, null);
+});

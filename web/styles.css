@@ -530,7 +530,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(67,168,255,.
 .records-actions label.is-current input, .records-actions label.is-current select { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan) inset; }
 .records-actions select { max-width: 300px; }
 /* Protection at a glance: the live record's Shelly lockout, Tab5 inhibit flag and mode. */
-.protection-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 12px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--panel); }
+.protection-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.5fr); margin-top: 12px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--panel); }
 .protection-item { padding: 12px 18px; border-right: 1px solid var(--line); }
 .protection-item:last-child { border-right: 0; }
 .protection-item p { margin: 0 0 6px; color: var(--muted); font-size: .72rem; }

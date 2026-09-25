@@ -486,7 +486,31 @@ function runTimeText(seconds) {
 // The tiles are always the last 24 hours whatever the chart is showing, so they
 // read off the day series rather than the selected window. Energy is absent by
 // necessity: ShellyEnergyWh is logging mode "none", so no record carries it.
+// The newest run in the day's records, or the week's if the day had none.
+function renderLastRun() {
+  const lastRun = document.querySelector("#last-run");
+  const detail = document.querySelector("#last-run-detail");
+  const run = historyData["1d"]?.runs?.at(-1) || historyData["7d"]?.runs?.at(-1) || null;
+  if (!run) {
+    lastRun.textContent = historyData["1d"] ? "None in the last 24 h" : "—"; lastRun.className = "unknown";
+    detail.textContent = historyData["1d"] ? "No run in the day's records" : "History unavailable";
+    return;
+  }
+  const at = new Date(run.startMs);
+  const when = `${at.toDateString() === new Date().toDateString() ? "" : `${at.toLocaleDateString(undefined, { month: "short", day: "numeric" })} `}${at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+  const length = run.seconds === null ? null : run.seconds < 120 ? `${run.seconds} s` : `${Math.floor(run.seconds / 60)} min ${run.seconds % 60} s`;
+  lastRun.textContent = run.running ? `Running since ${when}` : `${run.startKnown ? when : "Began before the window"}${length ? ` \u00b7 ${length}` : ""}`;
+  lastRun.className = run.complete ? "" : "caution";
+  const parts = [];
+  if (run.cutInPsi !== null || run.tripPsi !== null) parts.push(`${run.cutInPsi ?? "?"} \u2192 ${run.tripPsi ?? "?"} psi`);
+  if (run.averageWatts !== null) parts.push(`${run.averageWatts.toLocaleString()} W avg`);
+  if (run.deliveredGallons !== null) parts.push(`\u2248${run.deliveredGallons} gal delivered`);
+  if (!run.complete) parts.push("records missing during the run; figures partial");
+  detail.textContent = parts.join(" \u00b7 ");
+}
+
 function renderDayStats() {
+  renderLastRun();
   const totals = historyData["1d"]?.totals;
   if (!totals) return;
   statUsed.textContent = `${totals.usedGallons ?? 0} gal`;

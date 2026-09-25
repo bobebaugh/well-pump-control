@@ -306,6 +306,12 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
   let settled = null;
   let cycle = null;
   const switches = [];
+  // Each run as its records show it, newest last. A run is timed from the first
+  // record drawing running current to the first record that is not, so both
+  // ends are within one record of the truth; records are written every few
+  // seconds while the pump runs.
+  const runs = [];
+  let run = null;
 
   for (const sample of samples) {
     const index = Math.floor((sample.timeMs - startMs) / bucketMs);
@@ -343,6 +349,18 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
     if (sample.watts !== null) {
       const stillRunning = sample.watts >= PUMP_RUNNING_WATTS;
       if (stillRunning && !running) {
+        run = { startMs: sample.timeMs, startKnown: previous !== null, stopMs: null,
+                cutInPsi: settled?.psi ?? null, tripPsi: null, settledPsi: null, deliveredGallons: null,
+                wattsSum: 0, wattsCount: 0, lastMs: sample.timeMs, maxGapMs: 0 };
+        runs.push(run);
+      }
+      if (run && run.stopMs === null) {
+        run.maxGapMs = Math.max(run.maxGapMs, sample.timeMs - run.lastMs);
+        run.lastMs = sample.timeMs;
+        if (stillRunning) { run.wattsSum += sample.watts; run.wattsCount += 1; if (sample.psi !== null) run.tripPsi = sample.psi; }
+        else run.stopMs = sample.timeMs;
+      }
+      if (stillRunning && !running) {
         startsTotal += 1;
         if (index >= 0 && index < count) buckets[index].starts += 1;
       }
@@ -351,7 +369,7 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
       // beside it: by the time the pump is drawing current the sensor is already
       // showing discharge pressure.
       if (stillRunning && !cycle) {
-        cycle = { anchorGallons: settled?.gallons ?? null,
+        cycle = { startMs: sample.timeMs, anchorGallons: settled?.gallons ?? null,
                   anchorMs: settled?.timeMs ?? sample.timeMs,
                   // Nothing is dynamic before the pump draws current, so the
                   // last settled reading IS the switch's cut-in pressure. It is
@@ -380,6 +398,8 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
       // it opened, and where the tank came to rest once discharge pressure bled
       // off. The gap between the last two is the transient itself.
       switches.push({ cutInPsi: cycle.cutInPsi, tripPsi: cycle.tripPsi, settledPsi: sample.psi });
+      const finished = runs.find(item => item.startMs === cycle.startMs);
+      if (finished) { finished.settledPsi = sample.psi; finished.deliveredGallons = cycle.delivered; }
       cycle = null;
       settled = sample;
     } else if (!cycle && sample.gallons !== null &&
@@ -424,6 +444,22 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
       latestGallons: ordered.length ? round(ordered.at(-1).gallons, 1) : null,
       latestAtMs: ordered.length ? ordered.at(-1).timeMs : null
     },
+    runs: runs.slice(-10).map(item => ({
+      startMs: item.startMs,
+      stopMs: item.stopMs,
+      // Running at the window's start or still running now: that end is not known.
+      startKnown: item.startKnown,
+      running: item.stopMs === null,
+      seconds: item.stopMs === null || !item.startKnown ? null : round((item.stopMs - item.startMs) / 1000, 0),
+      cutInPsi: !Number.isFinite(item.cutInPsi) ? null : round(item.cutInPsi, 1),
+      tripPsi: !Number.isFinite(item.tripPsi) ? null : round(item.tripPsi, 1),
+      settledPsi: !Number.isFinite(item.settledPsi) ? null : round(item.settledPsi, 1),
+      averageWatts: item.wattsCount ? round(item.wattsSum / item.wattsCount, 0) : null,
+      deliveredGallons: !Number.isFinite(item.deliveredGallons) ? null : round(item.deliveredGallons, 1),
+      // A silence inside the run longer than a minute means records are missing
+      // there, so its times and figures are shown as incomplete.
+      complete: item.maxGapMs <= 60000
+    })),
     // The pressure switch as this window actually found it, rather than the
     // nominal 40/60 nobody's switch is really set to.
     pressureSwitch: switchSummary(switches)
