@@ -2,6 +2,8 @@
 
 const MAX_PAGE_SIZE = 50;
 const MAX_EXPORT_ROWS = 5000;
+const MAX_EXPORT_DAYS = 32;
+const { summary: reasonSummary } = require("../../../web/record-reasons.js");
 
 function iso(value) {
   if (!value) return null;
@@ -105,19 +107,40 @@ function csvCell(value) {
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
-function exportRows(records) {
+// The viewer's time zone, when it is one this runtime knows; otherwise none.
+function timeZone(value) {
+  if (typeof value !== "string" || !value || value.length > 64) return null;
+  try { return new Intl.DateTimeFormat("en-US", { timeZone: value }).resolvedOptions().timeZone; } catch { return null; }
+}
+// The same instant written as local wall-clock time with its offset, for
+// example 2026-09-25T00:02:25.000-04:00. The UTC column stays beside it.
+function localIso(value, zone) {
+  if (!value || !zone) return null;
+  const instant = new Date(value);
+  if (!Number.isFinite(instant.getTime())) return null;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: zone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3, timeZoneName: "longOffset" }).formatToParts(instant).map(part => [part.type, part.value]));
+  const offset = parts.timeZoneName === "GMT" ? "+00:00" : parts.timeZoneName.replace("GMT", "");
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}${offset}`;
+}
+
+// options.timeZone adds local-time columns; options.columns, when given, keeps
+// only those fields (each still with its availability and reason).
+function exportRows(records, options = {}) {
+  const zone = timeZone(options.timeZone);
+  const only = Array.isArray(options.columns) && options.columns.length ? new Set(options.columns) : null;
   const names = new Set();
   for (const record of records) {
     Object.keys(record.fields || {}).forEach(name => names.add(name));
     Object.keys(record.values || {}).forEach(name => names.add(name));
     Object.keys(record.status || {}).forEach(name => names.add(`status.${name}`));
   }
-  const columns = [...names].sort();
-  const header = ["recordId", "schemaVersion", "sessionId", "cycleSequence", "observationTime", "receiptTime", "observationTimeStatus", "triggerReasons", ...columns.flatMap(name => [name, `${name}.availability`, `${name}.reason`])];
+  const columns = [...names].filter(name => !only || only.has(name)).sort();
+  const local = zone ? ["observationTimeLocal", "receiptTimeLocal"] : [];
+  const header = ["recordId", "schemaVersion", "sessionId", "cycleSequence", ...local, "observationTime", "receiptTime", "observationTimeStatus", "reasonSummary", "triggerReasons", ...columns.flatMap(name => [name, `${name}.availability`, `${name}.reason`])];
   const lines = [header.map(csvCell).join(",")];
   for (const record of records) {
     const view = observationView(record, []);
-    const values = [view.recordId, view.schemaVersion, view.sessionId, view.cycleSequence, view.observationTime, view.receiptTime, view.observationTimeStatus, view.triggerReasons];
+    const values = [view.recordId, view.schemaVersion, view.sessionId, view.cycleSequence, ...(zone ? [localIso(view.observationTime, zone), localIso(view.receiptTime, zone)] : []), view.observationTime, view.receiptTime, view.observationTimeStatus, reasonSummary(view.triggerReasons), view.triggerReasons];
     for (const name of columns) {
       const state = name.startsWith("status.")
         ? (Object.hasOwn(record.status || {}, name.slice(7)) ? { state: "available", value: record.status[name.slice(7)] } : { state: "missing", reason: "field_absent_from_legacy_record" })
@@ -129,4 +152,4 @@ function exportRows(records) {
   return lines.join("\r\n") + "\r\n";
 }
 
-module.exports = { MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor: decodeCursor, _encodeCursor: encodeCursor, eventTriggerField, exportRows, fieldState, iso, joinOccurrences, observationView, pageFields, requestedColumns };
+module.exports = { MAX_EXPORT_DAYS, MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor: decodeCursor, _encodeCursor: encodeCursor, eventTriggerField, exportRows, fieldState, iso, localIso, joinOccurrences, observationView, pageFields, requestedColumns };

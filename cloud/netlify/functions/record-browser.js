@@ -2,7 +2,7 @@
 
 const { FieldPath, Timestamp } = require("firebase-admin/firestore");
 const { ConfigurationError, getPilotFirestore } = require("../lib/firebase");
-const { MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor, _encodeCursor, eventTriggerField, exportRows, iso, joinOccurrences, observationView, pageFields, requestedColumns } = require("../lib/record-browser");
+const { MAX_EXPORT_DAYS, MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor, _encodeCursor, eventTriggerField, exportRows, iso, joinOccurrences, observationView, pageFields, requestedColumns } = require("../lib/record-browser");
 
 const SITE_ID = "well-main";
 const DEVICE_ID = "tab5-well-main";
@@ -122,15 +122,15 @@ async function home(site) {
   const board = boardSnapshot.exists ? boardSnapshot.data() : null;
   return { status: board ? "ok" : "empty", board: board ? { ...board, lastReportAt: iso(board.lastReportAt), lastBoardProducedAt: iso(board.lastBoardProducedAt) } : null, recentClosed: history.occurrences };
 }
-async function exportDay(site, query) {
+async function exportRange(site, query) {
   const start = date(query.start); const end = date(query.end);
-  if (!start || !end || end <= start || end.getTime() - start.getTime() > 27 * 3600000) return { error: "invalid_day_range" };
+  if (!start || !end || end <= start || end.getTime() - start.getTime() > MAX_EXPORT_DAYS * 86400000) return { error: "invalid_range" };
   const observations = site.collection("observations");
   const read = (schema, field) => observations.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", schema).where(field, ">=", Timestamp.fromDate(start)).where(field, "<", Timestamp.fromDate(end)).orderBy(field, "asc").orderBy(idField, "asc").limit(MAX_EXPORT_ROWS + 1).get();
   const [one, two] = await Promise.all([read(1, "observedAt"), read(2, "time.observedAt")]);
   const rows = [...one.docs, ...two.docs].map(serialise).sort((a, b) => (a.schemaVersion === 2 ? a.time.observedAt : a.observedAt).localeCompare(b.schemaVersion === 2 ? b.time.observedAt : b.observedAt));
   if (rows.length > MAX_EXPORT_ROWS) return { error: "export_too_large", count: rows.length };
-  return { csv: exportRows(rows), count: rows.length };
+  return { csv: exportRows(rows, { timeZone: query.tz, columns: requestedColumns(query.columns) }), count: rows.length };
 }
 function createHandler(dependencies = {}) {
   const firestoreProvider = dependencies.getPilotFirestore || getPilotFirestore;
@@ -140,7 +140,7 @@ function createHandler(dependencies = {}) {
       const db = requireApprovedDb(firestoreProvider); const site = db.collection("sites").doc(SITE_ID); const query = event.queryStringParameters || {};
       if (query.view === "home") return json(200, await home(site));
       if (query.view === "export") {
-        const result = await exportDay(site, query);
+        const result = await exportRange(site, query);
         if (result.error) return json(result.error === "export_too_large" ? 413 : 400, { status: "error", code: result.error, count: result.count });
         return { statusCode: 200, headers: { "Content-Type": "text/csv; charset=utf-8", "Cache-Control": "no-store", "Content-Disposition": "attachment; filename=durable-observations.csv", "X-Export-Record-Count": String(result.count) }, body: result.csv };
       }

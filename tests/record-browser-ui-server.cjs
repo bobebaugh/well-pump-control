@@ -28,7 +28,7 @@ http.createServer((request, response) => {
     else body = { status: "ok", source: receipt ? "receipt-time-fallback" : undefined, catalog, eventTriggerField: url.searchParams.get("event") ? "ClockValid" : null, records: [record(receipt ? "receipt-row" : url.searchParams.has("anchor") ? "observation-anchored" : "observation-row")], nextCursor: null, previousCursor: null };
     response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify(body)); return;
   }
-  const files = { "/": "web/index.html", "/index.html": "web/index.html", "/app.js": "web/app.js", "/records.html": "web/records.html", "/records.js": "web/records.js", "/styles.css": "web/styles.css" };
+  const files = { "/": "web/index.html", "/index.html": "web/index.html", "/app.js": "web/app.js", "/records.html": "web/records.html", "/records.js": "web/records.js", "/record-reasons.js": "web/record-reasons.js", "/styles.css": "web/styles.css" };
   const file = files[url.pathname];
   if (!file) { response.writeHead(404); response.end(); return; }
   response.writeHead(200, { "Content-Type": file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html" }); response.end(fs.readFileSync(path.join(root, file)));

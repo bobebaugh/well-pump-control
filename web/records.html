@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#09111f">
   <title>Durable records — Well Pump Monitoring</title>
   <link rel="stylesheet" href="/styles.css">
+  <script src="/record-reasons.js" defer></script>
   <script src="/records.js" defer></script>
 </head>
 <body>
@@ -16,14 +17,23 @@
   <main class="records-main">
     <section class="panel records-toolbar">
       <div><p class="kicker">OBSERVATION TIME</p><h2>Durable observation browser</h2><small id="timezone-label"></small></div>
-      <div class="records-actions">
-        <label>Local date/time<input id="record-at" type="datetime-local"></label>
-        <button id="latest-records" class="primary-button" type="button">Latest</button>
-        <button id="receipt-records" class="secondary-button" type="button" title="List records by when the cloud received them instead of by device time. Records written before the Tab5 clock synchronized have no device time, so they appear only here or through session navigation.">Receipt-time fallback</button>
-        <button id="older-records" class="secondary-button" type="button">Older</button>
-        <button id="newer-records" class="secondary-button" type="button" disabled>Newer</button>
-        <label>Export local date<input id="record-day" type="date"></label>
-        <button id="export-day" class="secondary-button" type="button">Export whole day CSV</button>
+      <div class="records-controls">
+        <div class="records-actions">
+          <button id="latest-records" class="primary-button" type="button">Latest</button>
+          <button id="receipt-records" class="secondary-button" type="button" title="List records by when the cloud received them instead of by device time. Records written before the Tab5 clock synchronized have no device time, so they appear only here or through session navigation.">Receipt-time fallback</button>
+          <button id="older-records" class="secondary-button" type="button">Older</button>
+          <button id="newer-records" class="secondary-button" type="button" disabled>Newer</button>
+        </div>
+        <div class="records-actions range-actions">
+          <label>From (local)<input id="range-from" type="datetime-local"></label>
+          <label>To (local)<input id="range-to" type="datetime-local" title="Follows the current time until you change it"></label>
+          <button id="range-today" class="secondary-button" type="button">Today</button>
+          <button id="range-day" class="secondary-button" type="button">Last 24 h</button>
+          <button id="range-week" class="secondary-button" type="button">Last 7 days</button>
+          <button id="view-range" class="secondary-button" type="button" title="Show the newest records in this range; Older pages back toward From.">View</button>
+          <label class="inline-check"><input id="export-shown" type="checkbox">Shown columns only</label>
+          <button id="export-range" class="primary-button" type="button">Export CSV</button>
+        </div>
       </div>
     </section>
     <p id="records-status" class="browser-status" aria-live="polite">Loading durable records…</p>

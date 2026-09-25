@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { initializeApp, deleteApp } = require("firebase-admin/app");
 const { FieldPath, getFirestore } = require("firebase-admin/firestore");
-const { _decodeCursor, _encodeCursor, eventTriggerField, exportRows, fieldState, joinOccurrences, observationView, pageFields, requestedColumns } = require("../cloud/netlify/lib/record-browser");
+const { _decodeCursor, _encodeCursor, eventTriggerField, exportRows, fieldState, joinOccurrences, localIso, observationView, pageFields, requestedColumns } = require("../cloud/netlify/lib/record-browser");
 const { _createHandler, _initialSessionFollowingQuery } = require("../cloud/netlify/functions/record-browser");
 
 test("columns on offer are the fields the page's records carry, not the rules draft", () => {
@@ -65,6 +65,38 @@ test("cursor is deterministic and whole-day CSV keeps historical field union and
   assert.match(csv, /status\.ok,status\.ok\.availability,status\.ok\.reason/);
   assert.match(csv, /unavailable-unsynchronized/);
   assert.match(csv, /clock_unsynchronized/);
+});
+
+test("the CSV carries local time beside UTC, a readable reason, and can keep only chosen fields", () => {
+  assert.equal(localIso("2026-09-25T04:02:25.000Z", "America/New_York"), "2026-09-25T00:02:25.000-04:00");
+  assert.equal(localIso("2026-01-25T04:02:25.000Z", "America/New_York"), "2026-01-24T23:02:25.000-05:00");
+  assert.equal(localIso("2026-09-25T04:02:25.000Z", "UTC"), "2026-09-25T04:02:25.000+00:00");
+  const rows = [{ schemaVersion: 2, recordId: "r1", sessionId: "s", cycleSequence: 1, time: { observedAt: "2026-09-25T08:11:30.000Z" }, receivedAt: "2026-09-25T08:11:31.000Z", triggerReasons: [{ kind: "change", field: "CloudAvailable", from: true, to: false }], fields: { CloudAvailable: { state: "available", value: false }, PumpWatts: { state: "available", value: 12.1 } } }];
+  const [header, line] = exportRows(rows, { timeZone: "America/New_York" }).trim().split("\r\n");
+  assert.match(header, /^recordId,schemaVersion,sessionId,cycleSequence,observationTimeLocal,receiptTimeLocal,observationTime,receiptTime,observationTimeStatus,reasonSummary,triggerReasons,CloudAvailable,/);
+  assert.match(line, /2026-09-25T04:11:30\.000-04:00,2026-09-25T04:11:31\.000-04:00,2026-09-25T08:11:30\.000Z,/);
+  assert.match(line, /,Cloud lost,/);
+  const only = exportRows(rows, { timeZone: "America/New_York", columns: ["PumpWatts"] }).split("\r\n")[0];
+  assert.match(only, /PumpWatts,PumpWatts\.availability,PumpWatts\.reason$/);
+  assert.doesNotMatch(only, /CloudAvailable/);
+  // An unknown zone adds no local columns rather than guessing one.
+  assert.doesNotMatch(exportRows(rows, { timeZone: "Mars/Olympus" }), /observationTimeLocal/);
+});
+
+test("export takes a range of up to 32 days and refuses a longer or reversed one", async () => {
+  const root = "sites/well-main";
+  const seed = { [`${root}/observations/a`]: { schemaVersion: 2, recordId: "a", deviceId: "tab5-well-main", sessionId: "s", cycleSequence: 1, time: { observedAt: timestamp("2026-09-20T12:00:00.000Z") }, receivedAt: timestamp("2026-09-20T12:00:01.000Z"), triggerReasons: [{ kind: "maximum-interval" }], fields: { PumpWatts: { state: "available", value: 12 } } } };
+  const handler = _createHandler({ getPilotFirestore: () => ({ db: browserFirestore(seed), projectId: "well-pump-control", databaseId: "(default)" }) });
+  const call = queryStringParameters => handler({ httpMethod: "GET", queryStringParameters: { view: "export", ...queryStringParameters } });
+  const week = await call({ start: "2026-09-18T04:00:00.000Z", end: "2026-09-25T04:00:00.000Z", tz: "America/New_York" });
+  assert.equal(week.statusCode, 200);
+  assert.equal(week.headers["X-Export-Record-Count"], "1");
+  assert.match(week.body, /2026-09-20T08:00:00\.000-04:00/);
+  assert.match(week.body, /,Health,/);
+  const long = await call({ start: "2026-08-01T00:00:00.000Z", end: "2026-09-25T00:00:00.000Z" });
+  assert.equal(long.statusCode, 400);
+  assert.equal(JSON.parse(long.body).code, "invalid_range");
+  assert.equal((await call({ start: "2026-09-25T00:00:00.000Z", end: "2026-09-24T00:00:00.000Z" })).statusCode, 400);
 });
 
 test("read endpoint is GET-only and reports an unavailable approved configuration without exposing details", async () => {
