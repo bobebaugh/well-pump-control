@@ -72,6 +72,10 @@ clear it when main is fast-forwarded to pilot. Docs-only commits change no behav
 | 948e5fd | Record that pilot is production for the device | docs |
 | 6e5b9c8 | Record the notification channel as live | docs |
 | af8d8e2 | Reject non-ASCII event display names and enum choices at Validate/Publish; notify from each event's own settings in its release | cloud + rules editor screen |
+| 5923abf | Durable records: plain-language reasons, row detail, Show filter, narrower columns; export by local From/To (up to 32 days) with local-time columns and reasonSummary | screen (records page + record-browser) |
+
+5923abf was promoted to pilot on 25 September for the owner to test before main; pilot
+was 53c0028 before it. Main should follow in the owner's next grouped main deploy.
 
 Main's rules editor still accepts non-ASCII display names and still says notification
 settings are authoring only; publish rules from the pilot deploy until main follows.
