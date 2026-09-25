@@ -57,23 +57,29 @@
       </div>
     </section>
 
+    <section class="protection-strip" aria-label="Protection">
+      <div class="protection-item"><p>Shelly protection</p><strong id="prot-shelly" class="unknown">—</strong><small id="prot-shelly-detail"></small></div>
+      <div class="protection-item"><p>Tab5 inhibit</p><strong id="prot-tab5" class="unknown" title="The Tab5's inhibition flag as read from the Shelly 1. The Shelly script alone decides the relay.">—</strong></div>
+      <div class="protection-item"><p>Mode</p><strong id="prot-mode" class="unknown">—</strong><small id="prot-mode-detail"></small></div>
+    </section>
+
     <section class="panel operator-panel" aria-labelledby="operator-title">
       <div class="panel-heading">
         <div>
           <p class="kicker">OWNER CONTROLS</p>
           <h2 id="operator-title">Investigation and restart</h2>
         </div>
-        <button type="button" id="operator-unlock" class="secondary-button compact-button">Unlock status</button>
+        <button type="button" id="operator-unlock" class="secondary-button compact-button">Sign in</button>
       </div>
-      <p id="operator-summary" class="operator-summary" aria-live="polite">Controls are locked. Status requires the existing pilot key.</p>
+      <p id="operator-summary" class="operator-summary" aria-live="polite">Loading control status…</p>
       <p id="operator-evidence" class="operator-evidence">No command has been requested from this browser.</p>
       <div class="operator-actions">
-        <button type="button" id="enter-user-monitor" class="control-button warning">Enter User Monitor</button>
-        <button type="button" id="restart-tab5" class="control-button danger">Restart Tab5</button>
-        <button type="button" id="restart-shelly1" class="control-button danger">Restart Shelly 1</button>
+        <button type="button" id="enter-user-monitor" class="control-button warning" disabled title="Sign in to use">Release Tab5 hold (until restart)</button>
+        <button type="button" id="restart-tab5" class="control-button danger" disabled title="Sign in to use">Restart Tab5</button>
+        <button type="button" id="restart-shelly1" class="control-button danger" disabled title="Sign in to use">Restart Shelly 1</button>
       </div>
       <p id="restart-consequence" class="operator-warning">Tab5 restart creates a fresh event board and session. A valid staged package may be adopted.</p>
-      <p class="operator-footnote">User Monitor deliberately suppresses Tab5 inhibit application until Tab5 restarts. Shelly-local and mechanical protection remain authoritative. A request or RPC acknowledgment is not relay or lockout-clear confirmation.</p>
+      <p class="operator-footnote">Anyone can read this status; the three actions need the owner password. Releasing the Tab5 hold (User Monitor) stops the Tab5 holding the pump off: it keeps measuring, logging and evaluating monitor events, but its warnings no longer stop the pump, and only a Tab5 restart ends it. Shelly-local and mechanical protection remain authoritative. A request or RPC acknowledgment is not relay or lockout-clear confirmation.</p>
     </section>
 
     <section class="workspace">
@@ -171,7 +177,7 @@
 
         <div class="safety-note">
           <strong>Control authority</strong>
-          <p>SW0 and RLY0 remain evidence. The separate owner controls issue only User Monitor, Tab5 restart, and Shelly 1 restart requests.</p>
+          <p>SW0 and RLY0 remain evidence. The separate owner controls issue only Release Tab5 hold (User Monitor), Tab5 restart, and Shelly 1 restart requests.</p>
         </div>
       </article>
     </section>

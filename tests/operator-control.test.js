@@ -157,8 +157,14 @@ test("operator function authenticates and never turns stale presence into a queu
     issue: async () => ({ issued: false, code: "device-presence-not-fresh", snapshot: {} })
   };
   const handler = _createHandler({ store, now: () => now, env: { PILOT_INGEST_TOKEN: "owner-key" } });
-  const unauthorized = await handler({ httpMethod: "GET", headers: {} });
-  assert.equal(unauthorized.statusCode, 401);
+  // Status is open to read; a key sent with a read is checked; a command needs one.
+  const open = await handler({ httpMethod: "GET", headers: {} });
+  assert.equal(open.statusCode, 200);
+  assert.equal(JSON.parse(open.body).signedIn, false);
+  const signedIn = await handler({ httpMethod: "GET", headers: { "X-Pilot-Key": "owner-key" } });
+  assert.equal(JSON.parse(signedIn.body).signedIn, true);
+  assert.equal((await handler({ httpMethod: "GET", headers: { "X-Pilot-Key": "wrong" } })).statusCode, 401);
+  assert.equal((await handler({ httpMethod: "POST", headers: {}, body: JSON.stringify(request) })).statusCode, 401);
   const result = await handler({
     httpMethod: "POST", headers: { "X-Pilot-Key": "owner-key" }, body: JSON.stringify(request)
   });

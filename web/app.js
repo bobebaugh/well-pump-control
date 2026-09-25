@@ -34,6 +34,13 @@ const operatorSummary = document.querySelector("#operator-summary");
 const operatorEvidence = document.querySelector("#operator-evidence");
 const restartConsequence = document.querySelector("#restart-consequence");
 const operatorButtons = [...document.querySelectorAll(".control-button")];
+const protShelly = document.querySelector("#prot-shelly");
+const protShellyDetail = document.querySelector("#prot-shelly-detail");
+const protTab5 = document.querySelector("#prot-tab5");
+const protMode = document.querySelector("#prot-mode");
+const protModeDetail = document.querySelector("#prot-mode-detail");
+// Status is open to read; the actions unlock only once a password is accepted.
+let operatorSignedIn = false;
 
 // Tab5 mirrors its whole observation to RTDB about every two seconds, so the
 // live readings follow that rather than the 60s Firestore cadence. Polling
@@ -177,8 +184,8 @@ function renderOperatorStatus(control) {
     unknown: "Unknown; execution may have occurred"
   };
   const monitor = control.userMonitor === true
-    ? "User Monitor ACTIVE until Tab5 restart"
-    : control.userMonitor === false ? "User Monitor normal" : "User Monitor status unknown";
+    ? "Tab5 hold RELEASED (User Monitor) until Tab5 restart"
+    : control.userMonitor === false ? "Tab5 hold normal" : "Tab5 hold status unknown";
   const relay = control.relayRestoration === "unconfirmed"
     ? "Relay restoration UNCONFIRMED"
     : `Relay restoration ${control.relayRestoration || "not applicable"}`;
@@ -195,53 +202,63 @@ function renderOperatorStatus(control) {
 
 function setOperatorBusy(value) {
   operatorBusy = value;
-  operatorButtons.forEach(button => { button.disabled = value; });
+  operatorButtons.forEach(button => { button.disabled = value || !operatorSignedIn; button.title = operatorSignedIn ? "" : "Sign in to use"; });
   operatorUnlock.disabled = value;
+}
+
+function setSignedIn(value) {
+  operatorSignedIn = value;
+  operatorUnlock.textContent = value ? "Sign out" : "Sign in";
+  setOperatorBusy(operatorBusy);
 }
 
 async function checkOperatorStatus({ promptForKey = false } = {}) {
   clearTimeout(operatorTimer);
   const key = sessionStorage.getItem("pilotMonitorKey") || (promptForKey ? pilotKey() : null);
-  if (!key) return;
   // This is the heaviest poll in the page -- one call reads four RTDB children,
-  // including the whole current observation -- and it was the only one that kept
-  // running against a screen nobody was looking at. The visibilitychange handler
-  // brings it straight back.
+  // including the whole current observation -- so it runs every 5 s only while
+  // signed in, every 15 s otherwise, and never against a hidden tab. The
+  // visibilitychange handler brings it straight back.
   if (document.hidden && !promptForKey) {
     operatorTimer = setTimeout(checkOperatorStatus, 5000);
     return;
   }
   try {
-    const body = await fetchStatus("/.netlify/functions/operator-control", {
-      headers: { "X-Pilot-Key": key }
-    });
-    operatorUnlock.textContent = "Refresh control status";
+    const body = await fetchStatus("/.netlify/functions/operator-control", key ? { headers: { "X-Pilot-Key": key } } : {});
+    setSignedIn(body.signedIn === true);
     renderOperatorStatus(body.control);
-    operatorTimer = setTimeout(checkOperatorStatus, 5000);
+    operatorTimer = setTimeout(checkOperatorStatus, operatorSignedIn ? 5000 : 15000);
   } catch (error) {
     if (error.body?.code === "unauthorized") {
       sessionStorage.removeItem("pilotMonitorKey");
+      setSignedIn(false);
       operatorSummary.textContent = "Owner key not accepted; controls remain locked.";
-      operatorUnlock.textContent = "Unlock status";
+      operatorTimer = setTimeout(checkOperatorStatus, 1000);
     } else if (error.body?.code === "configuration_missing") {
       operatorSummary.textContent = "Control service configuration is unavailable; controls cannot be used.";
       operatorEvidence.textContent = "No command was issued or retried.";
-      operatorUnlock.textContent = "Retry control status";
     } else if (error.body?.code === "control_denied") {
-      operatorSummary.textContent = "Owner key accepted; the control service is not authorized to read the device path.";
+      operatorSummary.textContent = "The control service is not authorized to read the device path.";
       operatorEvidence.textContent = "No command was issued or retried. This is a device-path authorization state, not a key rejection.";
-      operatorUnlock.textContent = "Retry control status";
     } else {
-      operatorSummary.textContent = "Owner key accepted; current control status is unavailable.";
+      operatorSummary.textContent = "Current control status is unavailable.";
       operatorEvidence.textContent = "Control status unavailable; no command was retried.";
-      operatorUnlock.textContent = "Retry control status";
       operatorTimer = setTimeout(checkOperatorStatus, 15000);
     }
   }
 }
 
+function toggleSignIn() {
+  if (operatorSignedIn) {
+    sessionStorage.removeItem("pilotMonitorKey");
+    setSignedIn(false);
+    return;
+  }
+  checkOperatorStatus({ promptForKey: true });
+}
+
 function confirmationText(action) {
-  if (action === "enter-user-monitor") return "Enter User Monitor until Tab5 restarts? This deliberately releases and suppresses Tab5 inhibits, but does not override Shelly-local or mechanical protection.";
+  if (action === "enter-user-monitor") return "Release the Tab5 hold until the Tab5 restarts (User Monitor)?\n\nThe Tab5 will stop holding the pump off. It keeps measuring and logging, but its warnings no longer stop the pump. The Shelly's own lockout and the pressure switch still protect it. There is no off switch: restarting the Tab5 is the only way back to normal.";
   if (action === "restart-tab5") {
     const staged = lastOperatorStatus?.stagedRestartAdoption;
     return `Restart the actual Tab5 now? This creates a fresh event board/session${staged ? ` and may adopt staged ${staged.releaseId}` : ""}. Do not retry if the result becomes unknown.`;
@@ -346,6 +363,33 @@ function renderShelly1Health(shelly1) {
   }
 }
 
+// Protection at a glance, from the same live record as the readings. A stale or
+// missing value is shown as unknown, never as normal.
+function setProtection(element, text, tone) { element.textContent = text; element.className = tone; }
+function renderProtection(data, fresh) {
+  const shelly1 = data?.shelly1 || {};
+  if (!fresh) {
+    setProtection(protShelly, "Unknown", "unknown"); protShellyDetail.textContent = "No fresh reading";
+    setProtection(protTab5, "Unknown", "unknown");
+    setProtection(protMode, "Unknown", "unknown"); protModeDetail.textContent = "";
+    return;
+  }
+  const lock = shelly1.isLocked;
+  if (lock === 0) setProtection(protShelly, "Normal", "ok");
+  else if (lock === -1) setProtection(protShelly, "FULL LOCKOUT", "alert");
+  else if (Number.isInteger(lock) && lock > 0) setProtection(protShelly, `Temporary lockout · ${lock}s left`, "caution");
+  else setProtection(protShelly, "Unknown", "unknown");
+  protShellyDetail.textContent = shelly1.available === false ? "Shelly 1 not reachable from Tab5"
+    : Number.isInteger(shelly1.lockoutCount) ? `Lockout counter ${shelly1.lockoutCount}` : "";
+  if (shelly1.tab5IsLocked === true) setProtection(protTab5, "SET", "alert");
+  else if (shelly1.tab5IsLocked === false) setProtection(protTab5, "Clear", "ok");
+  else setProtection(protTab5, "Unknown", "unknown");
+  if (data.userMonitor === true) { setProtection(protMode, "Tab5 hold released", "caution"); protModeDetail.textContent = "User Monitor until Tab5 restart"; }
+  else if (data.userMonitor === false) { setProtection(protMode, "Normal", "ok"); protModeDetail.textContent = ""; }
+  else { setProtection(protMode, "Unknown", "unknown"); protModeDetail.textContent = ""; }
+  if (data.relayRestoration === "unconfirmed") protModeDetail.textContent = `${protModeDetail.textContent ? `${protModeDetail.textContent} · ` : ""}Relay restoration unconfirmed`;
+}
+
 function renderObservation(data) {
   const values = data.values || {};
   const shelly1 = data.shelly1 || {};
@@ -401,6 +445,7 @@ function renderObservation(data) {
   // state and the watts beside it are one instant. That disagreement between a
   // 60s badge and a 2s power figure is what this replaced.
   renderPumpBadge(pumpBadgeState(data, fresh));
+  renderProtection(data, fresh);
   renderMeterHealth(data);
   renderShelly1Health(shelly1);
   setHealth(tab5Row, fresh ? "online" : "checking",
@@ -426,6 +471,7 @@ function clearObservation() {
   setBinaryValue(rly0Value, null);
   setHealth(shellyRow, "unavailable", "Awaiting Tab5 telemetry");
   setHealth(shelly1Row, "unavailable", "Awaiting Tab5 telemetry");
+  renderProtection(null, false);
 }
 
 // History moves slowly and the endpoint caches, so this is nothing like the
@@ -603,7 +649,7 @@ async function checkServices() {
   checkTime.textContent = `Services checked ${formatTime(checkedAt)}`;
 }
 
-operatorUnlock.addEventListener("click", () => checkOperatorStatus({ promptForKey: true }));
+operatorUnlock.addEventListener("click", toggleSignIn);
 operatorButtons.forEach(button => button.addEventListener("click", () => issueOperatorAction(button.id)));
 
 // Come back immediately when the tab is shown again rather than waiting out the

@@ -47,11 +47,16 @@ function createHandler(dependencies = {}) {
       return response(405, { status: "error", code: "method_not_allowed" }, { Allow: "GET, POST" });
     }
     if (!env.PILOT_INGEST_TOKEN) return response(503, { status: "error", code: "configuration_missing" });
-    if (!tokenMatches(getHeader(event.headers, "x-pilot-key"), env.PILOT_INGEST_TOKEN)) {
+    // Reading status is open; only a command needs the owner password. A GET
+    // that carries a key is checked, so the page can confirm a sign-in without
+    // issuing anything.
+    const key = getHeader(event.headers, "x-pilot-key");
+    const signedIn = tokenMatches(key, env.PILOT_INGEST_TOKEN);
+    if (!signedIn && (event.httpMethod === "POST" || key)) {
       return response(401, { status: "error", code: "unauthorized" });
     }
     try {
-      if (event.httpMethod === "GET") return response(200, { status: "ok", control: await store.status() });
+      if (event.httpMethod === "GET") return response(200, { status: "ok", signedIn, control: await store.status() });
       const request = validateOperatorRequest(parseBody(event));
       const issued = await store.issue(request);
       if (!issued.issued) {

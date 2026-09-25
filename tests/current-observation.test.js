@@ -253,3 +253,12 @@ test("a failed exchange is not cached, so the next poll retries", async () => {
   const second = await handler({ httpMethod: "GET" });
   assert.equal(second.statusCode, 200);
 });
+
+test("the Tab5 hold mode comes from the same record, and is null when not reported", async () => {
+  const released = await body(observation({ status: { user_monitor_active: true, tab5_relay_restoration: "unconfirmed" } }));
+  assert.equal(released.userMonitor, true);
+  assert.equal(released.relayRestoration, "unconfirmed");
+  const silent = await body(observation({ status: {} }));
+  assert.equal(silent.userMonitor, null);
+  assert.equal(silent.relayRestoration, null);
+});

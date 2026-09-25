@@ -165,6 +165,10 @@ function createHandler(dependencies = {}) {
         lockoutCount: numberOrNull(values.shelly1_lockout_count),
         tab5IsLocked: booleanOrNull(values.shelly1_tab5lock)
       },
+      // Whether the Tab5 has released its hold (User Monitor), from the same
+      // record, so the protection line and the numbers are one instant.
+      userMonitor: booleanOrNull(status.user_monitor_active),
+      relayRestoration: typeof status.tab5_relay_restoration === "string" ? status.tab5_relay_restoration : null,
       pressureCommissioned: booleanOrNull(status.pressure_sensor_commissioned),
       pressureValid: booleanOrNull(status.pressure_valid),
       shellyAvailable: booleanOrNull(status.shelly_available)
