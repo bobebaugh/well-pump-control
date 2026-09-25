@@ -9,7 +9,7 @@ const sectionLabels = {
 const state = {
   formDirty: false, busy: false, draft: null, revisions: {}, current: null, capabilities: null,
   section: "devices", selected: { devices: 0, calculatedFields: 0, systemFields: 0, events: 0 },
-  dirty: new Set(), runtimePackage: null, releases: []
+  dirty: new Set(), runtimePackage: null, releases: [], signedIn: false
 };
 
 const editor = document.querySelector("#engine-editor");
@@ -23,23 +23,66 @@ function escapeHtml(value) {
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 function setStatus(text, kind = "") { statusBox.className = `editor-status ${kind}`; statusBox.textContent = text; }
 function pilotKey() { return sessionStorage.getItem("pilotMonitorKey"); }
+// Viewing needs no password: a GET goes without one unless this browser has
+// signed in. Anything that writes asks for it.
 async function api(method, payload, query = "") {
   let key = pilotKey();
-  if (!key) key = window.prompt("Enter the pilot key");
-  if (!key) throw new Error("cancelled");
+  if (!key && method !== "GET") key = window.prompt("Enter the pilot key");
+  if (!key && method !== "GET") throw new Error("cancelled");
   const separator = query ? "&" : "?";
   const response = await fetch(`/.netlify/functions/rules-engine${query}${separator}version=3`, {
     method, cache: "no-store",
-    headers: { "Accept": "application/json", "Content-Type": "application/json", "X-Pilot-Key": key },
+    headers: { "Accept": "application/json", "Content-Type": "application/json", ...(key ? { "X-Pilot-Key": key } : {}) },
     body: payload ? JSON.stringify(payload) : undefined
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 401) sessionStorage.removeItem("pilotMonitorKey");
+    if (response.status === 401) { sessionStorage.removeItem("pilotMonitorKey"); setSignedIn(false); }
     const error = new Error(body.code || body.status || `HTTP ${response.status}`); error.body = body; throw error;
   }
-  sessionStorage.setItem("pilotMonitorKey", key);
+  if (key) { sessionStorage.setItem("pilotMonitorKey", key); if (method !== "GET" || body.signedIn === true) setSignedIn(true); }
   return body;
+}
+function setSignedIn(value) {
+  state.signedIn = value;
+  const button = document.querySelector("#engine-signin");
+  if (button) button.textContent = value ? "Sign out" : "Sign in to change";
+  syncButtons(); applyReadOnly();
+}
+// Signed out, the package can be browsed, analyzed, simulated and exported,
+// but not edited, saved, validated, published or delivered.
+function applyReadOnly() {
+  const locked = !state.signedIn;
+  document.querySelectorAll("#engine-editor input, #engine-editor select, #engine-editor textarea, #engine-editor button").forEach(control => { control.disabled = locked; });
+  const add = document.querySelector("#add-item"); if (add) add.disabled = locked;
+  const backup = document.querySelector("#load-backup"); if (backup) backup.disabled = locked;
+}
+async function toggleSignIn() {
+  if (state.signedIn) { sessionStorage.removeItem("pilotMonitorKey"); setSignedIn(false); setStatus("Signed out. Viewing only.", "ok"); return; }
+  const key = window.prompt("Enter the pilot key"); if (!key) return;
+  sessionStorage.setItem("pilotMonitorKey", key);
+  try { await api("GET"); setStatus(state.signedIn ? "Signed in. Changes are enabled." : "Password not confirmed.", state.signedIn ? "ok" : "warning"); }
+  catch (error) { setStatus(error.body?.code === "unauthorized" ? "Password not accepted. Viewing only." : `Sign-in check failed: ${error.message}`, "error"); }
+}
+// On opening, show the published package (or the saved draft if nothing has
+// been published) so the page is useful before anyone signs in.
+async function openCurrent() {
+  const loaded = await api("GET");
+  state.current = loaded.current; state.capabilities = loaded.capabilities; state.releases = loaded.releases || [];
+  state.revisions = loaded.draft.revisions;
+  const releaseId = loaded.current?.releaseId;
+  if (releaseId) {
+    const { release } = await api("GET", undefined, `?releaseId=${encodeURIComponent(releaseId)}`);
+    // Same rule as Load -> published: if the saved draft differs, what is shown
+    // is not what is saved, so every section counts as unsaved.
+    const matchesDraft = Object.keys(sectionLabels).every(section => JSON.stringify(release.authoringPackage?.[section] ?? []) === JSON.stringify(loaded.draft?.[section] ?? []));
+    acceptWorkingRules(release.authoringPackage, `Published version ${release.packageVersion} (${releaseId})`, matchesDraft);
+    setStatus(`Showing published version ${release.packageVersion}. The Tab5 runs it after a restart; Tab5 status below shows what is actually running.${matchesDraft ? "" : " The saved draft differs from it: use Load \u2192 Last saved to continue the draft."}${state.signedIn ? "" : " Sign in to change."}`, matchesDraft ? "ok" : "warning");
+  } else {
+    acceptWorkingRules(loaded.draft, "Last saved draft", true);
+    setStatus(`Nothing is published yet; showing the last saved draft.${state.signedIn ? "" : " Sign in to change."}`, "ok");
+  }
+  if (state.current) showPublished(state.current);
 }
 
 function allFields() {
@@ -627,7 +670,8 @@ function setEventClosingPolicy(event, policy) {
   event.closing = policy === "condition" ? { policy, condition: { mode: "all", clauses: [defaultV3Clause()], observationCount: 1, minimumSeconds: 0 } } : { policy };
 }
 function captureCurrent() { if (!state.draft || !state.formDirty) return; state.formDirty = false; if (state.section === "devices") captureDevice(); else if (state.section === "calculatedFields") captureCalculation(); else if (state.section === "systemFields") captureSystemField(); else captureEvent(); }
-function renderEditor() { const [kicker, title] = sectionLabels[state.section]; document.querySelector("#browser-kicker").textContent = kicker; document.querySelector("#browser-title").textContent = title; document.querySelectorAll(".engine-tile").forEach(button => button.classList.toggle("active", button.dataset.section === state.section)); renderList(); if (state.section === "devices") renderDevice(); else if (state.section === "calculatedFields") renderCalculation(); else if (state.section === "systemFields") renderSystemField(); else renderEvent(); }
+function renderEditor() { renderEditorSections(); applyReadOnly(); }
+function renderEditorSections() { const [kicker, title] = sectionLabels[state.section]; document.querySelector("#browser-kicker").textContent = kicker; document.querySelector("#browser-title").textContent = title; document.querySelectorAll(".engine-tile").forEach(button => button.classList.toggle("active", button.dataset.section === state.section)); renderList(); if (state.section === "devices") renderDevice(); else if (state.section === "calculatedFields") renderCalculation(); else if (state.section === "systemFields") renderSystemField(); else renderEvent(); }
 function uniqueName(base, existing) { let name=base,n=2; while(existing.includes(name)) name=`${base}${n++}`; return name; }
 function addItem() {
   captureCurrent();
@@ -750,13 +794,14 @@ function renderSimulation() {
 }
 
 function syncButtons() {
+  const locked = !state.signedIn;
   document.querySelector('#engine-analyze').disabled = !state.draft;
-  document.querySelector('#engine-validate').disabled = !state.draft;
-  document.querySelector('#engine-publish').disabled = !state.draft;
+  document.querySelector('#engine-validate').disabled = !state.draft || locked;
+  document.querySelector('#engine-publish').disabled = !state.draft || locked;
   document.querySelector('#engine-backup').disabled = !state.draft;
-  document.querySelector('#engine-save').disabled = !state.dirty.size;
+  document.querySelector('#engine-save').disabled = !state.dirty.size || locked;
   document.querySelector('#engine-download').disabled = !state.runtimePackage;
-  deliverButton.disabled = !state.current;
+  deliverButton.disabled = !state.current || locked;
 }
 async function runBusy(operation) {
   if(state.busy) return;
@@ -840,7 +885,7 @@ document.querySelector('#load-seed').addEventListener('click',()=>runBusy(()=>lo
 document.querySelector('#load-published').addEventListener('click',()=>runBusy(()=>loadWorking('published')));
 document.querySelector('#load-cancel').addEventListener('click',()=>document.querySelector('#load-dialog').close());
 document.querySelector('#refresh-device-state').addEventListener('click',()=>runBusy(refreshDeviceStatus));
-window.addEventListener('beforeunload',e=>{if(state.dirty.size){e.preventDefault();e.returnValue='';}});
+window.addEventListener('beforeunload',e=>{if(state.dirty.size&&state.signedIn){e.preventDefault();e.returnValue='';}});
 document.querySelector("#engine-load").addEventListener("click", () => runBusy(openLoad));
 document.querySelector("#engine-save").addEventListener("click", () => runBusy(async () => { try { const sections = await saveAll(); setStatus(`Saved ${sections.join(", ")} draft section(s).`, "ok"); } catch (error) { reportError(error,"Save"); } }));
 document.querySelector("#engine-analyze").addEventListener("click", runAnalysis);
@@ -990,3 +1035,5 @@ editor.addEventListener("click", event => {
   if (removeGroup) { const [phase, index] = removeGroup.dataset.v3RemoveGroup.split(":"); eventDefinition[phase].guardedGroups.splice(Number(index), 1); }
   markDirty(); renderEditor();
 });
+document.querySelector("#engine-signin").addEventListener("click", () => runBusy(toggleSignIn));
+runBusy(openCurrent);

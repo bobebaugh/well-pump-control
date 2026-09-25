@@ -182,3 +182,19 @@ test("V3 Boolean working field is compiled, published, reopened, and restored", 
   assert.equal(restored.statusCode, 200);
   assert.deepEqual(JSON.parse(restored.body).draft.systemFields.find(field => field.systemName === "CommissioningHold"), systemFields.at(-1));
 });
+
+test("viewing the V3 package is open; writing, seeding and a wrong key are refused", async () => {
+  const { handler } = harness();
+  const open = (method, query, headers = {}) => handler({ httpMethod: method, headers, queryStringParameters: query, body: "" });
+  const view = await open("GET", { version: "3" });
+  assert.equal(view.statusCode, 200);
+  assert.equal(JSON.parse(view.body).signedIn, false);
+  const signed = await open("GET", { version: "3" }, { "X-Pilot-Key": "test-key" });
+  assert.equal(JSON.parse(signed.body).signedIn, true);
+  assert.equal((await open("GET", { version: "3", seedTemplate: "1" })).statusCode, 200);
+  assert.equal((await open("GET", { version: "3" }, { "X-Pilot-Key": "wrong" })).statusCode, 401);
+  assert.equal((await open("GET", { version: "3", seed: "1" })).statusCode, 401, "seeding a missing draft writes");
+  assert.equal((await open("GET", {})).statusCode, 401, "the V1/V2 read seeds, so it stays locked");
+  assert.equal((await open("POST", { version: "3" })).statusCode, 401);
+  assert.equal((await open("PUT", { version: "3" })).statusCode, 401);
+});

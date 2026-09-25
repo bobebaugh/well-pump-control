@@ -59,7 +59,14 @@ function createHandler(dependencies = {}) {
   return async function rulesEngine(event) {
     if (!["GET", "PUT", "POST"].includes(event.httpMethod)) return { ...response(405, { status: "error", code: "method_not_allowed" }), headers: { ...jsonHeaders, Allow: "GET, PUT, POST" } };
     if (!env.PILOT_INGEST_TOKEN) return response(503, { status: "error", code: "configuration_missing" });
-    if (!tokenMatches(getHeader(event.headers, "x-pilot-key"), env.PILOT_INGEST_TOKEN)) return response(401, { status: "error", code: "unauthorized" });
+    // Viewing the V3 draft, releases, seed template and Tab5 status is open.
+    // Everything that can write needs the owner password: PUT, POST, and the
+    // GETs that seed a missing draft (seed=1, or any V1/V2 read). A key sent
+    // with an open read is still checked, so the page can confirm a sign-in.
+    const key = getHeader(event.headers, "x-pilot-key");
+    const signedIn = tokenMatches(key, env.PILOT_INGEST_TOKEN);
+    const openRead = event.httpMethod === "GET" && event.queryStringParameters?.version === "3" && event.queryStringParameters?.seed !== "1";
+    if (!signedIn && (!openRead || key)) return response(401, { status: "error", code: "unauthorized" });
 
     try {
       const v3 = event.queryStringParameters?.version === "3";
@@ -89,7 +96,7 @@ function createHandler(dependencies = {}) {
           ? await store.readDraft() : await store.loadOrSeed(draftDefaults(), now().getTime());
         const releases = await store.listReleases();
         return response(200, {
-          status: "ok", draft: loaded.draft, current: loaded.current, releases,
+          status: "ok", signedIn, draft: loaded.draft, current: loaded.current, releases,
           capabilities: { functions: FUNCTION_CATALOG, operators: TYPE_OPERATORS, drivers: DEVICE_DRIVERS, summaryOperations: SUMMARY_OPERATIONS, ...(v3 ? { packageSchemaVersion: 3, deliveryAvailable: true } : {}) },
           delivery: {
             enabled: loaded.current?.deliveryEnabled === true,

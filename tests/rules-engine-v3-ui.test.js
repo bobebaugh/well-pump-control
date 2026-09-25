@@ -58,3 +58,15 @@ test("working-field editor transitions preserve the old form shape and normalize
   assert.match(source, /event\.target\.value = state\.draft\.systemFields\[state\.selected\.systemFields\]\.type;/);
   assert.match(source, /normalizeSystemFieldLogging/);
 });
+
+test("the Rules Engine opens on the published package for viewing, and changes wait for a sign-in", () => {
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "web", "rules-engine.js"), "utf8");
+  const page = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "web", "rules-engine.html"), "utf8");
+  assert.match(page, /id="engine-signin"/);
+  assert.match(source, /runBusy\(openCurrent\);\s*$/);
+  assert.match(source, /if \(!key && method !== "GET"\) key = window\.prompt/);
+  assert.match(source, /document\.querySelector\('#engine-publish'\)\.disabled = !state\.draft \|\| locked/);
+  assert.match(source, /deliverButton\.disabled = !state\.current \|\| locked/);
+  assert.match(source, /#engine-editor input, #engine-editor select, #engine-editor textarea, #engine-editor button/);
+  assert.match(source, /The saved draft differs from it/);
+});
