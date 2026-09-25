@@ -74,9 +74,16 @@ clear it when main is fast-forwarded to pilot. Docs-only commits change no behav
 | af8d8e2 | Reject non-ASCII event display names and enum choices at Validate/Publish; notify from each event's own settings in its release | cloud + rules editor screen |
 | 5923abf | Durable records: plain-language reasons, row detail, Show filter, narrower columns; export by local From/To (up to 32 days) with local-time columns and reasonSummary | screen (records page + record-browser) |
 | d8d65e4 | Durable records: one range (From/To, Last 8 h/Today/24 h/7 days or an Event list) sets both rows and export; server-side Show filter fills 50-row pages (2,000-read cap); current choice highlighted | screen (records page + record-browser) |
+| f0baf41 | Protection line (Shelly lockout, Tab5 inhibit flag, mode) on the home page; operator status readable without the password, actions disabled until sign-in; "Release Tab5 hold (until restart)" wording | screen (home + operator-control, current-observation) |
+| 0b6170d | Last pump run at the top of the home page, from the day's durable records | screen (home + observation-series) |
+| cb39d23 | Energy and Pump load history views from ShellyEnergyWh and LoadRatioPercent | screen (home + observation-series) |
+| 0902a8f | Rules Engine opens on the published package read-only; V3 reads open, writes and seeding GETs keyed | rules-engine read access + editor screen; compile, publish and delivery unchanged |
 
 5923abf was promoted to pilot on 25 September for the owner to test before main; pilot
-was 53c0028 before it. d8d65e4 followed on the owner's direction (pilot was da860d2). Main should follow in the owner's next grouped main deploy.
+was 53c0028 before it. d8d65e4 followed on the owner's direction (pilot was da860d2), then f0baf41-0902a8f
+(pilot was 6766003). BETA lists rules-engine under the package pipeline that moves
+to main and pilot together; 0902a8f changes only who may read it, so a lagging main
+still asks for the password to view and publishes identically. Main should follow in the owner's next grouped main deploy.
 
 Main's rules editor still accepts non-ASCII display names and still says notification
 settings are authoring only; publish rules from the pilot deploy until main follows.
