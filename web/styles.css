@@ -524,3 +524,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(67,168,255,.
 .sim-state dt { color: var(--muted); }
 .sim-state dd { margin: 0; color: var(--text); }
 .sim-notes { margin: 10px 0 0; padding-left: 18px; font-size: .66rem; color: var(--amber); }
+/* The one control currently setting the record rows. */
+.records-actions .is-current { border-color: var(--cyan); color: var(--text); box-shadow: 0 0 0 1px var(--cyan) inset; }
+.records-actions label.is-current { color: var(--cyan); }
+.records-actions label.is-current input, .records-actions label.is-current select { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan) inset; }
+.records-actions select { max-width: 300px; }

@@ -25,13 +25,14 @@
           <button id="newer-records" class="secondary-button" type="button" disabled>Newer</button>
         </div>
         <div class="records-actions range-actions">
-          <label>From (local)<input id="range-from" type="datetime-local"></label>
-          <label>To (local)<input id="range-to" type="datetime-local" title="Follows the current time until you change it"></label>
-          <button id="range-today" class="secondary-button" type="button">Today</button>
-          <button id="range-day" class="secondary-button" type="button">Last 24 h</button>
-          <button id="range-week" class="secondary-button" type="button">Last 7 days</button>
-          <button id="view-range" class="secondary-button" type="button" title="Show the newest records in this range; Older pages back toward From.">View</button>
-          <label class="inline-check"><input id="export-shown" type="checkbox">Shown columns only</label>
+          <label id="range-custom">From (local)<input id="range-from" type="datetime-local"></label>
+          <label id="range-custom-to">To (local)<input id="range-to" type="datetime-local" title="Follows the current time until you change it"></label>
+          <button id="range-8h" class="secondary-button range-choice" type="button">Last 8 h</button>
+          <button id="range-today" class="secondary-button range-choice" type="button">Today</button>
+          <button id="range-day" class="secondary-button range-choice" type="button">Last 24 h</button>
+          <button id="range-week" class="secondary-button range-choice" type="button">Last 7 days</button>
+          <label id="event-choice">Event<select id="event-select"><option value="">Events in this range</option></select></label>
+          <label class="inline-check" title="Export only the rows the Show filter keeps, and only the columns shown"><input id="export-shown" type="checkbox">As shown</label>
           <button id="export-range" class="primary-button" type="button">Export CSV</button>
         </div>
       </div>

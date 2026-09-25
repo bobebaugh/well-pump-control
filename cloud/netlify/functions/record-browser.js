@@ -2,7 +2,7 @@
 
 const { FieldPath, Timestamp } = require("firebase-admin/firestore");
 const { ConfigurationError, getPilotFirestore } = require("../lib/firebase");
-const { MAX_EXPORT_DAYS, MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor, _encodeCursor, eventTriggerField, exportRows, iso, joinOccurrences, observationView, pageFields, requestedColumns } = require("../lib/record-browser");
+const { reasonFilter, reasonMatches, MAX_EXPORT_DAYS, MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor, _encodeCursor, eventTriggerField, exportRows, iso, joinOccurrences, observationView, pageFields, requestedColumns } = require("../lib/record-browser");
 
 const SITE_ID = "well-main";
 const DEVICE_ID = "tab5-well-main";
@@ -36,25 +36,51 @@ function columnView(records, query, events) {
   const columns = [...new Set([...requestedColumns(query.columns), ...(trigger ? [trigger] : [])])];
   return { catalog: pageFields(records), eventTriggerField: trigger, records: records.map(item => observationView(item, columns)) };
 }
-function timeQuery(observations, schemaVersion, field, before, count) {
-  let query = observations.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", schemaVersion).orderBy(field, "desc").orderBy(idField, "desc");
+function timeQuery(observations, schemaVersion, field, before, count, since = null) {
+  let query = observations.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", schemaVersion);
+  if (since) query = query.where(field, ">=", Timestamp.fromDate(since));
+  query = query.orderBy(field, "desc").orderBy(idField, "desc");
   if (before) query = query.startAfter(Timestamp.fromDate(before.time), before.id);
   return query.limit(count).get();
 }
 function initialSessionFollowingQuery(base, field, cycle, count) {
   return base.orderBy(field, "asc").orderBy(idField, "asc").startAt(cycle).limit(count);
 }
+// A filtered page keeps reading back, a batch at a time, until it has a full
+// page, reaches the range's start, or has read MAX_SCAN records. The cursor is
+// the last record read, matched or not, so Older continues where it stopped.
+const SCAN_BATCH = 200;
+const MAX_SCAN = 2000;
+function observedTime(record) { return record.schemaVersion === 2 ? record.time.observedAt : record.observedAt; }
+function reasonsOf(record) { return record.triggerReasons || (record.publishReason ? [{ kind: record.publishReason }] : []); }
 async function observationPage(site, query) {
   const observations = site.collection("observations"); let pageCursor = cursor(query, "timestamp");
   if (!pageCursor && query.anchor !== undefined) { const anchor = date(query.anchor); if (!anchor) throw new BrowserInputError("invalid_anchor"); pageCursor = { time: anchor, id: "\uffff" }; }
-  const count = limit(query.limit);
-  const [one, two, events] = await Promise.all([timeQuery(observations, 1, "observedAt", pageCursor, count), timeQuery(observations, 2, "time.observedAt", pageCursor, count), eventDefinitions(site, query)]);
-  const records = [...one.docs, ...two.docs].map(serialise).sort((a, b) => {
-    const left = a.schemaVersion === 2 ? a.time.observedAt : a.observedAt; const right = b.schemaVersion === 2 ? b.time.observedAt : b.observedAt;
-    return right.localeCompare(left) || b.recordId.localeCompare(a.recordId);
-  }).slice(0, count);
-  const next = records.at(-1); const nextTime = next && (next.schemaVersion === 2 ? next.time.observedAt : next.observedAt);
-  return { status: records.length ? "ok" : "empty", ...columnView(records, query, events), nextCursor: next ? _encodeCursor({ time: nextTime, id: next.recordId }) : null, previousCursor: pageCursor ? _encodeCursor({ time: pageCursor.time.toISOString(), id: pageCursor.id }) : null };
+  let since = null; if (query.start !== undefined) { since = date(query.start); if (!since) throw new BrowserInputError("invalid_range"); }
+  const count = limit(query.limit); const filter = reasonFilter(query.filter); const batch = filter === "all" ? count : SCAN_BATCH;
+  const events = await eventDefinitions(site, query);
+  const records = []; let position = pageCursor; let scanned = 0; let exhausted = false; let stopped = null;
+  while (records.length < count) {
+    const [one, two] = await Promise.all([timeQuery(observations, 1, "observedAt", position, batch, since), timeQuery(observations, 2, "time.observedAt", position, batch, since)]);
+    const read = [...one.docs, ...two.docs].map(serialise).sort((a, b) => observedTime(b).localeCompare(observedTime(a)) || b.recordId.localeCompare(a.recordId)).slice(0, batch);
+    for (const record of read) {
+      scanned += 1; stopped = record;
+      if (reasonMatches(reasonsOf(record), filter)) records.push(record);
+      if (records.length >= count) break;
+    }
+    if (read.length < batch && records.length < count) { exhausted = true; break; }
+    position = stopped && { time: new Date(observedTime(stopped)), id: stopped.recordId };
+    if (scanned >= MAX_SCAN) break;
+  }
+  const capped = !exhausted && records.length < count;
+  return { status: records.length ? "ok" : "empty", ...columnView(records, query, events), scan: { filter, scanned, capped, searchedTo: capped && stopped ? observedTime(stopped) : null }, nextCursor: !exhausted && stopped ? _encodeCursor({ time: observedTime(stopped), id: stopped.recordId }) : null, previousCursor: pageCursor ? _encodeCursor({ time: pageCursor.time.toISOString(), id: pageCursor.id }) : null };
+}
+// Event occurrences first reported in a range, newest first, for the Event list.
+async function eventsInRange(site, query) {
+  const start = date(query.start); const end = date(query.end);
+  if (!start || !end || end <= start || end.getTime() - start.getTime() > MAX_EXPORT_DAYS * 86400000) return { error: "invalid_range" };
+  const snapshot = await site.collection("eventRecords").where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", 2).where("recordType", "==", "event-open").where("firstReportedAt", ">=", start.toISOString()).where("firstReportedAt", "<", end.toISOString()).orderBy("firstReportedAt", "desc").limit(100).get();
+  return { status: "ok", events: snapshot.docs.map(serialise).map(item => ({ eventDefinitionId: item.eventDefinitionId, displayName: item.displayName, severity: item.severity, sessionId: item.sessionId, cycleSequence: item.opening?.cycleSequence ?? null, observedAt: iso(item.opening?.observedAt) || null, firstReportedAt: item.firstReportedAt })) };
 }
 async function receiptPage(site, query) {
   const observations = site.collection("observations"); const pageCursor = cursor(query, "timestamp"); const count = limit(query.limit);
@@ -128,8 +154,12 @@ async function exportRange(site, query) {
   const observations = site.collection("observations");
   const read = (schema, field) => observations.where("deviceId", "==", DEVICE_ID).where("schemaVersion", "==", schema).where(field, ">=", Timestamp.fromDate(start)).where(field, "<", Timestamp.fromDate(end)).orderBy(field, "asc").orderBy(idField, "asc").limit(MAX_EXPORT_ROWS + 1).get();
   const [one, two] = await Promise.all([read(1, "observedAt"), read(2, "time.observedAt")]);
-  const rows = [...one.docs, ...two.docs].map(serialise).sort((a, b) => (a.schemaVersion === 2 ? a.time.observedAt : a.observedAt).localeCompare(b.schemaVersion === 2 ? b.time.observedAt : b.observedAt));
-  if (rows.length > MAX_EXPORT_ROWS) return { error: "export_too_large", count: rows.length };
+  // The size check counts every record in the range, so a filter can never
+  // hide that the read stopped short.
+  const all = [...one.docs, ...two.docs];
+  if (all.length > MAX_EXPORT_ROWS) return { error: "export_too_large", count: all.length };
+  const filter = reasonFilter(query.filter);
+  const rows = all.map(serialise).filter(record => reasonMatches(reasonsOf(record), filter)).sort((a, b) => observedTime(a).localeCompare(observedTime(b)));
   return { csv: exportRows(rows, { timeZone: query.tz, columns: requestedColumns(query.columns) }), count: rows.length };
 }
 function createHandler(dependencies = {}) {
@@ -144,6 +174,7 @@ function createHandler(dependencies = {}) {
         if (result.error) return json(result.error === "export_too_large" ? 413 : 400, { status: "error", code: result.error, count: result.count });
         return { statusCode: 200, headers: { "Content-Type": "text/csv; charset=utf-8", "Cache-Control": "no-store", "Content-Disposition": "attachment; filename=durable-observations.csv", "X-Export-Record-Count": String(result.count) }, body: result.csv };
       }
+      if (query.view === "events") { const result = await eventsInRange(site, query); return result.error ? json(400, { status: "error", code: result.error }) : json(200, result); }
       if (query.view === "history") return json(200, { status: "ok", ...(await eventHistory(site, limit(query.limit, 50), query)) });
       if (query.view === "session") return json(200, await sessionPage(site, query));
       if (query.view === "receipt") return json(200, await receiptPage(site, query));

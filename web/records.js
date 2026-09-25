@@ -17,14 +17,19 @@ const storageKey = "recordBrowserColumns.v2";
 const filterKey = "recordBrowserReasonFilter.v1";
 const reasons = globalThis.RecordReasons;
 const MAX_EXPORT_DAYS = 32;
-const state = { reasonFilter: "all", expanded: new Set(), toFollowsNow: true,  currentStart: null, currentDirection: "after", nextCursor: null, previousCursor: null, trail: [], columns: [], metadata: [], catalog: [], records: [], preset: "standard", trigger: null, triggerChecked: false, customizeOpen: false, mode: new URLSearchParams(location.search).get("session") ? "session" : "observation", anchor: null };
 const qs = new URLSearchParams(location.search);
+const linked = qs.get("session") ? { session: qs.get("session"), cycle: qs.get("cycle") || "0", event: qs.get("event") || "" } : null;
+// What sets the rows: a quick range, a custom From/To, an event, or receipt time.
+const quickRanges = { "8h": () => new Date(Date.now() - 8 * 3600000), today: () => { const value = new Date(); value.setHours(0, 0, 0, 0); return value; }, "24h": () => new Date(Date.now() - 86400000), "7d": () => new Date(Date.now() - 7 * 86400000) };
+const quickButtons = { "8h": "#range-8h", today: "#range-today", "24h": "#range-day", "7d": "#range-week" };
+const state = { source: linked ? "event" : "24h", rangeSource: "24h", link: linked, events: [], eventChoice: linked ? "link" : "", scan: null, reasonFilter: "all", expanded: new Set(), toFollowsNow: true, currentStart: null, currentDirection: "after", nextCursor: null, previousCursor: null, trail: [], columns: [], metadata: [], catalog: [], records: [], preset: "standard", trigger: null, triggerChecked: false, customizeOpen: false, mode: linked ? "session" : "observation" };
 const statusLine = document.querySelector("#records-status");
 const table = document.querySelector("#records-table");
 const picker = document.querySelector("#column-picker");
 const rangeFrom = document.querySelector("#range-from");
 const rangeTo = document.querySelector("#range-to");
 const exportShown = document.querySelector("#export-shown");
+const eventSelect = document.querySelector("#event-select");
 const newer = document.querySelector("#newer-records");
 const older = document.querySelector("#older-records");
 const historyState = { cursor: null, next: null, trail: [] };
@@ -68,7 +73,7 @@ function selectColumns(columns, preset = presetFor(columns)) { state.columns = [
 // only the requested fields.
 picker.addEventListener("change", event => {
   const target = event.target; const kind = target.dataset?.kind;
-  if (kind === "filter") { state.reasonFilter = reasons.filters.some(([id]) => id === target.value) ? target.value : "all"; saveFilter(); renderColumns(); render(state.records); }
+  if (kind === "filter") { state.reasonFilter = reasons.filters.some(([id]) => id === target.value) ? target.value : "all"; saveFilter(); renderColumns(); if (state.mode === "observation") { state.trail = []; load(); } else render(state.records); }
   else if (kind === "preset") { const preset = presets.find(item => item.id === target.value); if (preset) selectColumns(preset.columns, preset.id); load(state.currentStart, state.currentDirection); }
   else if (kind === "metadata") { state.metadata = target.checked ? [...new Set([...state.metadata, target.value])] : state.metadata.filter(name => name !== target.value); saveSelection(); renderColumns(); render(state.records); }
   else if (kind === "data" && target.checked) { if (!state.columns.includes(target.value)) selectColumns([...state.columns, target.value]); load(state.currentStart, state.currentDirection); }
@@ -125,16 +130,23 @@ function toggleRow(event) {
 table.addEventListener("click", toggleRow);
 table.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault?.(); toggleRow(event); } });
 async function request(url) { const response = await fetch(url, { cache: "no-store" }); const body = await response.json().catch(() => ({})); if (!response.ok) { const error = new Error(body.code || "read_failed"); error.body = body; throw error; } return body; }
+function scanNote(scan, count) {
+  if (!scan || scan.filter === "all") return "";
+  return scan.capped ? ` Read ${scan.scanned} records back to ${time(scan.searchedTo)} and found ${count} that match; Older keeps searching.` : "";
+}
 async function load(pageCursor = null, direction = "after") {
-  statusLine.textContent = "Loading durable records…";
-  const params = new URLSearchParams({ columns: state.columns.join(",") }); if (pageCursor) params.set("cursor", pageCursor); if (qs.get("event")) params.set("event", qs.get("event")); if (!pageCursor && state.anchor && state.mode === "observation") params.set("anchor", state.anchor); if (state.mode === "session") { params.set("view", "session"); params.set("session", qs.get("session")); params.set("cycle", qs.get("cycle") || "0"); params.set("direction", direction); } else if (state.mode === "receipt") params.set("view", "receipt");
-  try { const data = await request(`${endpoint}?${params}`); if (!state.triggerChecked && qs.get("event")) { state.triggerChecked = true; state.trigger = data.eventTriggerField || null; } state.catalog = data.catalog; if (state.mode === "session" && data.status === "empty" && pageCursor) { if (direction === "before") state.previousCursor = null; else state.nextCursor = null; statusLine.textContent = direction === "before" ? "No earlier session records exist; showing the last available records." : "No later session records exist; showing the last available records."; updateButtons(); return; } state.currentStart = pageCursor; state.currentDirection = direction; state.nextCursor = data.nextCursor; state.previousCursor = data.previousCursor; renderColumns(); render(data.records); statusLine.textContent = data.status === "empty" ? "No records at this position." : (data.source === "receipt-time-fallback" ? "Receipt-time fallback: this is cloud receipt time, not device observation time." : "Observation time is device-reported time. Receipt time is shown separately."); updateButtons(); } catch (error) { statusLine.textContent = error.body?.code === "configuration_missing" ? "Configuration is unavailable." : error.body?.code === "read_denied" ? "Record reading is denied by the current service configuration." : error.body?.code === "invalid_cursor" ? "This browsing position is invalid; choose Latest or a new date/time." : "Read failed. The page remains usable; try again."; }
+  statusLine.textContent = "Loading durable records…"; highlight();
+  const link = state.link || {};
+  const params = new URLSearchParams({ columns: state.columns.join(",") }); if (pageCursor) params.set("cursor", pageCursor);
+  if (state.mode === "session") { params.set("view", "session"); params.set("session", link.session); params.set("cycle", link.cycle || "0"); params.set("direction", direction); if (link.event) params.set("event", link.event); }
+  else if (state.mode === "receipt") params.set("view", "receipt");
+  else { const chosen = range(); if (chosen.error) { statusLine.textContent = chosen.error; return; } params.set("start", chosen.start.toISOString()); if (!pageCursor) params.set("anchor", chosen.end.toISOString()); params.set("filter", state.reasonFilter); }
+  try { const data = await request(`${endpoint}?${params}`); if (!state.triggerChecked && link.event && state.mode === "session") { state.triggerChecked = true; state.trigger = data.eventTriggerField || null; } state.catalog = data.catalog; if (state.mode === "session" && data.status === "empty" && pageCursor) { if (direction === "before") state.previousCursor = null; else state.nextCursor = null; statusLine.textContent = direction === "before" ? "No earlier session records exist; showing the last available records." : "No later session records exist; showing the last available records."; updateButtons(); return; } state.currentStart = pageCursor; state.currentDirection = direction; state.nextCursor = data.nextCursor; state.previousCursor = data.previousCursor; state.scan = data.scan || null; renderColumns(); render(data.records); statusLine.textContent = (data.status === "empty" ? (state.mode === "observation" ? "No matching records in this range." : "No records at this position.") : (data.source === "receipt-time-fallback" ? "Receipt-time fallback: this is cloud receipt time, not device observation time." : "Observation time is device-reported time. Receipt time is shown separately.")) + scanNote(data.scan, data.records.length); updateButtons(); } catch (error) { statusLine.textContent = error.body?.code === "configuration_missing" ? "Configuration is unavailable." : error.body?.code === "read_denied" ? "Record reading is denied by the current service configuration." : error.body?.code === "invalid_cursor" ? "This browsing position is invalid; choose Latest or a new range." : "Read failed. The page remains usable; try again."; }
 }
 function stamp(value) { return value.replace(/-/g, "").replace(":", "").replace("T", "_"); }
 // From and To are local wall-clock times. To follows "now" until it is edited,
-// so an export always runs to the moment the button is pressed.
+// so the newest records and an export always run to the moment they are asked for.
 function setRange(from, to = new Date()) { rangeFrom.value = localDateTime(from); rangeTo.value = localDateTime(to); state.toFollowsNow = true; }
-function midnight() { const value = new Date(); value.setHours(0, 0, 0, 0); return value; }
 function range() {
   if (state.toFollowsNow) rangeTo.value = localDateTime();
   const start = new Date(rangeFrom.value); const end = new Date(rangeTo.value);
@@ -145,26 +157,66 @@ function range() {
   if (end - start > MAX_EXPORT_DAYS * 86400000) return { error: `Choose a range of ${MAX_EXPORT_DAYS} days or less.` };
   return { start, end };
 }
+// Exactly one choice is marked as the one setting the rows.
+function mark(selector, on) { document.querySelector(selector)?.classList?.toggle("is-current", on); }
+function highlight() {
+  for (const [id, selector] of Object.entries(quickButtons)) mark(selector, state.source === id);
+  mark("#range-custom", state.source === "custom"); mark("#range-custom-to", state.source === "custom");
+  mark("#event-choice", state.source === "event"); mark("#receipt-records", state.source === "receipt");
+}
+function leaveSession(mode) { state.mode = mode; state.currentStart = null; state.trail = []; state.trigger = null; state.expanded.clear(); }
+function applyRange(source) {
+  if (quickRanges[source]) setRange(quickRanges[source]()); else if (state.toFollowsNow) rangeTo.value = localDateTime();
+  state.source = source; state.rangeSource = source; state.eventChoice = "";
+  leaveSession("observation"); load(); loadEvents();
+}
+function eventLabel(item) { const at = item.observedAt || item.firstReportedAt; return `${at ? time(at) : "Time unknown"} · ${item.displayName || item.eventDefinitionId} (${item.eventDefinitionId})`; }
+function renderEvents(note = null) {
+  const link = state.link || {};
+  const linkedListed = state.events.some(item => item.sessionId === link.session && String(item.cycleSequence) === String(link.cycle) && item.eventDefinitionId === link.event);
+  const extra = state.eventChoice === "link" && !linkedListed ? `<option value="link" selected>Linked event ${escapeHtml(link.event || "")} (session ${escapeHtml(link.session || "")})</option>` : "";
+  const options = state.events.map((item, index) => { const chosen = state.source === "event" && item.sessionId === link.session && String(item.cycleSequence) === String(link.cycle) && item.eventDefinitionId === link.event; return `<option value="${index}"${chosen ? " selected" : ""}>${escapeHtml(eventLabel(item))}</option>`; }).join("");
+  eventSelect.innerHTML = `<option value="">${escapeHtml(note || `Events in this range (${state.events.length})`)}</option>${extra}${options}`;
+}
+async function loadEvents() {
+  const chosen = range(); if (chosen.error) return;
+  try { const data = await request(`${endpoint}?${new URLSearchParams({ view: "events", start: chosen.start.toISOString(), end: chosen.end.toISOString() })}`); state.events = Array.isArray(data.events) ? data.events : []; renderEvents(); } catch { state.events = []; renderEvents("Event list unavailable"); }
+}
+function chooseEvent(value) {
+  if (value === "" || value === "link" && !state.link) { applyRange(state.rangeSource); return; }
+  if (value !== "link") { const item = state.events[Number(value)]; if (!item || item.cycleSequence === null) { statusLine.textContent = "That event has no device cycle to open at."; return; } state.link = { session: item.sessionId, cycle: String(item.cycleSequence), event: item.eventDefinitionId }; }
+  state.eventChoice = value; state.source = "event"; state.triggerChecked = false;
+  leaveSession("session"); renderEvents(); load();
+}
+// In event view the export covers the span of the rows on screen.
+function exportWindow() {
+  if (state.source !== "event") return range();
+  const times = state.records.map(record => Date.parse(record.observationTime)).filter(Number.isFinite);
+  if (!times.length) return { error: "No timed rows on screen to export." };
+  return { start: new Date(Math.min(...times)), end: new Date(Math.max(...times) + 1) };
+}
 async function exportRange() {
-  const chosen = range(); if (chosen.error) { statusLine.textContent = chosen.error; return; }
+  const chosen = exportWindow(); if (chosen.error) { statusLine.textContent = chosen.error; return; }
   const params = new URLSearchParams({ view: "export", start: chosen.start.toISOString(), end: chosen.end.toISOString(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
-  if (exportShown.checked) params.set("columns", selectedColumns().join(","));
-  statusLine.textContent = "Exporting the chosen range…";
-  try { const response = await fetch(`${endpoint}?${params}`, { cache: "no-store" }); if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.code || "export_failed"); } const text = await response.text(); const blob = new Blob([text], { type: "text/csv" }); const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `durable-observations-${stamp(rangeFrom.value)}-to-${stamp(rangeTo.value)}.csv` }); link.click(); URL.revokeObjectURL(link.href); statusLine.textContent = `Export complete: ${response.headers.get("X-Export-Record-Count")} records.`; } catch (error) { statusLine.textContent = error.message === "export_too_large" ? "Export is too large to complete safely; narrow the range." : error.message === "invalid_range" ? `The range was refused; choose ${MAX_EXPORT_DAYS} days or less with To after From.` : "Export failed; no partial file was presented as complete."; }
+  if (exportShown.checked) { params.set("columns", selectedColumns().join(",")); params.set("filter", state.reasonFilter); }
+  statusLine.textContent = "Exporting…";
+  try { const response = await fetch(`${endpoint}?${params}`, { cache: "no-store" }); if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.code || "export_failed"); } const text = await response.text(); const blob = new Blob([text], { type: "text/csv" }); const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `durable-observations-${stamp(localDateTime(chosen.start))}-to-${stamp(localDateTime(chosen.end))}.csv` }); link.click(); URL.revokeObjectURL(link.href); statusLine.textContent = `Export complete: ${response.headers.get("X-Export-Record-Count")} records.`; } catch (error) { statusLine.textContent = error.message === "export_too_large" ? "Export is too large to complete safely; narrow the range." : error.message === "invalid_range" ? `The range was refused; choose ${MAX_EXPORT_DAYS} days or less with To after From.` : "Export failed; no partial file was presented as complete."; }
 }
 async function history(pageCursor = null) { const panel = document.querySelector("#history-panel"); panel.hidden = false; try { const data = await request(`${endpoint}?view=history${pageCursor ? `&cursor=${encodeURIComponent(pageCursor)}` : ""}`); document.querySelector("#history-list").innerHTML = data.occurrences.map(item => { const open = item.open; const close = item.close; const opening = open.opening?.observedAt ? `Device opening ${time(open.opening.observedAt)}` : `Device opening time unknown; first reported ${open.firstReportedAt ? time(open.firstReportedAt) : "unknown"}`; return `<article class="event-card ${open.severity.toLowerCase()}"><strong>${escapeHtml(open.severity)} · ${escapeHtml(open.displayName)}</strong><span>${escapeHtml(opening)}</span><span>${close ? `Closed by ${escapeHtml(close.closeReason)}; cloud detection ${time(close.detectedAt || close.restartDetectedAt)}. Device close time unknown.` : "Closure not recorded."}</span><a href="/records.html?session=${encodeURIComponent(open.sessionId)}&cycle=${open.opening?.cycleSequence || 0}&event=${encodeURIComponent(open.eventDefinitionId)}">View nearby observations</a></article>`; }).join("") || "<p class='event-empty'>No V3 occurrences found.</p>"; historyState.cursor = pageCursor; historyState.next = data.nextCursor; document.querySelector("#history-older").disabled = !historyState.next; document.querySelector("#history-newer").disabled = !historyState.trail.length; } catch { document.querySelector("#history-list").textContent = "Event history is currently unavailable."; } }
-setRange(midnight()); exportShown.checked = false; document.querySelector("#timezone-label").textContent = `Displayed in ${Intl.DateTimeFormat().resolvedOptions().timeZone}; day boundaries adjust for daylight-saving time. The CSV carries local and UTC times.`;
-function leaveSession(mode) { state.mode = mode; state.anchor = null; state.currentStart = null; state.trail = []; state.trigger = null; }
-document.querySelector("#latest-records").addEventListener("click", () => { leaveSession("observation"); load(); }); document.querySelector("#receipt-records").addEventListener("click", () => { leaveSession("receipt"); load(); }); older.addEventListener("click", () => { if (state.mode === "session") { if (state.previousCursor) load(state.previousCursor, "before"); } else if (state.nextCursor) { state.trail.push(state.currentStart); load(state.nextCursor); } }); newer.addEventListener("click", () => { if (state.mode === "session") { if (state.nextCursor) load(state.nextCursor, "after"); } else load(state.trail.pop() || null); }); document.querySelector("#export-range").addEventListener("click", exportRange);
-// View shows the newest records in the range; Older pages back toward From.
-document.querySelector("#view-range").addEventListener("click", () => { const chosen = range(); if (chosen.error) { statusLine.textContent = chosen.error; return; } leaveSession("observation"); state.anchor = chosen.end.toISOString(); load(); });
-rangeTo.addEventListener("change", () => { state.toFollowsNow = false; });
-document.querySelector("#range-today").addEventListener("click", () => setRange(midnight()));
-document.querySelector("#range-day").addEventListener("click", () => setRange(new Date(Date.now() - 86400000)));
-document.querySelector("#range-week").addEventListener("click", () => setRange(new Date(Date.now() - 7 * 86400000)));
+setRange(quickRanges["24h"]()); exportShown.checked = false; document.querySelector("#timezone-label").textContent = `Displayed in ${Intl.DateTimeFormat().resolvedOptions().timeZone}; day boundaries adjust for daylight-saving time. The CSV carries local and UTC times.`;
+// Latest re-runs the current choice up to now; from an event it returns to the range.
+document.querySelector("#latest-records").addEventListener("click", () => { if (state.source === "receipt") { leaveSession("receipt"); load(); } else { if (state.source === "custom") state.toFollowsNow = true; applyRange(state.source === "event" ? state.rangeSource : state.source); } });
+document.querySelector("#receipt-records").addEventListener("click", () => { state.source = "receipt"; leaveSession("receipt"); load(); });
+older.addEventListener("click", () => { if (state.mode === "session") { if (state.previousCursor) load(state.previousCursor, "before"); } else if (state.nextCursor) { state.trail.push(state.currentStart); load(state.nextCursor); } }); newer.addEventListener("click", () => { if (state.mode === "session") { if (state.nextCursor) load(state.nextCursor, "after"); } else load(state.trail.pop() || null); }); document.querySelector("#export-range").addEventListener("click", exportRange);
+// Editing From or To makes a custom range once the edit settles.
+let editTimer = null;
+function customEdit(isTo) { if (isTo) state.toFollowsNow = false; clearTimeout(editTimer); editTimer = setTimeout(() => applyRange("custom"), 700); }
+rangeFrom.addEventListener("change", () => customEdit(false)); rangeTo.addEventListener("change", () => customEdit(true));
+for (const [id, selector] of Object.entries(quickButtons)) document.querySelector(selector).addEventListener("click", () => applyRange(id));
+eventSelect.addEventListener("change", () => chooseEvent(eventSelect.value));
 document.querySelector("#history-older").addEventListener("click", () => { if (historyState.next) { historyState.trail.push(historyState.cursor); history(historyState.next); } }); document.querySelector("#history-newer").addEventListener("click", () => history(historyState.trail.pop() || null));
 // A saved preset follows that preset as it is defined now; a custom selection
 // is restored exactly, even when it is empty.
 state.reasonFilter = savedFilter();
 { const saved = savedSelection(); const preset = presets.find(item => item.id === saved?.preset) || (saved ? null : presets[0]); state.columns = [...(preset ? preset.columns : saved.columns)]; state.preset = preset ? preset.id : presetFor(state.columns); state.metadata = Array.isArray(saved?.metadata) ? saved.metadata.filter(name => optionalMetadata.some(item => item.name === name)) : []; }
-if (qs.get("history") === "1") history(); load();
+if (qs.get("history") === "1") history(); load(); loadEvents();

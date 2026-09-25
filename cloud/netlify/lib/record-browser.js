@@ -3,7 +3,9 @@
 const MAX_PAGE_SIZE = 50;
 const MAX_EXPORT_ROWS = 5000;
 const MAX_EXPORT_DAYS = 32;
-const { summary: reasonSummary } = require("../../../web/record-reasons.js");
+const { summary: reasonSummary, matches: reasonMatches, filters: reasonFilters } = require("../../../web/record-reasons.js");
+// A Show filter from the page, or "all" for anything it does not name.
+function reasonFilter(value) { return reasonFilters.some(([id]) => id === value) ? value : "all"; }
 
 function iso(value) {
   if (!value) return null;
@@ -152,4 +154,4 @@ function exportRows(records, options = {}) {
   return lines.join("\r\n") + "\r\n";
 }
 
-module.exports = { MAX_EXPORT_DAYS, MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor: decodeCursor, _encodeCursor: encodeCursor, eventTriggerField, exportRows, fieldState, iso, localIso, joinOccurrences, observationView, pageFields, requestedColumns };
+module.exports = { reasonFilter, reasonMatches, MAX_EXPORT_DAYS, MAX_EXPORT_ROWS, MAX_PAGE_SIZE, _decodeCursor: decodeCursor, _encodeCursor: encodeCursor, eventTriggerField, exportRows, fieldState, iso, localIso, joinOccurrences, observationView, pageFields, requestedColumns };

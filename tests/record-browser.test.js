@@ -93,10 +93,45 @@ test("export takes a range of up to 32 days and refuses a longer or reversed one
   assert.equal(week.headers["X-Export-Record-Count"], "1");
   assert.match(week.body, /2026-09-20T08:00:00\.000-04:00/);
   assert.match(week.body, /,Health,/);
+  const changesOnly = await call({ start: "2026-09-18T04:00:00.000Z", end: "2026-09-25T04:00:00.000Z", filter: "changes" });
+  assert.equal(changesOnly.headers["X-Export-Record-Count"], "0");
   const long = await call({ start: "2026-08-01T00:00:00.000Z", end: "2026-09-25T00:00:00.000Z" });
   assert.equal(long.statusCode, 400);
   assert.equal(JSON.parse(long.body).code, "invalid_range");
   assert.equal((await call({ start: "2026-09-25T00:00:00.000Z", end: "2026-09-24T00:00:00.000Z" })).statusCode, 400);
+});
+
+test("a filtered page reads back until it fills, stays inside the range, and says where a capped search stopped", async () => {
+  const root = "sites/well-main"; const seed = {};
+  const put = (n, when, reasons) => { const id = `obs_s_${String(n).padStart(10, "0")}`; seed[`${root}/observations/${id}`] = { schemaVersion: 2, recordId: id, deviceId: "tab5-well-main", sessionId: "s", cycleSequence: n, time: { observedAt: timestamp(when) }, receivedAt: timestamp(when), triggerReasons: reasons, fields: { PumpWatts: { state: "available", value: 12 } } }; };
+  const base = Date.parse("2026-09-25T00:00:00.000Z");
+  for (let n = 0; n < 2100; n += 1) put(n + 10, new Date(base + (n + 10) * 2000).toISOString(), [{ kind: "maximum-interval" }]);
+  put(5, new Date(base + 5 * 2000).toISOString(), [{ kind: "change", field: "CloudAvailable", from: true, to: false }]);
+  put(1, new Date(base - 3600000).toISOString(), [{ kind: "change", field: "CloudAvailable", from: false, to: true }]);
+  const handler = _createHandler({ getPilotFirestore: () => ({ db: browserFirestore(seed), projectId: "well-pump-control", databaseId: "(default)" }) });
+  const call = async query => JSON.parse((await handler({ httpMethod: "GET", queryStringParameters: query })).body);
+  const range = { start: new Date(base).toISOString(), anchor: new Date(base + 86400000).toISOString(), columns: "PumpWatts", filter: "changes" };
+  const first = await call(range);
+  assert.equal(first.records.length, 0);
+  assert.equal(first.scan.capped, true);
+  assert.equal(first.scan.scanned, 2000);
+  assert.ok(first.scan.searchedTo && first.nextCursor);
+  const next = await call({ ...range, cursor: first.nextCursor });
+  assert.deepEqual(next.records.map(item => item.cycleSequence), [5], "the record before From is not shown");
+  assert.equal(next.nextCursor, null);
+  const unfiltered = await call({ ...range, filter: "all" });
+  assert.equal(unfiltered.records.length, 50);
+});
+
+test("the events view lists occurrences first reported in the range", async () => {
+  const root = "sites/well-main";
+  const open = (id, reported) => ({ schemaVersion: 2, recordType: "event-open", recordId: `event-open--${id}`, deviceId: "tab5-well-main", sessionId: "s", eventDefinitionId: id, occurrenceId: `${id}:1`, displayName: `Name ${id}`, severity: "Info", opening: { observedAt: reported, cycleSequence: 7 }, firstReportedAt: reported });
+  const seed = { [`${root}/eventRecords/a`]: open("P001", "2026-09-25T12:48:47.000Z"), [`${root}/eventRecords/b`]: open("W09", "2026-09-24T12:00:00.000Z") };
+  const handler = _createHandler({ getPilotFirestore: () => ({ db: browserFirestore(seed), projectId: "well-pump-control", databaseId: "(default)" }) });
+  const response = await handler({ httpMethod: "GET", queryStringParameters: { view: "events", start: "2026-09-25T04:00:00.000Z", end: "2026-09-25T20:00:00.000Z" } });
+  const body = JSON.parse(response.body);
+  assert.deepEqual(body.events.map(item => [item.eventDefinitionId, item.displayName, item.cycleSequence]), [["P001", "Name P001", 7]]);
+  assert.equal((await handler({ httpMethod: "GET", queryStringParameters: { view: "events", start: "x", end: "y" } })).statusCode, 400);
 });
 
 test("read endpoint is GET-only and reports an unavailable approved configuration without exposing details", async () => {

@@ -7,7 +7,7 @@ const assert = require("node:assert/strict");
 const vm = require("node:vm");
 
 class Element {
-  constructor(id) { this.id = id; this.listeners = new Map(); this.disabled = false; this.textContent = ""; this.innerHTML = ""; this.value = ""; this.checked = true; this.dataset = {}; this.style = { values: {}, setProperty(name, value) { this.values[name] = value; } }; }
+  constructor(id) { this.id = id; this.listeners = new Map(); this.disabled = false; this.textContent = ""; this.innerHTML = ""; this.value = ""; this.checked = true; this.dataset = {}; this.classes = new Set(); this.classList = { toggle: (name, on) => { if (on) this.classes.add(name); else this.classes.delete(name); } }; this.style = { values: {}, setProperty(name, value) { this.values[name] = value; } }; }
   addEventListener(name, listener) { this.listeners.set(name, listener); }
   async fire(name) { this.listeners.get(name)?.({ target: this }); await settle(); }
   querySelectorAll(selector) {
@@ -22,8 +22,9 @@ async function settle() { for (let index = 0; index < 6; index += 1) await new P
 function response(query, recordId, extra = {}) {
   return { status: "ok", catalog: [{ name: "ClockValid" }, { name: "PumpWatts" }], eventTriggerField: query.get("event") ? "ClockValid" : null, records: [{ recordId, schemaVersion: 2, sessionId: "session001", cycleSequence: 4, observationTime: "2026-03-08T01:00:00.000Z", receiptTime: "2026-03-08T01:01:00.000Z", rulesRelease: {}, triggerReasons: [{ kind: recordId }], fields: { PumpWatts: { state: "available", value: 0 }, ClockValid: { state: "available", value: false } } }], ...extra };
 }
-function page(search, stored = null, pageRecords = null) {
-  const ids = ["records-status", "records-table", "column-picker", "range-from", "range-to", "range-today", "range-day", "range-week", "view-range", "export-shown", "export-range", "newer-records", "older-records", "latest-records", "receipt-records", "timezone-label", "history-older", "history-newer", "history-panel", "history-list"];
+function page(search, stored = null, pageRecords = null, pageEvents = null) {
+  const eventReads = [];
+  const ids = ["records-status", "records-table", "column-picker", "range-from", "range-to", "range-custom", "range-custom-to", "range-8h", "range-today", "range-day", "range-week", "event-choice", "event-select", "export-shown", "export-range", "newer-records", "older-records", "latest-records", "receipt-records", "timezone-label", "history-older", "history-newer", "history-panel", "history-list"];
   const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
   const picker = elements["column-picker"];
   // The picker delegates: one listener sees the event from whichever control changed.
@@ -37,7 +38,7 @@ function page(search, stored = null, pageRecords = null) {
     querySelectorAll(selector) { return selector === "#column-picker input:checked" ? elements["column-picker"].inputs.filter(item => item.checked) : []; }
   };
   const fetch = async raw => {
-    const url = new URL(raw, "http://browser.test"); const query = url.searchParams; requests.push(Object.fromEntries(query));
+    const url = new URL(raw, "http://browser.test"); const query = url.searchParams; if (query.get("view") !== "events") requests.push(Object.fromEntries(query));
     let body;
     if (query.get("view") === "session") {
       if (query.get("session") === "empty000") body = { ...response(query, "unused"), status: "empty", records: [], nextCursor: null, previousCursor: null };
@@ -47,19 +48,21 @@ function page(search, stored = null, pageRecords = null) {
       else if (query.get("cursor") === "back-first") body = response(query, "session-first", { nextCursor: "after-first", previousCursor: "before-first" });
       else body = response(query, "session-first", { nextCursor: "after-first", previousCursor: "before-first" });
     } else if (query.get("view") === "receipt") body = response(query, "receipt-row", { source: "receipt-time-fallback", nextCursor: null, previousCursor: null });
+    else if (query.get("view") === "events") { eventReads.push(Object.fromEntries(query)); return { ok: true, json: async () => ({ status: "ok", events: pageEvents || [] }) }; }
     else if (query.get("view") === "export") return { ok: true, text: async () => "csv", headers: { get: () => "3" } };
-    else body = response(query, query.has("anchor") ? "observation-anchored" : "observation-row", { nextCursor: null, previousCursor: null, ...(pageRecords ? { records: pageRecords } : {}) });
+    else body = // A range ending now reads as the latest rows; one ending in the past is anchored.
+    response(query, query.has("anchor") && Date.parse(query.get("anchor")) < Date.now() - 3600000 ? "observation-anchored" : "observation-row", { nextCursor: null, previousCursor: null, ...(pageRecords ? { records: pageRecords } : {}) });
     return { ok: true, json: async () => body };
   };
   const downloads = [];
   document.createElement = () => ({ click() { downloads.push(this.download); } });
   class BrowserURL extends URL { static createObjectURL() { return "blob:test"; } static revokeObjectURL() {} }
-  const context = { URL: BrowserURL, URLSearchParams, Intl, Date, Promise, setImmediate, document, location: { search }, fetch, console, Blob: class {}, localStorage };
+  const context = { URL: BrowserURL, URLSearchParams, Intl, Date, Promise, setImmediate, setTimeout: (callback) => setImmediate(callback), clearTimeout: () => {}, document, location: { search }, fetch, console, Blob: class {}, localStorage };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "web", "record-reasons.js"), "utf8"), context, { filename: "web/record-reasons.js" });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "web", "records.js"), "utf8"), context, { filename: "web/records.js" });
   const saved = () => JSON.parse(store.get("recordBrowserColumns.v2") || "null");
-  return { elements, change, remove, saved, requests, downloads, store, ready: settle };
+  return { elements, change, remove, saved, requests, eventReads, downloads, store, ready: settle };
 }
 
 test("browser JavaScript preserves a populated session page at both boundaries", async () => {
@@ -84,8 +87,10 @@ test("browser JavaScript preserves a populated session page at both boundaries",
   assert.match(view.elements["records-table"].innerHTML, /session-first/);
   await view.elements["latest-records"].fire("click");
   assert.match(view.elements["records-table"].innerHTML, /observation-row/);
-  view.elements["range-from"].value = "2026-03-07T01:00"; view.elements["range-to"].value = "2026-03-08T01:00"; await view.elements["range-to"].fire("change"); await view.elements["view-range"].fire("click");
+  view.elements["range-from"].value = "2026-03-07T01:00"; view.elements["range-to"].value = "2026-03-08T01:00"; await view.elements["range-to"].fire("change");
   assert.match(view.elements["records-table"].innerHTML, /observation-anchored/);
+  assert.equal(view.requests.at(-1).anchor, new Date("2026-03-08T01:00:59.999").toISOString());
+  assert.equal(view.requests.at(-1).start, new Date("2026-03-07T01:00").toISOString());
   await view.elements["receipt-records"].fire("click");
   assert.match(view.elements["records-table"].innerHTML, /receipt-row/);
   assert.equal(view.requests.some(query => query.view === "session" && query.event === "E1"), true);
@@ -248,4 +253,63 @@ test("To follows now until edited, and Today starts at local midnight", async ()
   view.elements["range-to"].value = "2000-01-01T00:00";
   await view.elements["export-range"].fire("click");
   assert.ok(Math.abs(new Date(view.elements["range-to"].value) - now) < 120000, "an untouched To is refreshed to now at export");
+});
+
+const current = view => Object.entries(view.elements).filter(([, element]) => element.classes.has("is-current")).map(([id]) => id);
+
+test("one choice sets the rows, and it is the one marked current", async () => {
+  const view = page(""); await view.ready();
+  assert.deepEqual(current(view), ["range-day"], "Last 24 h is the default");
+  const first = view.requests[0];
+  assert.ok(Math.abs(Date.parse(first.start) - (Date.now() - 86400000)) < 120000);
+  assert.equal(first.filter, "all");
+  assert.equal(view.eventReads.length, 1, "the Event list follows the range");
+  await view.elements["range-8h"].fire("click");
+  assert.deepEqual(current(view), ["range-8h"]);
+  assert.ok(Math.abs(Date.parse(view.requests.at(-1).start) - (Date.now() - 8 * 3600000)) < 120000);
+  assert.equal(view.eventReads.at(-1).start, view.requests.at(-1).start);
+  view.elements["range-from"].value = "2026-09-25T02:00"; await view.elements["range-from"].fire("change");
+  assert.deepEqual(current(view), ["range-custom", "range-custom-to"]);
+  assert.equal(view.requests.at(-1).start, new Date("2026-09-25T02:00").toISOString());
+  await view.change("filter", "changes");
+  assert.equal(view.requests.at(-1).filter, "changes", "the server filters, so a page fills to 50");
+  await view.elements["receipt-records"].fire("click");
+  assert.deepEqual(current(view), ["receipt-records"]);
+});
+
+const occurrences = [
+  { eventDefinitionId: "P001", displayName: "Pump started", severity: "Info", sessionId: "boot_fb568cf3c8c0", cycleSequence: 27996, observedAt: "2026-09-25T12:48:41.000Z", firstReportedAt: "2026-09-25T12:48:47.000Z" },
+  { eventDefinitionId: "W09", displayName: "Pump power", severity: "Warning", sessionId: "boot_fb568cf3c8c0", cycleSequence: 27997, observedAt: "2026-09-25T12:48:43.000Z", firstReportedAt: "2026-09-25T12:48:49.000Z" }
+];
+
+test("the Event list offers the range's events and opens one like an event link", async () => {
+  const view = page("", null, null, occurrences); await view.ready();
+  const select = view.elements["event-select"];
+  assert.match(select.innerHTML, /Events in this range \(2\)/);
+  assert.match(select.innerHTML, /<option value="0">[^<]*Pump started \(P001\)/);
+  select.value = "1"; await select.fire("change");
+  const opened = view.requests.at(-1);
+  assert.deepEqual([opened.view, opened.session, opened.cycle, opened.event], ["session", "boot_fb568cf3c8c0", "27997", "W09"]);
+  assert.deepEqual(current(view), ["event-choice"]);
+  assert.match(select.innerHTML, /<option value="1" selected>/);
+  // In event view the export covers the rows on screen.
+  await view.elements["export-range"].fire("click");
+  const exported = view.requests.at(-1);
+  assert.equal(exported.view, "export");
+  assert.equal(exported.start, "2026-03-08T01:00:00.000Z");
+  // Latest leaves the event for the range it came from.
+  await view.elements["latest-records"].fire("click");
+  assert.deepEqual(current(view), ["range-day"]);
+  assert.equal(view.requests.at(-1).view, undefined);
+});
+
+test("an event link opens marked as the current event, and As shown exports the filter too", async () => {
+  const view = page("?session=session001&cycle=4&event=E1"); await view.ready();
+  assert.deepEqual(current(view), ["event-choice"]);
+  assert.match(view.elements["event-select"].innerHTML, /<option value="link" selected>Linked event E1/);
+  await view.elements["range-today"].fire("click");
+  view.elements["export-shown"].checked = true; await view.change("filter", "events");
+  await view.elements["export-range"].fire("click");
+  assert.equal(view.requests.at(-1).filter, "events");
+  assert.ok(view.requests.at(-1).columns);
 });
