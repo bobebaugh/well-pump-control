@@ -484,8 +484,8 @@ function runTimeText(seconds) {
 }
 
 // The tiles are always the last 24 hours whatever the chart is showing, so they
-// read off the day series rather than the selected window. Energy is absent by
-// necessity: ShellyEnergyWh is logging mode "none", so no record carries it.
+// read off the day series rather than the selected window. Energy has its own
+// chart view rather than a tile.
 // The newest run in the day's records, or the week's if the day had none.
 function renderLastRun() {
   const lastRun = document.querySelector("#last-run");
@@ -518,6 +518,12 @@ function renderDayStats() {
   statRun.textContent = runTimeText(totals.runSeconds);
 }
 
+// The latest hour or day with a running reading, as the chart groups them.
+function loadHero(data) {
+  const points = HistoryChart.points(data, "load", historyWindow).filter(point => Number.isFinite(point.value));
+  return points.length ? `${points.at(-1).value.toFixed(1)}%` : "\u2014";
+}
+
 function renderHistory() {
   const data = historyData[historyWindow];
   const spec = HistoryChart.VIEWS[historyView];
@@ -531,7 +537,11 @@ function renderHistory() {
     ? (totals.latestGallons === null ? "\u2014" : `${totals.latestGallons} gal`)
     : historyView === "used"
       ? `${totals.usedGallons ?? 0} gal`
-      : `${totals.starts ?? 0}`;
+      : historyView === "energy"
+        ? `${totals.energyKWh ?? 0} kWh`
+        : historyView === "load"
+          ? loadHero(data)
+          : `${totals.starts ?? 0}`;
   HistoryChart.mount(historyChart, data, historyView, historyWindow);
   historyCaption.textContent = HistoryChart.caption(data, historyView);
 }

@@ -160,6 +160,8 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
   --chart-level: #2b87e0;
   --chart-used: #33a866;
   --chart-starts: #c2882a;
+  --chart-energy: #8f6fd8;
+  --chart-load: #d0598a;
 }
 .hero { font-size: 1.45rem; font-weight: 600; letter-spacing: -.01em; color: var(--text); }
 .chart-controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; margin-top: 16px; }
@@ -201,6 +203,9 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
 .hc-bar.hc-gallons { fill: var(--chart-level); stroke: none; }
 .hc-bar.hc-used { fill: var(--chart-used); stroke: none; }
 .hc-bar.hc-starts { fill: var(--chart-starts); stroke: none; }
+.hc-bar.hc-energy { fill: var(--chart-energy); stroke: none; }
+.hc-line.hc-load { stroke: var(--chart-load); fill: none; }
+.hc-dot.hc-load { fill: var(--chart-load); stroke: none; }
 .hc-hit { cursor: crosshair; }
 .hc-tip {
   position: absolute; top: 6px; padding: 5px 9px; border: 1px solid var(--line);

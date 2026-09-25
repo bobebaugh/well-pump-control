@@ -9,10 +9,10 @@
 // tank level, water used and pump starts without interpolating between fields
 // that were sampled at different instants.
 //
-// Two fields are deliberately unavailable here: ShellyEnergyWh and
-// PressureADCCounts are both logging mode "none" in the live package, so no
-// record has ever carried them. Energy totals are not computable until that
-// changes.
+// ShellyEnergyWh, the meter's running total, is carried by current records
+// (every record on 2026-09-25 had it), so energy per bucket is the rise in that
+// total. Older records without it simply contribute nothing. The total resets
+// when the meter restarts; a fall is skipped rather than counted as negative.
 
 // The pump is on or off; there is no in between. Idle at the well head is about
 // 12 W of network gear and the motor runs at about 2900 W, so one threshold
@@ -147,7 +147,9 @@ function sampleFromRecord(record, model) {
   let gallons = numberOrNull(recordField(record, "TankWaterGallons"));
   if (gallons === null) gallons = tankWaterGallons(recordField(record, "PressurePSI"), model);
   return { timeMs, gallons, psi: samplePsi(record, gallons, model),
-           watts: numberOrNull(recordField(record, "PumpWatts")) };
+           watts: numberOrNull(recordField(record, "PumpWatts")),
+           energyWh: numberOrNull(recordField(record, "ShellyEnergyWh")),
+           loadRatio: numberOrNull(recordField(record, "LoadRatioPercent")) };
 }
 
 // Tank pressure per sample, for evaluating the delivery curve. PressurePSI is
@@ -295,7 +297,10 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
     gallons: null,
     used: 0,
     starts: 0,
-    runSeconds: 0
+    runSeconds: 0,
+    energyWh: 0,
+    loadSum: 0,
+    loadCount: 0
   }));
 
   let previous = null;
@@ -323,6 +328,9 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
       previous.watts >= PUMP_RUNNING_WATTS;
 
     if (previous) {
+      if (Number.isFinite(previous.energyWh) && Number.isFinite(sample.energyWh) && sample.energyWh > previous.energyWh) {
+        spread(buckets, startMs, bucketMs, previous.timeMs, sample.timeMs, sample.energyWh - previous.energyWh, "energyWh");
+      }
       if (wasRunning) {
         spread(buckets, startMs, bucketMs, previous.timeMs, sample.timeMs,
                (sample.timeMs - previous.timeMs) / 1000, "runSeconds");
@@ -357,7 +365,12 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
       if (run && run.stopMs === null) {
         run.maxGapMs = Math.max(run.maxGapMs, sample.timeMs - run.lastMs);
         run.lastMs = sample.timeMs;
-        if (stillRunning) { run.wattsSum += sample.watts; run.wattsCount += 1; if (sample.psi !== null) run.tripPsi = sample.psi; }
+        if (stillRunning) {
+          run.wattsSum += sample.watts; run.wattsCount += 1;
+          if (sample.psi !== null) run.tripPsi = sample.psi;
+          // Load is only meaningful while the motor runs; idle it reads well-head gear.
+          if (Number.isFinite(sample.loadRatio) && index >= 0 && index < count) { buckets[index].loadSum += sample.loadRatio; buckets[index].loadCount += 1; }
+        }
         else run.stopMs = sample.timeMs;
       }
       if (stillRunning && !running) {
@@ -435,12 +448,16 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
       gallons: bucket.gallons === null ? null : round(bucket.gallons, 2),
       used: round(bucket.used, 3),
       starts: round(bucket.starts, 0),
-      runSeconds: round(bucket.runSeconds, 1)
+      runSeconds: round(bucket.runSeconds, 1),
+      energyKWh: round(bucket.energyWh / 1000, 4),
+      loadRatio: bucket.loadCount ? round(bucket.loadSum / bucket.loadCount, 1) : null,
+      loadCount: bucket.loadCount
     })),
     totals: {
       usedGallons: round(buckets.reduce((sum, bucket) => sum + bucket.used, 0), 1),
       starts: startsTotal,
       runSeconds: round(buckets.reduce((sum, bucket) => sum + bucket.runSeconds, 0), 0),
+      energyKWh: round(buckets.reduce((sum, bucket) => sum + bucket.energyWh, 0) / 1000, 2),
       latestGallons: ordered.length ? round(ordered.at(-1).gallons, 1) : null,
       latestAtMs: ordered.length ? ordered.at(-1).timeMs : null
     },

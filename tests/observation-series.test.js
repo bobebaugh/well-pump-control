@@ -526,3 +526,21 @@ test("a run with a silence inside it is marked incomplete, and one still going h
   assert.equal(running.running, true);
   assert.equal(running.seconds, null);
 });
+
+test("energy is the rise in the meter's total, skipping a reset, and load averages only running readings", () => {
+  const startMs = Date.parse("2026-09-25T12:00:00Z");
+  const at = minutes => startMs + minutes * 60000;
+  const samples = [
+    { timeMs: at(1), watts: 12, psi: 44, gallons: 9, energyWh: 1000, loadRatio: 0.4 },
+    { timeMs: at(2), watts: 2950, psi: 44, gallons: 9, energyWh: 1002, loadRatio: 101.8 },
+    { timeMs: at(3), watts: 2930, psi: 50, gallons: 15, energyWh: 1050, loadRatio: 101.0 },
+    { timeMs: at(4), watts: 12, psi: 60, gallons: 24, energyWh: 1100, loadRatio: 0.4 },
+    { timeMs: at(6), watts: 12, psi: 60, gallons: 24, energyWh: 3, loadRatio: 0.4 },
+    { timeMs: at(7), watts: 12, psi: 60, gallons: 24, energyWh: 5, loadRatio: 0.4 }
+  ];
+  const series = buildSeries(samples, { startMs, endMs: startMs + 3600000, bucketMs: 300000 });
+  assert.equal(series.totals.energyKWh, 0.1, "1000 -> 1100 Wh, then the reset is skipped and 3 -> 5 adds 2 Wh");
+  assert.equal(series.buckets[0].loadRatio, 101.4);
+  assert.equal(series.buckets[0].loadCount, 2);
+  assert.equal(series.buckets[1].loadRatio, null);
+});

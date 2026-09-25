@@ -125,3 +125,19 @@ test("the rendered SVG reports emptiness so the page can explain it", () => {
 test("markup is escaped, since labels come from Intl and flow into HTML", () => {
   assert.equal(chart.escape('<b>&"'), "&lt;b&gt;&amp;&quot;");
 });
+
+test("load groups as a weighted average of running readings and zooms its axis to them", () => {
+  const buckets = [
+    { startMs: 0, loadRatio: 101, loadCount: 3, energyKWh: 0.01 },
+    { startMs: 1, loadRatio: null, loadCount: 0, energyKWh: 0.02 },
+    { startMs: 2, loadRatio: 102, loadCount: 1, energyKWh: 0.03 }
+  ];
+  const [load] = chart.groupBuckets(buckets, 3, "loadRatio");
+  assert.equal(load.value, 101.25);
+  const [energy] = chart.groupBuckets(buckets, 3, "energyKWh");
+  assert.equal(Number(energy.value.toFixed(2)), 0.06);
+  const scale = chart.axis([{ value: 100.5 }, { value: null }, { value: 102.4 }], { floor: true });
+  assert.ok(scale.min > 90 && scale.min <= 100.5, `min ${scale.min}`);
+  assert.ok(scale.max >= 102.4 && scale.max < 110, `max ${scale.max}`);
+  assert.equal(chart.axis([{ value: 3 }]).min, 0, "other views still start at zero");
+});

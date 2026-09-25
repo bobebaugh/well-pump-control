@@ -139,9 +139,9 @@ function createHandler(dependencies = {}) {
       // observed, so nothing downstream has to assume 40/60.
       delivery: { basis: curve.basis, bands: curve.bands,
                   gpmAt50Psi: Number((curve.intercept + curve.slopePerPsi * 50).toFixed(2)) },
-      // ShellyEnergyWh is logging mode "none" in the live package, so no record
-      // has ever carried it and energy cannot be totalled from history.
-      energyAvailable: false,
+      // Energy is the rise in the meter's ShellyEnergyWh total; false when no
+      // record in the window carried it.
+      energyAvailable: page.records.some(record => record?.fields?.ShellyEnergyWh?.state === "available"),
       // The one check the gallons output cannot provide: it is computed from
       // the stored precharge, so it can never contradict it. Cut-in can.
       prechargeCheck: prechargeCheck(model, series.pressureSwitch),

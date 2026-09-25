@@ -15,13 +15,19 @@ const HistoryChart = (function () {
   const GROUPING = {
     gallons: { "1d": 1, "7d": 1 },
     used: { "1d": 12, "7d": 6 },
-    starts: { "1d": 12, "7d": 24 }
+    starts: { "1d": 12, "7d": 24 },
+    energy: { "1d": 12, "7d": 24 },
+    load: { "1d": 12, "7d": 24 }
   };
 
   const VIEWS = {
     gallons: { key: "gallons", title: "Tank water", unit: "gal", mark: "line", decimals: 1 },
     used: { key: "used", title: "Water used", unit: "gal", mark: "bar", decimals: 1 },
-    starts: { key: "starts", title: "Pump starts", unit: "starts", mark: "bar", decimals: 0 }
+    starts: { key: "starts", title: "Pump starts", unit: "starts", mark: "bar", decimals: 0 },
+    energy: { key: "energyKWh", title: "Energy", unit: "kWh", mark: "bar", decimals: 2 },
+    // Load sits near 100% and matters only as a drift, so its axis is zoomed to
+    // the readings, and each hour or day with a run is a dot rather than a bar.
+    load: { key: "loadRatio", title: "Pump load", unit: "%", mark: "line", decimals: 1, floor: true, dots: true }
   };
 
   function groupBuckets(buckets, factor, key) {
@@ -31,9 +37,13 @@ const HistoryChart = (function () {
       const slice = buckets.slice(index, index + factor);
       // A level is a state: the group takes the last reading it actually has, and
       // stays null when the whole group was silent. A flow is a sum.
+      // Load is an average over the running readings, weighted by how many.
+      const loaded = slice.filter(item => item.loadRatio !== null && item.loadRatio !== undefined && item.loadCount > 0);
       const value = key === "gallons"
         ? (slice.filter(item => item.gallons !== null).at(-1)?.gallons ?? null)
-        : slice.reduce((sum, item) => sum + item[key], 0);
+        : key === "loadRatio"
+          ? (loaded.length ? loaded.reduce((sum, item) => sum + item.loadRatio * item.loadCount, 0) / loaded.reduce((sum, item) => sum + item.loadCount, 0) : null)
+          : slice.reduce((sum, item) => sum + (item[key] ?? 0), 0);
       grouped.push({ startMs: slice[0].startMs, value });
     }
     return grouped;
@@ -59,15 +69,28 @@ const HistoryChart = (function () {
     return integer ? Math.max(1, Math.round(step)) : step;
   }
 
-  function axis(points, { integer = false } = {}) {
+  function axis(points, { integer = false, floor = false } = {}) {
+    if (floor) {
+      // Zoomed to the readings, with at least four units of span so a steady
+      // value does not magnify noise into a trend.
+      const values = points.map(point => point.value).filter(Number.isFinite);
+      if (values.length) {
+        const low = Math.min(...values); const high = Math.max(...values);
+        const step = niceStep(Math.max(high - low, 4), false);
+        const min = Math.floor((low - step / 2) / step) * step;
+        const top = Math.ceil((high + step / 2) / step) * step;
+        const count = Math.round((top - min) / step);
+        return { min, max: top, ticks: Array.from({ length: count + 1 }, (unused, index) => Number((min + step * index).toFixed(6))) };
+      }
+    }
     const max = Math.max(0, ...points.map(point => point.value ?? 0));
-    if (max <= 0) return { max: integer ? 4 : 1, ticks: integer ? [0, 1, 2, 3, 4] : [0, 0.25, 0.5, 0.75, 1] };
+    if (max <= 0) return { min: 0, max: integer ? 4 : 1, ticks: integer ? [0, 1, 2, 3, 4] : [0, 0.25, 0.5, 0.75, 1] };
     const step = niceStep(max, integer);
     // Strictly above the maximum, always: a mark that touches the ceiling reads
     // as clipped, and the direct label on the peak has nowhere to sit.
     const divisions = Math.floor(max / step) + 1;
     const top = step * divisions;
-    return { max: top, ticks: Array.from({ length: divisions + 1 }, (unused, index) => Number((step * index).toFixed(6))) };
+    return { min: 0, max: top, ticks: Array.from({ length: divisions + 1 }, (unused, index) => Number((step * index).toFixed(6))) };
   }
 
   function plot(width) {
@@ -76,10 +99,10 @@ const HistoryChart = (function () {
 
   // Null is a gap, not a zero: where reporting went silent the trace breaks
   // instead of drawing a straight line through the missing time.
-  function linePath(points, area, max) {
+  function linePath(points, area, max, min = 0) {
     const step = area.width / Math.max(1, points.length - 1);
     const at = index => area.x + index * step;
-    const level = value => area.y + area.height - (value / max) * area.height;
+    const level = value => area.y + area.height - ((value - min) / (max - min)) * area.height;
     const segments = [];
     let current = [];
     points.forEach((point, index) => {
@@ -165,15 +188,15 @@ Object.assign(HistoryChart, (function () {
     const spec = VIEWS[view];
     const series = points(data, view, windowKey);
     const area = plot(width);
-    const scale = axis(series, { integer: view === "starts" });
-    const level = value => area.y + area.height - (value / scale.max) * area.height;
+    const scale = axis(series, { integer: view === "starts", floor: spec.floor === true });
+    const level = value => area.y + area.height - ((value - scale.min) / (scale.max - scale.min)) * area.height;
     const parts = [];
 
     for (const tick of scale.ticks) {
       const y = level(tick).toFixed(1);
       parts.push(`<line class="hc-grid" x1="${area.x}" y1="${y}" x2="${area.x + area.width}" y2="${y}"/>`);
       parts.push(`<text class="hc-axis" x="${area.x - 8}" y="${y}" dy="0.32em" text-anchor="end">${
-        view === "starts" ? tick : Number(tick.toFixed(1))}</text>`);
+        view === "starts" ? tick : Number(tick.toFixed(Math.max(1, spec.decimals)))}</text>`);
     }
 
     let maxIndex = -1;
@@ -182,11 +205,19 @@ Object.assign(HistoryChart, (function () {
     });
 
     if (spec.mark === "line") {
-      const segments = linePath(series, area, scale.max);
-      for (const path of areaPath(segments, area)) {
-        parts.push(`<path class="hc-area hc-${view}" d="${path}"/>`);
+      const segments = linePath(series, area, scale.max, scale.min);
+      if (!spec.dots) {
+        for (const path of areaPath(segments, area)) {
+          parts.push(`<path class="hc-area hc-${view}" d="${path}"/>`);
+        }
       }
       for (const path of segments) parts.push(`<path class="hc-line hc-${view}" d="${path}"/>`);
+      if (spec.dots) {
+        const step = area.width / Math.max(1, series.length - 1);
+        series.forEach((point, index) => {
+          if (Number.isFinite(point.value)) parts.push(`<circle class="hc-dot hc-${view}" cx="${(area.x + index * step).toFixed(1)}" cy="${level(point.value).toFixed(1)}" r="3.5"/>`);
+        });
+      }
     } else {
       for (const bar of bars(series, area, scale.max)) {
         if (!(bar.value > 0)) continue;
@@ -247,6 +278,8 @@ Object.assign(HistoryChart, (function () {
       ? `<div class="hc-empty"><strong>Nothing recorded yet</strong><span>${escape(
           view === "starts"
             ? "Pump starts appear as soon as the first cycle is logged."
+            : view === "energy" ? "Energy appears once records carry the meter's energy total."
+            : view === "load" ? "Pump load appears once a run is recorded in this window."
             : "Tank readings begin when the pressure sensor started reporting; earlier records cannot be back-filled.")
         }</span></div>`
       : "";
@@ -298,6 +331,13 @@ Object.assign(HistoryChart, (function () {
       parts.push(data.delivery?.basis === "window"
         ? `pump delivery fitted from ${data.delivery.bands} pressure bands in this window`
         : "pump delivery from the qualification fill, too few cycles here to fit");
+    } else if (view === "energy") {
+      parts.push(`${totals.energyKWh ?? 0} kWh from the meter's running total`);
+      parts.push("includes the idle draw of the well-head equipment");
+    } else if (view === "load") {
+      const runs = (data.runs || []).length;
+      parts.push("Average LoadRatioPercent while the pump ran");
+      parts.push(runs ? "a steady drift over weeks is the signal; one reading is not" : "no run in this window");
     } else {
       parts.push(`${totals.starts ?? 0} start${totals.starts === 1 ? "" : "s"}`);
       if (totals.runSeconds) parts.push(`${Math.round(totals.runSeconds / 60)} min running`);
