@@ -56,9 +56,10 @@ restarted, then opened, closed and emailed normally. pilot-working now rejects n
 event display names and enum choices at Validate/Publish, and the notifier sends each
 event's own Notify on open/close and Open/Close message from the release on the record,
 with the criteria table only as fallback. Promoted to pilot on the owner's direction, so
-both are live on the device path. Until the package is republished with plain names, W04,
-W06, W07, W08 and E006 still carry em dashes on the Tab5; a latched W07 would block every
-board. The owner will publish the corrected rules from the pilot deploy's editor.
+both are live on the device path. The owner republished the rules with plain names:
+checked 25 September, published v46's display names and runtime package are ASCII. Em dashes
+remain only in the events' notification messages (web open/close text), which never reach
+the Tab5 but make a text message use the shorter UCS-2 segment.
 
 ## On pilot, not yet on main
 
