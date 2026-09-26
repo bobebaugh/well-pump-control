@@ -81,6 +81,34 @@ goes stale. Measured shape on 25 September 2026: about 100-250 records a day.
 - **Check first:** whether the Firebase project is on the free (Spark) plan. There a
   day over 50,000 reads makes screens fail until the quota resets, not just cost more.
 
+## Dashboard and rules follow-ups from the 26 September well test
+
+Source: the owner's well-head flow test (details kept outside the repo). Software items only.
+
+- **Replace the Pump load view with a fill-time trend.** Pump watts moved about 2 % over
+  roughly 90 ft of drawdown, so load is a motor check, not a level indicator. The time to
+  fill 40-60 psi (or 50-60 psi, less disturbed by a flush at cut-in) tracks pump flow
+  without the tank model: 89-93 s on normal days, 114 s with the well drawn down. Plot the
+  day's fastest clean fill; mark runs with draw before start or after stop. Built from the
+  records observation-series already reads.
+- **Tank model:** calibrate against a bucket drain between static pressures, then adjust the
+  Boyle parameters (79.3 gal, 38 psi precharge; the tank was replaced with a same-size unit,
+  precharge to confirm). Use one delivery curve for both day and week views (the same run
+  showed 22.5 and 29.3 gal delivered).
+- **Pressure sensor range:** the ADC fit is qualified for about 40-61 psi; the test ran at
+  10-42 psi and gauges disagreed by about 3 psi at 60. Qualify at more points before relying
+  on low-pressure readings.
+- **Logging for tests:** PressurePSI rides along only; below the precharge (tank empty)
+  pressure changes write no records. A temporary 0.5 psi delta is a package change + restart.
+- **Rules:** P013's name says six minutes but opens at 3,600 s; W09 is at a 3,600 W test
+  setting (intended 2,600 W); E007 (266 V at the EM) is above the motor's 253 V terminal
+  limit, and the EM reads 6-8 V above the motor under load; define pump load against the
+  13.2 A service-factor amps. Owner decisions in the rules editor.
+- **Hand mode reading:** in Hand the contactor signal reads on without the pump running;
+  watts is the running indicator. The screens should not label Hand-idle as running.
+- **Shelly EM vs clamp:** the EM-derived current read about 6 % above a clamp meter at the
+  Franklin box; both within rating. Note before treating EM watts as motor input.
+
 ## Owner password and device credential
 
 The owner password checked by the browser-called functions is the same
