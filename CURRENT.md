@@ -229,6 +229,13 @@ Owner tasks, no code:
   the same day. Repeat both briefly in step E if the visit allows.
 - Caretaker card. No water: power-cycle the Tab5. Still none: selector to Hand. The Tab5
   hold has no time limit, so a Tab5 that stops while holding keeps holding (#4).
+- Network, the owner's largest freeze risk: the UniFi system as a whole, not its DHCP.
+  The Tab5 cannot change during the freeze, but UniFi can change underneath it. Before
+  the soak, turn off or schedule automatic firmware updates, and settle the settings
+  that can drop or steer a weak client: nightly channel optimization, minimum RSSI and
+  band steering on the Tab5's network. Short router outages are covered by the outage
+  tests and the silent-device alert; a settings change that keeps the Tab5 off Wi-Fi is
+  not, except through that alert.
 - Freeze contract: keep the Shelly DHCP reservations and PILOT_INGEST_TOKEN. Check the
   Netlify credit allowance against about 145,000 device function calls a month. Web
   requests cost 2 credits per 10,000 plus function compute, on branch and production
