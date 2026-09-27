@@ -224,6 +224,10 @@ Owner tasks, no code:
   screen saves little. Open: lengthen the event-board heartbeat in the final install
   (the home page calls a board stale after 120 s, so that changes with it), or move to
   a paid plan for the freeze.
+  Firebase is on Blaze and does not pause. Owner's screenshots, 27 Sep: about $4-5 a
+  month, almost all Realtime Database download bandwidth (3.6 GB in 7 days), flat since
+  1 September, so it does not depend on anyone viewing. Firestore, 20-27 Sep: 458K
+  reads (peak 160K a day during dashboard work), 39K writes, 13K deletes; pennies.
 
 Live readings need no change for the freeze. With no one watching, the Tab5 posts on a
 material power or voltage change or a 60-second heartbeat; 1 Hz runs only while a
