@@ -105,7 +105,14 @@ settings are authoring only; publish rules from the pilot deploy until main foll
 ## On pilot-working, not yet on pilot
 
 Keep this list current on every pilot-working change and move rows to the table above
-when pilot is advanced. Nothing is waiting: pilot and pilot-working carry the same source.
+when pilot is advanced.
+
+| pilot-working commit | Change | Kind |
+|---|---|---|
+| 968af5f | Records page row detail shows the cause a Tab5 M6.44 record carries when CloudAvailable goes false; durable-observation-v2 documents the optional cause | screen (records) + interface doc |
+
+968af5f changes nothing visible until Tab5 M6.44 is installed: older records carry no
+cause and read as before. Ingest already accepted extra reason keys.
 
 ## Maintenance baseline
 
