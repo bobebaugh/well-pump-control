@@ -162,20 +162,31 @@ Device work, one install from tab5-working:
    pilot's device functions working until the freeze, as the rollback for the old
    device files. Checked 27 Sep: main's five device endpoints reject an unauthenticated
    POST with 401 and main reads Firestore and RTDB.
+6. Not started: re-send an unchanged event board every 30 minutes instead of 30 s
+   (EVENT_BOARD_HEARTBEAT_MS), approved 27 September to save Netlify credits. A change
+   in open events is still sent at once, the first board after boot is still sent at
+   once, and cloud.py still retries an undelivered board, so boards and notifications
+   are unaffected. The re-send's remaining job is recovery after the cloud permanently
+   rejects a board and is then fixed: up to 30 minutes' wait. Calls fall from 2,880 to
+   48 a day.
 
 Cloud work on pilot-working:
 
-6. Not started: silent-device alert. A scheduled function runs every 15 minutes. It
+7. Not started: silent-device alert. A scheduled function runs every 15 minutes. It
    sends one message when the newest durable record is over 30 minutes old, and one
    when records resume. Netlify runs scheduled functions only on production, so it goes
    live with main's deploy. The internet outage test is its first live check.
-7. Not started: the heap-stat catalog entry and simulator support for item 2.
+8. Not started: the heap-stat catalog entry and simulator support for item 2.
+9. Not started: the home page's events panel follows the live reading instead of the
+   board's age. While the reading is fresh the board is current, since changes are sent
+   at once; when it is stale, say the open events are as of the Tab5's last report.
+   Today it calls a board stale after 120 s, which a 30-minute re-send would trip.
 
 Sequence. Pilot is a branch deploy and costs no Netlify credits; each main production
 deploy costs 15, so main moves once.
 
 - A. Owner: CPU A containment approved 27 September (item 3).
-- B. Build items 2-7 on the working branches.
+- B. Build items 2-9 on the working branches.
 - C. Promote pilot-working to pilot, then fast-forward main to pilot: the single main
   deploy. Main (69601cc) is 27 commits behind pilot, including the device-facing
   event-board and notifier change af8d8e2 and the dashboard changes f0acaa4-46d19ca.
@@ -221,9 +232,7 @@ Owner tasks, no code:
   that pace, mostly function compute. Pilot's last 24 h: event-board 2.8K calls
   (30-second heartbeat), ingest-power 1.4K (60-second heartbeat), ingest-record 254;
   by count times median duration the device is about 90% of that compute, so an idle
-  screen saves little. Open: lengthen the event-board heartbeat in the final install
-  (the home page calls a board stale after 120 s, so that changes with it), or move to
-  a paid plan for the freeze.
+  screen saves little. Items 6 and 9 cut the largest caller, event-board, by about 98%.
   Firebase is on Blaze and does not pause. Owner's screenshots, 27 Sep: about $4-5 a
   month, almost all Realtime Database download bandwidth (3.6 GB in 7 days), flat since
   1 September, so it does not depend on anyone viewing. Firestore, 20-27 Sep: 458K
