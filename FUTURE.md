@@ -78,8 +78,9 @@ goes stale. Measured shape on 25 September 2026: about 100-250 records a day.
   function reply is capped at 6 MB; full records are about 3 KB) or keep only the
   fields the screens use and fetch a full record when a row is opened. Event-open
   records are immutable; open occurrences must still be re-checked for their close.
-- **Check first:** whether the Firebase project is on the free (Spark) plan. There a
-  day over 50,000 reads makes screens fail until the quota resets, not just cost more.
+- **Plan checked:** the owner confirmed on 27 September 2026 that the Firebase project is
+  on a paid plan, so a day over the free 50,000 reads costs more rather than failing
+  screens. The items above are cost savings, not reliability fixes.
 
 ## Dashboard and rules follow-ups from the 26 September well test
 
