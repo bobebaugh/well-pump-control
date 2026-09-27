@@ -437,8 +437,15 @@ function renderObservation(data) {
     if (Number.isFinite(values.powerW)) powerValue.textContent = values.powerW.toFixed(0);
     if (Number.isFinite(values.voltageV)) voltageValue.textContent = values.voltageV.toFixed(1);
     if (Number.isFinite(values.powerFactor)) pfValue.textContent = values.powerFactor.toFixed(2);
-    if (typeof shelly1.sw0 === "boolean") setBinaryValue(sw0Value, shelly1.sw0);
-    if (typeof shelly1.rly0 === "boolean") setBinaryValue(rly0Value, shelly1.rly0);
+    // Only display Shelly 1 relay state if the device is actually available
+    if (shelly1.available === true) {
+      if (typeof shelly1.sw0 === "boolean") setBinaryValue(sw0Value, shelly1.sw0);
+      if (typeof shelly1.rly0 === "boolean") setBinaryValue(rly0Value, shelly1.rly0);
+    } else {
+      // Clear Shelly 1 relay state when device is offline
+      setBinaryValue(sw0Value, null);
+      setBinaryValue(rly0Value, null);
+    }
   }
 
   // The badge and these rows read the same record as everything above, so the
