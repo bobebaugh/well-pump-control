@@ -28,6 +28,13 @@ test("each reason reads in plain words from what the record stored", () => {
   assert.match(reasons.detail(health), /maximum interval 600 s/);
 });
 
+test("a cloud loss shows the cause the Tab5 recorded, and only that", () => {
+  const withCause = { ...cloudLost, cause: "rtdb operator-command [Errno 116] ETIMEDOUT" };
+  assert.equal(reasons.label(withCause), "Cloud lost");
+  assert.equal(reasons.detail(withCause), "Cloud lost: CloudAvailable changed true → false · cause: rtdb operator-command [Errno 116] ETIMEDOUT");
+  assert.doesNotMatch(reasons.detail(cloudLost), /cause/);
+});
+
 test("the short label leads with an event, then a change, and counts the rest", () => {
   assert.equal(reasons.short([watts, tank, { kind: "change", field: "ContactorFlag", from: true, to: false }, { ...pumpOpen, transition: "close" }]), "P001 closed +3");
   assert.equal(reasons.short([health]), "Health");

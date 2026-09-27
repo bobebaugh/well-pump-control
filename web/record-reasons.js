@@ -3,7 +3,7 @@
 // Plain-language names for the reasons a durable record was written. The page
 // and the CSV export both use this file, so the Reasons column and the CSV's
 // reasonSummary always say the same thing. Everything is read from the stored
-// reason itself (field, from, to, threshold, event key); nothing is inferred.
+// reason itself (field, from, to, threshold, event key, cause); nothing is inferred.
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api; else root.RecordReasons = api;
@@ -51,7 +51,7 @@
     if (reason.kind === "maximum-interval") return `Ten-minute health record${Number.isFinite(reason.intervalMs) ? ` (maximum interval ${reason.intervalMs / 1000} s)` : ""}`;
     if (reason.kind === "session-start") return "First record after the Tab5 started";
     if (reason.kind === "event-boundary") return `Event ${reason.eventKey || "?"} ${reason.transition === "open" ? "opened" : reason.transition === "close" ? "closed" : text(reason.transition)}${reason.occurrenceId ? ` · occurrence ${reason.occurrenceId}` : ""}`;
-    if (reason.kind === "change") return `${label(reason)}: ${reason.field} changed ${text(reason.from)} → ${text(reason.to)}`;
+    if (reason.kind === "change") return `${label(reason)}: ${reason.field} changed ${text(reason.from)} → ${text(reason.to)}${typeof reason.cause === "string" && reason.cause ? ` · cause: ${reason.cause}` : ""}`;
     if (reason.kind === "delta") return `${reason.field} ${text(reason.from)} → ${text(reason.to)}${typeof reason.to === "number" && typeof reason.from === "number" ? ` (Δ ${signed(reason.to - reason.from)}` : " ("}${reason.threshold !== undefined ? `, threshold ${text(reason.threshold)})` : ")"}`;
     return JSON.stringify(reason);
   }
