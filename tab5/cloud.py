@@ -1,4 +1,4 @@
-# Release: 2026-09-13 M6.37 — repaired short-lived operator command transport.
+# Release: 2026-09-27 M6.44 — record why a telemetry or RTDB call failed.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -394,8 +394,13 @@ def _format_timestamp_utc():
         t[0], t[1], t[2], t[3], t[4], t[5])
 
 
+_last_publish_failure = None
+
+
 def _publish_observation(observation, reason):
     """Publish one record and return (success, reported_monitoring_state)."""
+    global _last_publish_failure
+    _last_publish_failure = None
     values = observation.get('values', {})
     body = {
         'schemaVersion': 1,
@@ -426,6 +431,7 @@ def _publish_observation(observation, reason):
             except Exception:
                 detail = ''
             log('Netlify HTTP {} {}'.format(response.status_code, detail))
+            _last_publish_failure = 'HTTP {}'.format(response.status_code)
         monitoring_active = None
         if ok:
             try:
@@ -441,6 +447,7 @@ def _publish_observation(observation, reason):
         return ok, monitoring_active
     except Exception as e:
         log('Netlify publish error: {}'.format(e))
+        _last_publish_failure = str(e)
         return False, None
 
 
@@ -463,9 +470,11 @@ _transport_status = {
     'telemetryLastAttemptTicksMs': None,
     'telemetryLastSuccessTicksMs': None,
     'telemetryLastAttemptOk': None,
+    'telemetryLastFailure': None,
     'rtdbLastAttemptTicksMs': None,
     'rtdbLastSuccessTicksMs': None,
     'rtdbLastAttemptOk': None,
+    'rtdbLastFailure': None,
     'durableLastAttemptTicksMs': None,
     'durableLastSuccessTicksMs': None,
     'durableLastAttemptOk': None,
@@ -553,8 +562,30 @@ def status_snapshot():
         _state_lock.release()
 
 
-def _record_transport_result(channel, succeeded, completed_ticks_ms):
-    """Record transport evidence without exposing CPU B working state."""
+TRANSPORT_FAILURE_MAX_CHARS = 80
+
+
+def _failure_note(failure):
+    """Bound a failure's own text for CPU A; never raise from an error path."""
+    try:
+        note = str(failure).strip() if failure is not None else ''
+    except Exception:
+        note = ''
+    # An RTDB URL carries its ID token as auth=; durable records are readable
+    # without the owner password, so never let one through.
+    cut = note.find('auth=')
+    if cut >= 0:
+        note = note[:cut] + 'auth=<redacted>'
+    return note[:TRANSPORT_FAILURE_MAX_CHARS] or 'failed'
+
+
+def _record_transport_result(channel, succeeded, completed_ticks_ms,
+                             failure=None):
+    """Record transport evidence without exposing CPU B working state.
+
+    Telemetry and RTDB also keep the last failure's own text, so a durable
+    record can say why CloudAvailable went false. It is cleared on success.
+    """
     prefix = {
         'telemetry': 'telemetry',
         'rtdb': 'rtdb',
@@ -571,6 +602,9 @@ def _record_transport_result(channel, succeeded, completed_ticks_ms):
         _transport_status[result_key] = succeeded
         if succeeded:
             _transport_status[success_key] = completed_ticks_ms
+        if prefix in ('telemetry', 'rtdb'):
+            _transport_status['{}LastFailure'.format(prefix)] = (
+                None if succeeded else _failure_note(failure))
         return True
     finally:
         _transport_status_lock.release()
@@ -1647,7 +1681,8 @@ def _run_rtdb_step(schedule, latest_observation):
         status_code = e.status_code if isinstance(e, TransportError) else None
         _complete_rtdb_action(
             schedule, action, completed_at, False, status_code)
-        _record_transport_result('rtdb', False, completed_at)
+        _record_transport_result(
+            'rtdb', False, completed_at, '{} {}'.format(action, e))
         delay = time.ticks_diff(schedule['nextOperationAt'], completed_at)
         log('RTDB {} error: {}; retry in {} ms'.format(action, e, delay))
         return action
@@ -1749,7 +1784,7 @@ def _run():
                 if observation is not None:
                     ok, reported_monitoring = _publish_observation(observation, reason)
                     _record_transport_result(
-                        'telemetry', ok, time.ticks_ms())
+                        'telemetry', ok, time.ticks_ms(), _last_publish_failure)
                     if ok:
                         last_publish = now
                         last_published_observation = observation

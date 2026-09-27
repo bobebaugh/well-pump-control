@@ -1,5 +1,5 @@
-# Release: 2026-09-22 M6.43 — script liveness; truthful Shelly reboot; Boyle pump edge.
-# DIAGNOSTIC BUILD: M6.43 plus edge-triggered PRINTs (tagged DIAG). No logic change.
+# Release: 2026-09-27 M6.44 — a CloudAvailable change to false records its cause.
+# DIAGNOSTIC BUILD: M6.44 plus edge-triggered PRINTs (tagged DIAG). No logic change.
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -83,7 +83,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # guards, so while it was False PressurePSI was never produced at all and
 # TankFlowQuality read PRESSURE_INVALID rather than a real quality.
 PRESSURE_SENSOR_COMMISSIONED = True
-SOFTWARE_RELEASE = 'M6.43'
+SOFTWARE_RELEASE = 'M6.44'
 OPERATOR_COMMAND_LIFETIME_MS = 45000
 OPERATOR_CONFIRM_WINDOW_MS = 8000
 SHELLY_RESTART_CONFIRM_MS = 60000
@@ -1364,6 +1364,67 @@ def durable_trigger_reasons(fields, baselines, policies):
                 reasons.append({'kind': 'delta', 'field': name,
                                 'from': previous, 'to': current,
                                 'threshold': threshold})
+    return reasons
+
+
+CLOUD_CAUSE_MAX_CHARS = 128
+
+
+def cloud_unavailable_cause(transport_status, current_ticks_ms):
+    """Name what CPU B recorded against each channel the cloud flag depends on.
+
+    Uses the same snapshot and freshness limits as status.cloud_available, so the
+    cause describes the evaluation that produced false. Returns None if neither
+    channel shows a failure or a stale success.
+    """
+    if not isinstance(transport_status, dict):
+        return None
+    parts = []
+    for channel, fresh_ms in (('telemetry', CLOUD_TELEMETRY_FRESH_MS),
+                              ('rtdb', CLOUD_RTDB_FRESH_MS)):
+        if transport_status.get('{}LastAttemptOk'.format(channel)) is False:
+            note = transport_status.get('{}LastFailure'.format(channel))
+            parts.append('{} {}'.format(
+                channel, note if isinstance(note, str) and note else 'failed'))
+            continue
+        age = transport_age_ms(
+            transport_status, '{}LastSuccessTicksMs'.format(channel),
+            current_ticks_ms)
+        if not _is_number(age):
+            parts.append('{} no success yet'.format(channel))
+        elif age > fresh_ms:
+            parts.append('{} no success for {} s'.format(channel, int(age // 1000)))
+    return '; '.join(parts)[:CLOUD_CAUSE_MAX_CHARS] if parts else None
+
+
+def annotate_cloud_cause(reasons, package, transport_status, current_ticks_ms):
+    """Add cause to a change reason whose field is bound to status.cloud_available.
+
+    Only a change to false is annotated. Diagnostic only: any fault here leaves
+    the reasons exactly as they were rather than disturbing the V3 cycle.
+    """
+    try:
+        candidates = [reason for reason in reasons
+                      if isinstance(reason, dict) and reason.get('kind') == 'change'
+                      and reason.get('to') is False]
+        if not candidates:
+            return reasons
+        names = set()
+        for device in package.get('devices', []):
+            for field in device.get('fields', []) if isinstance(device, dict) else ():
+                if (isinstance(field, dict) and
+                        field.get('object') == 'status.cloud_available'):
+                    names.add(field.get('systemName'))
+        cause = None
+        for reason in candidates:
+            if reason.get('field') in names:
+                if cause is None:
+                    cause = cloud_unavailable_cause(transport_status, current_ticks_ms)
+                    if cause is None:
+                        break
+                reason['cause'] = cause
+    except Exception:
+        pass
     return reasons
 
 
@@ -4855,7 +4916,7 @@ def service_navigation():
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.43: DIAG build; script liveness; truthful Shelly reboot')
+log('CPU A release M6.44: DIAG build; cloud-loss cause in durable reasons')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.
@@ -5320,6 +5381,8 @@ while True:
                 durable_reasons.extend(durable_trigger_reasons(
                     durable_fields, durable_available_baselines,
                     logging_policies))
+                annotate_cloud_cause(durable_reasons, active_rules,
+                                     transport_status, observation_ticks_ms)
                 durable_reasons.extend(event_boundary_reasons(v3_records))
 
             candidate_board = build_current_event_board(

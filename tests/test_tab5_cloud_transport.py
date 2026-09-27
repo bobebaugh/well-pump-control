@@ -150,6 +150,24 @@ class CloudTransportTests(unittest.TestCase):
         self.assertEqual(self.cloud.device_session_id(), first)
         self.assertTrue(first.startswith("boot_"))
 
+    def test_failure_note_is_bounded_and_cleared_by_success(self):
+        """M6.44: CPU A can say why CloudAvailable went false."""
+        self.assertTrue(self.cloud._record_transport_result(
+            "rtdb", False, 100, "operator-command [Errno 116] ETIMEDOUT"))
+        snapshot = self.cloud.transport_status_snapshot()
+        self.assertEqual(snapshot["rtdbLastFailure"], "operator-command [Errno 116] ETIMEDOUT")
+        self.assertTrue(self.cloud._record_transport_result(
+            "telemetry", False, 200, "y" * 500))
+        self.assertEqual(len(self.cloud.transport_status_snapshot()["telemetryLastFailure"]),
+                         self.cloud.TRANSPORT_FAILURE_MAX_CHARS)
+        self.assertTrue(self.cloud._record_transport_result("rtdb", True, 300))
+        self.assertIsNone(self.cloud.transport_status_snapshot()["rtdbLastFailure"])
+        self.cloud._record_transport_result(
+            "rtdb", False, 350, "presence https://x.firebaseio.com/a.json?auth=SECRET timed out")
+        self.assertNotIn("SECRET", self.cloud.transport_status_snapshot()["rtdbLastFailure"])
+        self.assertTrue(self.cloud._record_transport_result("durable", False, 400, "z"))
+        self.assertNotIn("durableLastFailure", self.cloud.transport_status_snapshot())
+
     def test_transport_status_reports_confirmed_results_and_queue_depth(self):
         original_observation = self.cloud._pending_observation
         original_durable = self.cloud._pending_durable_records
@@ -170,6 +188,8 @@ class CloudTransportTests(unittest.TestCase):
             self.assertEqual(snapshot["telemetryLastSuccessTicksMs"], 1000)
             self.assertFalse(snapshot["telemetryLastAttemptOk"])
             self.assertEqual(snapshot["rtdbLastSuccessTicksMs"], 1500)
+            self.assertEqual(snapshot["telemetryLastFailure"], "failed")
+            self.assertIsNone(snapshot["rtdbLastFailure"])
             self.assertTrue(snapshot["observationPending"])
             self.assertEqual(snapshot["durableQueueDepth"], 1)
             self.assertEqual(

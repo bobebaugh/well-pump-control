@@ -18,7 +18,7 @@
     "source": { "const": "tab5" },
     "rulesRelease": { "$ref": "#/$defs/rulesRelease" },
     "snapshotPhase": { "const": "observed-pre-dispatch" },
-    "triggerReasons": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["kind"], "properties": { "kind": { "type": "string" } }, "additionalProperties": true } },
+    "triggerReasons": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["kind"], "properties": { "kind": { "type": "string" }, "cause": { "type": "string", "minLength": 1, "maxLength": 128, "description": "Optional, on a change to false of a field bound to status.cloud_available: what CPU B recorded against the telemetry or RTDB channel. Diagnostic text, not a measurement." } }, "additionalProperties": true } },
     "fields": { "type": "object", "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_]{1,63}$" }, "additionalProperties": { "$ref": "#/$defs/fieldState" } }
   },
   "$defs": {

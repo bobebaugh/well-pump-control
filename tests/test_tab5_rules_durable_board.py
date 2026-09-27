@@ -11,8 +11,11 @@ FUNCTIONS = {
     "durable_field_states", "durable_trigger_reasons", "event_boundary_reasons",
     "admitted_durable_baselines", "build_durable_observation_v2",
     "_event_opening_kind", "build_current_event_board", "event_board_signature",
+    "_is_number", "sample_age_ms", "transport_age_ms", "cloud_unavailable_cause",
+    "annotate_cloud_cause",
 }
-CONSTANTS = {"SITE_ID", "DEVICE_ID"}
+CONSTANTS = {"SITE_ID", "DEVICE_ID", "CLOUD_TELEMETRY_FRESH_MS", "CLOUD_RTDB_FRESH_MS",
+             "CLOUD_CAUSE_MAX_CHARS"}
 
 
 def load_logic():
@@ -25,7 +28,8 @@ def load_logic():
             names = {target.id for target in node.targets if isinstance(target, ast.Name)}
             if names & CONSTANTS:
                 nodes.append(node)
-    namespace = {"ujson": json}
+    namespace = {"ujson": json, "time": type("Ticks", (), {
+        "ticks_diff": staticmethod(lambda end, start: end - start)})}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(PILOT), "exec"), namespace)
     return namespace
 
@@ -163,6 +167,65 @@ class RulesDurableBoardTests(unittest.TestCase):
         board = self.logic["build_current_event_board"](
             runtime, "boot_AAAAAAAAAAAA", 1, 44, 44000)
         self.assertLess(len(json.dumps(board, separators=(",", ":")).encode()), 65536)
+
+
+class CloudCauseTests(unittest.TestCase):
+    """M6.44: a CloudAvailable change to false says what CPU B recorded."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.logic = load_logic()
+
+    package = {"devices": [{"fields": [
+        {"systemName": "CloudAvailable", "object": "status.cloud_available", "type": "boolean"},
+        {"systemName": "WiFiConnected", "object": "status.wifi_connected", "type": "boolean"},
+    ]}]}
+
+    def status(self, **overrides):
+        status = {
+            "telemetryLastAttemptOk": True, "telemetryLastSuccessTicksMs": 95000,
+            "telemetryLastFailure": None,
+            "rtdbLastAttemptOk": False, "rtdbLastSuccessTicksMs": 90000,
+            "rtdbLastFailure": "operator-command [Errno 116] ETIMEDOUT",
+        }
+        status.update(overrides)
+        return status
+
+    def annotate(self, reasons, status, now=100000):
+        return self.logic["annotate_cloud_cause"](reasons, self.package, status, now)
+
+    def test_change_to_false_carries_the_failed_channel_and_its_own_text(self):
+        reasons = self.annotate([{"kind": "change", "field": "CloudAvailable",
+                                  "from": True, "to": False}], self.status())
+        self.assertEqual(reasons[0]["cause"], "rtdb operator-command [Errno 116] ETIMEDOUT")
+
+    def test_both_channels_and_a_stale_success_are_named(self):
+        cause = self.logic["cloud_unavailable_cause"](self.status(
+            telemetryLastAttemptOk=False, telemetryLastFailure="HTTP 502"), 100000)
+        self.assertEqual(cause, "telemetry HTTP 502; rtdb operator-command [Errno 116] ETIMEDOUT")
+        stale = self.logic["cloud_unavailable_cause"](self.status(
+            rtdbLastAttemptOk=True, rtdbLastFailure=None, rtdbLastSuccessTicksMs=40000), 100000)
+        self.assertEqual(stale, "rtdb no success for 60 s")
+
+    def test_other_reasons_and_recovery_are_left_unchanged(self):
+        reasons = [
+            {"kind": "change", "field": "CloudAvailable", "from": False, "to": True},
+            {"kind": "change", "field": "WiFiConnected", "from": True, "to": False},
+            {"kind": "delta", "field": "PumpWatts", "from": 1, "to": 3000, "threshold": 50},
+        ]
+        before = json.loads(json.dumps(reasons))
+        self.assertEqual(self.annotate(reasons, self.status()), before)
+
+    def test_cause_is_bounded_and_never_disturbs_the_reasons(self):
+        long = self.annotate([{"kind": "change", "field": "CloudAvailable", "to": False}],
+                             self.status(rtdbLastFailure="x" * 400))
+        self.assertLessEqual(len(long[0]["cause"]), self.logic["CLOUD_CAUSE_MAX_CHARS"])
+        reasons = [{"kind": "change", "field": "CloudAvailable", "to": False}]
+        self.assertEqual(self.logic["annotate_cloud_cause"](reasons, None, self.status(), 0),
+                         [{"kind": "change", "field": "CloudAvailable", "to": False}])
+        self.assertNotIn("cause", self.annotate(
+            [{"kind": "change", "field": "CloudAvailable", "to": False}],
+            self.status(rtdbLastAttemptOk=True, rtdbLastFailure=None))[0])
 
 
 if __name__ == "__main__":
