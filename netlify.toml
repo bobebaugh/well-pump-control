@@ -6,6 +6,10 @@
   node_bundler = "esbuild"
   included_files = ["cloud/netlify/rules-releases/**"]
 
+# Runs on the production deploy only (Netlify does not schedule branch deploys).
+[functions."device-silence"]
+  schedule = "*/15 * * * *"
+
 [[redirects]]
   from = "/.netlify/functions/rules-release/:releaseId"
   to = "/.netlify/functions/rules-release?releaseId=:releaseId"
