@@ -61,6 +61,15 @@ beta reliability repairs and record the running package and recovery procedure.
 Source promotion does not reinstall files or change Shelly settings.
 Main/ebaugh.net activation concerns the web/cloud line and is planned in BETA.
 
+M6.44 is on tab5-working (06d0598), not installed. It changes cloud.py and pilot.py
+only. CloudAvailable turns false on one failed telemetry post or RTDB call: 10-20
+times a day, each back within 3-9 s, about 1 in 3,000-5,000 RTDB calls. The cause
+of each failure reached only the console. M6.44 adds it to the durable reason as
+cause, and the records page shows it. Install it on its own. After a week, the
+causes decide whether raising RTDB_TIMEOUT_S from 1 to 2 s is worth doing. Host
+tests: 268 run. Four WifiPowerSaveTests errors predate it; they test the withdrawn
+power-save change.
+
 M6.43 needs device evidence for two things: one Shelly reboot reporting accepted
 then confirmed-completed, and the script liveness field reading true in normal
 operation. Whether any event or inhibit policy should depend on that field is a

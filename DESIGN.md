@@ -107,6 +107,9 @@ well-pump-control project; web clients go through Netlify functions.
 Durable observation v2 includes every logging-enabled field, explicit unavailable
 reasons and coalesced selection reasons. Change/Delta compare against the last
 available value admitted to the RAM queue. Include does not trigger by itself.
+From Tab5 M6.44, a change to false of the field bound to status.cloud_available
+carries cause: CPU B's own text for the failed telemetry or RTDB call, or which
+channel's last success is stale. It is diagnostic text only.
 Session start, event boundaries and the ten-minute maximum interval also select
 records. Transport is an oldest-first 100-record/384-KiB RAM FIFO with discard
 accounting, not a flash outbox. A reset or long outage can lose records.
