@@ -70,6 +70,10 @@ causes decide whether raising RTDB_TIMEOUT_S from 1 to 2 s is worth doing. Host
 tests: 268 run. Four WifiPowerSaveTests errors predate it; they test the withdrawn
 power-save change.
 
+The pre-freeze round is planned in pilot-working's CURRENT (section "Pre-freeze
+round"). Device items: heap stat, survive one bad cycle, daily SNTP resync, and
+endpoints moved to main. They ride one install with M6.44.
+
 M6.43 needs device evidence for two things: one Shelly reboot reporting accepted
 then confirmed-completed, and the script liveness field reading true in normal
 operation. Whether any event or inhibit policy should depend on that field is a
