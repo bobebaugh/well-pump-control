@@ -112,8 +112,10 @@ when pilot is advanced.
 | pilot-working commit | Change | Kind |
 |---|---|---|
 | 968af5f | Records page row detail shows the cause a Tab5 M6.44 record carries when CloudAvailable goes false; durable-observation-v2 documents the optional cause | screen (records) + interface doc |
+| 7573678 | Rules catalog offers Tab5 M6.45 heap and loop-fault readings; the editor suggests each driver's objects and fills their contract; simulator values and injections | rules-package pipeline + editor screen |
 
-968af5f changes nothing visible until Tab5 M6.44 is installed: older records carry no
+7573678 is rules-package pipeline, so main and pilot both carry it before a package
+uses the new readings. 968af5f changes nothing visible until Tab5 M6.45 is installed: older records carry no
 cause and read as before. Ingest already accepted extra reason keys.
 Docs-only commits also waiting: c04e069, 800b56f, 7a86605 and the approved pre-freeze
 plan that follows them.
@@ -141,7 +143,10 @@ Device work, one install from tab5-working:
    in alone. A week of causes would decide whether to raise RTDB_TIMEOUT_S from 1 to 2 s,
    but that would cost a second install, and a flag that recovers in 3-9 s is not a
    freeze risk.
-2. Not started: heap stat. Free heap after gc.collect() about every 10 minutes, plus the
+2. Built, not installed: heap stat (device 95e5545 on tab5-working; editor 7573678). Declare
+   it on a separate Tab5 device; see DESIGN, since device records are atomic. Checked
+   read-only 27 Sep: the saved draft plus a "Tab5 health" device validates and compiles,
+   and M6.45 accepts the result and the live v46. Spec: Free heap after gc.collect() about every 10 minutes, plus the
    lowest free seen, as new tab5-runtime bindings. pilot.py already measures both for
    its screen. The bindings need an entry in rules-engine-defaults.js and simulator
    support. That is rules-package pipeline, so main and pilot both carry it before a
@@ -176,7 +181,8 @@ Cloud work on pilot-working:
    sends one message when the newest durable record is over 30 minutes old, and one
    when records resume. Netlify runs scheduled functions only on production, so it goes
    live with main's deploy. The internet outage test is its first live check.
-8. Not started: the heap-stat catalog entry and simulator support for item 2.
+8. Built: the heap-stat catalog entry and simulator support for item 2 (7573678). The
+   editor now suggests each driver's objects and fills their type, unit and access.
 9. Not started: the home page's events panel follows the live reading instead of the
    board's age. While the reading is fresh the board is current, since changes are sent
    at once; when it is stale, say the open events are as of the Tab5's last report.
@@ -216,7 +222,11 @@ Owner tasks, no code:
   contactor on with idle watts for 5 s or more means Hand or centre 0, or a contactor,
   box or motor fault. Detection rules have given trouble, so run it in the simulator
   before publishing.
-- Battery: M5Stack says a battery below 6 V enters protection mode, which needs manual
+- Battery: first move BatteryPercent off the tab5-main device, where PressureADCCounts
+  lives, onto the separate Tab5 health device (item 2). Device records are atomic: if
+  the Tab5 reads no battery, a BatteryPercent on tab5-main makes pressure unavailable
+  every cycle, and with it every pressure rule. What M5.Power reports with no battery is
+  unknown. M5Stack says a battery below 6 V enters protection mode, which needs manual
   recovery. Proposal: remove it for the freeze, after confirming in step E that the Tab5
   restarts unattended with the battery out (cut power 10 s, restore). No rule uses the
   battery.

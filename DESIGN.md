@@ -86,6 +86,14 @@ support before atomically staging. A restart adopts the staged package with fres
 event/ownership/calculation state. Running, desired and staged identities remain
 distinct. Old direct-RLY0 packages and new inhibition-flag packages are incompatible.
 
+Each device's fields are accepted atomically every cycle: one declared field that is
+missing or mistyped makes all of that device's fields unavailable. From Tab5 M6.45 the
+tab5-runtime driver also offers long-run health, all integers: free heap after a garbage
+collection taken every 10 minutes (never per cycle), the lowest free heap seen, and the
+CPU A and CPU B loop-fault counts. Declare these, and BatteryPercent, on their own Tab5
+device so a missing value cannot blank pressure. The editor suggests each driver's
+objects and fills in their type, unit and access.
+
 M6.42 enables pressure commissioning. ADC counts are the primary evidence; the
 qualified local fit is PSI = (counts - 3732.02) / 211.492, qualified approximately
 40–61 PSI. Pressure availability still requires valid ADC evidence. Package pressure
