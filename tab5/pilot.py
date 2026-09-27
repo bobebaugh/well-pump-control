@@ -1,5 +1,5 @@
-# Release: 2026-09-27 M6.44 — a CloudAvailable change to false records its cause.
-# DIAGNOSTIC BUILD: M6.44 plus edge-triggered PRINTs (tagged DIAG). No logic change.
+# Release: 2026-09-27 M6.45 — pre-freeze: heap and loop-fault health; cloud-loss cause.
+# DIAGNOSTIC BUILD: M6.45 keeps the edge-triggered PRINTs (tagged DIAG).
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -71,6 +71,10 @@ SAMPLE_GAP_LIMIT_MS = SAMPLE_PERIOD_MS * 2 + 500
 CLOUD_TELEMETRY_FRESH_MS = 90000
 CLOUD_RTDB_FRESH_MS = 45000
 CLOUD_FAILED_RED_MS = 180000
+# Free heap straight after a collection is the leak indicator; mem_free() on its
+# own mostly measures garbage awaiting the next automatic collection. Collect on
+# this period, never per cycle.
+HEAP_COLLECT_PERIOD_MS = 600000
 PUMP_RUNNING_THRESHOLD_W = 1000.0
 # The transducer remains at the well while the Tab5 is being bench-developed.
 # ADS1110 communication alone must not turn a disconnected input into apparent
@@ -83,7 +87,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # guards, so while it was False PressurePSI was never produced at all and
 # TankFlowQuality read PRESSURE_INVALID rather than a real quality.
 PRESSURE_SENSOR_COMMISSIONED = True
-SOFTWARE_RELEASE = 'M6.44'
+SOFTWARE_RELEASE = 'M6.45'
 OPERATOR_COMMAND_LIFETIME_MS = 45000
 OPERATOR_CONFIRM_WINDOW_MS = 8000
 SHELLY_RESTART_CONFIRM_MS = 60000
@@ -189,6 +193,12 @@ RUNTIME_DIRECT_BINDINGS = {
         'values.battery_percent': ('number', '%', 'read'),
         'status.buffer_used_pct': ('number', '%', 'read'),
         'status.records_lost': ('integer', 'count', 'read'),
+        # Long-run health, M6.45. Always integers, so declaring them can never
+        # reject the device record they sit in; see add_runtime_health.
+        'status.heap_free_after_gc_bytes': ('integer', 'B', 'read'),
+        'status.heap_lowest_free_bytes': ('integer', 'B', 'read'),
+        'status.cpu_a_faults': ('integer', 'count', 'read'),
+        'status.cpu_b_faults': ('integer', 'count', 'read'),
     },
 }
 
@@ -367,6 +377,56 @@ def heap_diagnostics(memory_module, minimum_free=None):
     if minimum_free is None or free_bytes < minimum_free:
         minimum_free = free_bytes
     return free_bytes, allocated_bytes, minimum_free
+
+
+def periodic_heap_collect(memory_module, now_ms, last_collect_ms, free_after_gc):
+    """Collect at most once per HEAP_COLLECT_PERIOD_MS.
+
+    Returns (last_collect_ms, free_after_gc). Between collections, and if a
+    collection or reading fails, the previous result is kept.
+    """
+    if (last_collect_ms is not None and
+            time.ticks_diff(now_ms, last_collect_ms) < HEAP_COLLECT_PERIOD_MS):
+        return last_collect_ms, free_after_gc
+    try:
+        memory_module.collect()
+        free_bytes = memory_module.mem_free()
+    except Exception:
+        return now_ms, free_after_gc
+    if not isinstance(free_bytes, int) or isinstance(free_bytes, bool):
+        return now_ms, free_after_gc
+    return now_ms, free_bytes
+
+
+def _count_value(value):
+    return (value if isinstance(value, int) and not isinstance(value, bool) and
+            value >= 0 else 0)
+
+
+def add_runtime_health(observation, free_after_gc, lowest_free, cpu_a_faults,
+                       transport_status):
+    """Expose heap and loop-fault counts for tab5-runtime bindings.
+
+    A tab5-runtime device record is accepted atomically, so a declared field that
+    is not an integer would make every field of that device unavailable. Counts
+    default to 0 (nothing counted). A heap value is written only once measured:
+    the first cycle collects, so both exist from then on. The lowest free seen
+    includes the post-collection reading, so it is never above it.
+    """
+    status = observation.get('status') if isinstance(observation, dict) else None
+    if not isinstance(status, dict):
+        return observation
+    measured = [value for value in (free_after_gc, lowest_free)
+                if isinstance(value, int) and not isinstance(value, bool)]
+    if isinstance(free_after_gc, int) and not isinstance(free_after_gc, bool):
+        status['heap_free_after_gc_bytes'] = free_after_gc
+    if measured:
+        status['heap_lowest_free_bytes'] = min(measured)
+    status['cpu_a_faults'] = _count_value(cpu_a_faults)
+    status['cpu_b_faults'] = _count_value(
+        transport_status.get('cpuBFaults') if isinstance(transport_status, dict)
+        else None)
+    return observation
 
 
 def elapsed_ticks_ms(start_ticks_ms, end_ticks_ms):
@@ -4916,7 +4976,7 @@ def service_navigation():
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.44: DIAG build; cloud-loss cause in durable reasons')
+log('CPU A release M6.45: DIAG build; pre-freeze health, faults and cloud-loss cause')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.
@@ -5013,6 +5073,9 @@ last_cycle_start_ms = None
 last_cycle_work_ms = None
 session_uptime_ms = 0
 heap_min_free_bytes = None
+heap_free_after_gc_bytes = None
+last_heap_collect_ms = None
+cpu_a_faults = 0
 last_operator_command_id = None
 last_operator_command_sequence = 0
 online_operator_command = None
@@ -5218,6 +5281,10 @@ while True:
         acquisition_begun=acquisition_begun)
     transport_status = cloud.transport_status_snapshot()
     add_transport_evidence(observation, transport_status, observation_ticks_ms)
+    last_heap_collect_ms, heap_free_after_gc_bytes = periodic_heap_collect(
+        gc, observation_ticks_ms, last_heap_collect_ms, heap_free_after_gc_bytes)
+    add_runtime_health(observation, heap_free_after_gc_bytes, heap_min_free_bytes,
+                       cpu_a_faults, transport_status)
     observation['status']['rules_runtime_state'] = rules_runtime_state
     observation['status']['rules_runtime_reason'] = rules_runtime_reason
     operator_occurrences = None

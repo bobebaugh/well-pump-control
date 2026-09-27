@@ -1,4 +1,4 @@
-# Release: 2026-09-27 M6.44 — record why a telemetry or RTDB call failed.
+# Release: 2026-09-27 M6.45 — pre-freeze: failure cause, loop-fault count.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -485,6 +485,7 @@ _transport_status = {
     'durableAdmissionRejects': 0,
     'durableTransientFailures': 0,
     'durablePermanentRejects': 0,
+    'cpuBFaults': 0,
     'eventBoardLastSubmittedSequence': None,
     'eventBoardLastAttemptSequence': None,
     'eventBoardLastAcceptedSequence': None,
@@ -1958,7 +1959,7 @@ def start():
         if _started:
             return False
         _started = True
-        log('CPU B release M6.44: failure cause for CloudAvailable')
+        log('CPU B release M6.45: failure cause; loop-fault count')
         _thread.start_new_thread(_worker, ())
         return True
     finally:
