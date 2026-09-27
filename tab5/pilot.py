@@ -17,6 +17,7 @@
 import M5
 import __main__
 import gc
+import sys
 import os
 import time
 import uhashlib
@@ -75,6 +76,10 @@ CLOUD_FAILED_RED_MS = 180000
 # own mostly measures garbage awaiting the next automatic collection. Collect on
 # this period, never per cycle.
 HEAP_COLLECT_PERIOD_MS = 600000
+# A loop pass that raises is contained and counted. This many in a row means the
+# fault is not passing, so CPU A stops cleanly: durable records stop and the
+# silent-device alert fires. No hardware watchdog and no endless retry (#8).
+CPU_A_FAULT_STOP_COUNT = 10
 PUMP_RUNNING_THRESHOLD_W = 1000.0
 # The transducer remains at the well while the Tab5 is being bench-developed.
 # ADS1110 communication alone must not turn a disconnected input into apparent
@@ -401,6 +406,13 @@ def periodic_heap_collect(memory_module, now_ms, last_collect_ms, free_after_gc)
 def _count_value(value):
     return (value if isinstance(value, int) and not isinstance(value, bool) and
             value >= 0 else 0)
+
+
+def loop_fault_step(total, consecutive, stop_count):
+    """Count one contained loop-pass fault: (total, consecutive, stop)."""
+    total = _count_value(total) + 1
+    consecutive = _count_value(consecutive) + 1
+    return total, consecutive, consecutive >= stop_count
 
 
 def add_runtime_health(observation, free_after_gc, lowest_free, cpu_a_faults,
@@ -4526,6 +4538,22 @@ def draw_label(text, x, y, font, color, bg=BG):
     M5.Lcd.drawString(text, x, y)
 
 
+def show_cpu_a_stopped(consecutive):
+    """Replace the HMI, which no longer updates, with what to do."""
+    try:
+        M5.Lcd.fillScreen(BG)
+        draw_label('CPU A STOPPED: {} faults in a row'.format(consecutive),
+                   40, 220, M5.Lcd.FONTS.DejaVu40, RED)
+        draw_label('Readings, rules and web restart', 40, 300,
+                   M5.Lcd.FONTS.DejaVu40, WHITE)
+        draw_label('have stopped. Power-cycle the Tab5.', 40, 360,
+                   M5.Lcd.FONTS.DejaVu40, WHITE)
+        draw_label('Any Tab5 hold stays in force.', 40, 440,
+                   M5.Lcd.FONTS.DejaVu40, YELLOW)
+    except Exception:
+        pass
+
+
 HMI_PAGE_NOW = 'now'
 HMI_PAGE_SYSTEM = 'system'
 HMI_PAGE_EVENTS = 'events'
@@ -5088,542 +5116,560 @@ log('Operational HMI initialized; V3 runs only when a valid startup package exis
 render_hmi(hmi_page, {}, active_rules_reference, active_rules,
            published_rules_reference)
 
+cpu_a_consecutive_faults = 0
 while True:
-    now = time.ticks_ms()
-    if (isinstance(tab5_restart_due_ms, int) and
-            time.ticks_diff(now, tab5_restart_due_ms) >= 0):
-        log('TAB5 RESTART: machine.reset begins a new CPU A/CPU B session')
-        reset()
-    cycle_started_ms = now
-    cycle_interval_ms = (None if last_cycle_start_ms is None else
-                         elapsed_ticks_ms(last_cycle_start_ms, now))
-    if isinstance(cycle_interval_ms, int) and cycle_interval_ms >= 0:
-        session_uptime_ms += cycle_interval_ms
-    last_cycle_start_ms = now
-    observation_sequence += 1
-    # M5.update() drives M5.Touch and is REQUIRED for it to report anything.
-    # It reinitializes the ESP-IDF I2C peripheral, which used to invalidate the
-    # machine.I2C handles for the ADC and the ST7123 - that is what caused the
-    # constant bus rebuilding. Both are gone now: Port A is on SoftI2C (immune,
-    # bit-banged GPIO) and touch is M5's own. Nothing is left for this to break.
-    service_navigation()
-
-    was_connected = wifi_connected
-    (wifi_connected, network_traffic_allowed, clock_synced,
-     wifi_driver_status, wifi_ip, wifi_disconnect_events) = cloud.status_snapshot()
-    online_operator_command = cloud.take_operator_command()
-    if wifi_connected and not was_connected:
-        shelly_resume_confirmation_pending = True
-        shelly1_resume_confirmation_pending = True
-
-    # Downloads may replace only the next-restart staged file. They never
-    # replace rules_v3_runtime or its volatile event/ownership state here.
-    rules_v3_pointer = cloud.take_rules_v3_pointer()
-    if rules_v3_pointer is not None:
-        v3_metadata = validate_rules_v3_pointer(rules_v3_pointer)
-        if v3_metadata is None:
-            rules_v3_rejected = {'reason': rules_v3_pointer_rejection_reason(rules_v3_pointer)}
-            log('V3 staging pointer ignored: {}'.format(rules_v3_rejected['reason']))
-        else:
-            rules_v3_desired_reference = {
-                'releaseId': v3_metadata['releaseId'],
-                'packageVersion': v3_metadata['packageVersion'],
-                'runtimeSchemaVersion': 3,
-                'contentHash': v3_metadata['contentHash'],
-            }
-            published_rules_reference = dict(rules_v3_desired_reference)
-            published_rules_reference['version'] = v3_metadata['packageVersion']
-            rules_v3_rejected = None
-            if (rules_v3_staged_reference is None or
-                    rules_v3_staged_reference.get('contentHash') !=
-                    rules_v3_desired_reference.get('contentHash')) and \
-                    time.ticks_diff(now, next_rules_v3_request_ms) >= 0:
-                if cloud.request_rules_v3_release(v3_metadata):
-                    next_rules_v3_request_ms = time.ticks_add(now, RULES_FETCH_RETRY_MS)
-                    log('V3 staging release request queued: {}'.format(
-                        v3_metadata['releaseId']))
-        cloud.set_rules_v3_state(rules_v3_state_report(
-            rules_v3_running_reference, rules_v3_desired_reference,
-            rules_v3_staged_reference, rules_v3_rejected))
-    v3_candidate = cloud.take_rules_v3_release()
-    if v3_candidate is not None:
-        staged_v3, v3_outcome = stage_rules_v3_release(
-            v3_candidate, rules_v3_staged_reference)
-        if staged_v3 is not None:
-            rules_v3_staged_reference = staged_v3['reference']
-            rules_v3_rejected = None
-            log('V3 release staged only: release={}, hash={}'.format(
-                rules_v3_staged_reference['releaseId'],
-                rules_v3_staged_reference['contentHash'][:12]))
-        elif v3_outcome != 'already-staged':
-            rejected_pointer = (v3_candidate.get('metadata')
-                                if isinstance(v3_candidate, dict) else None)
-            rejected_reference = validate_rules_v3_pointer(rejected_pointer)
-            rules_v3_rejected = {
-                'reason': v3_outcome,
-                'releaseId': (rejected_reference or {}).get('releaseId'),
-                'packageVersion': (rejected_reference or {}).get('packageVersion'),
-                'contentHash': (rejected_reference or {}).get('contentHash'),
-            }
-            log('V3 staging release rejected: {}'.format(v3_outcome))
-        cloud.set_rules_v3_state(rules_v3_state_report(
-            rules_v3_running_reference, rules_v3_desired_reference,
-            rules_v3_staged_reference, rules_v3_rejected))
-
-    # The fresh 15-SPS conversions occupy a material portion of every
-    # cycle. Service touch inside their DRDY waits instead of limiting touch
-    # detection to whatever sleep time happens to remain afterward.
-    adc_started_ms = time.ticks_ms()
-    ads_raw_count = read_ads1110_filtered_raw_count(service_navigation)
-    adc_completed_ms = time.ticks_ms()
-    adc_acquisition_ms = elapsed_ticks_ms(adc_started_ms, adc_completed_ms)
-    if ads_raw_count is not None:
-        last_valid_adc_ms = adc_completed_ms
-
-    if (time.ticks_diff(now, last_battery_diagnostic_ms) >=
-            BATTERY_DIAGNOSTIC_PERIOD_MS):
-        last_battery_diagnostic_ms = now
-        v, a, level, charging = read_battery()
-        battery_valid = v is not None
-        if battery_valid:
-            battery_v, battery_a = v, a
-            battery_level, battery_charging = level, charging
-            battery_sample_ms = time.ticks_ms()
-            if battery_last_read_ok is False:
-                log('battery monitor recovered: M5.Power readings available')
-        elif battery_last_read_ok is not False:
-            log('battery-monitor YELLOW: M5.Power read unavailable; prior measurements stale')
-        battery_last_read_ok = battery_valid
-    if time.ticks_diff(now, last_battery_policy_ms) >= BATTERY_POLICY_PERIOD_MS:
-        last_battery_policy_ms = now
-        charge_enable, charge_retry_target, attempted_target = battery_charge_policy(
-            battery_level if battery_valid else None,
-            charge_enable, charge_retry_target)
-        if attempted_target is not None:
-            log('battery policy: {}% estimate -> charging request {} ({})'.format(
-                battery_level if battery_valid else 'unavailable',
-                'ON' if attempted_target else 'OFF',
-                'accepted' if charge_enable is attempted_target else 'failed; state unknown'))
-    service_navigation()
-
-    sample = None
-    shelly1_sample = None
-    shelly_poll_attempted = False
-    shelly1_poll_attempted = False
-    shelly_em_acquisition_ms = None
-    shelly1_acquisition_ms = None
-    if wifi_connected and network_traffic_allowed:
-        acquisition_begun = True   # latched before the reads it authorises
-        shelly_poll_attempted = True
+    try:
+        now = time.ticks_ms()
+        if (isinstance(tab5_restart_due_ms, int) and
+                time.ticks_diff(now, tab5_restart_due_ms) >= 0):
+            log('TAB5 RESTART: machine.reset begins a new CPU A/CPU B session')
+            reset()
+        cycle_started_ms = now
+        cycle_interval_ms = (None if last_cycle_start_ms is None else
+                             elapsed_ticks_ms(last_cycle_start_ms, now))
+        if isinstance(cycle_interval_ms, int) and cycle_interval_ms >= 0:
+            session_uptime_ms += cycle_interval_ms
+        last_cycle_start_ms = now
+        observation_sequence += 1
+        # M5.update() drives M5.Touch and is REQUIRED for it to report anything.
+        # It reinitializes the ESP-IDF I2C peripheral, which used to invalidate the
+        # machine.I2C handles for the ADC and the ST7123 - that is what caused the
+        # constant bus rebuilding. Both are gone now: Port A is on SoftI2C (immune,
+        # bit-banged GPIO) and touch is M5's own. Nothing is left for this to break.
         service_navigation()
-        shelly_em_started_ms = time.ticks_ms()
-        sample = read_shelly()
-        shelly_em_acquisition_ms = elapsed_ticks_ms(
-            shelly_em_started_ms, time.ticks_ms())
+
+        was_connected = wifi_connected
+        (wifi_connected, network_traffic_allowed, clock_synced,
+         wifi_driver_status, wifi_ip, wifi_disconnect_events) = cloud.status_snapshot()
+        online_operator_command = cloud.take_operator_command()
+        if wifi_connected and not was_connected:
+            shelly_resume_confirmation_pending = True
+            shelly1_resume_confirmation_pending = True
+
+        # Downloads may replace only the next-restart staged file. They never
+        # replace rules_v3_runtime or its volatile event/ownership state here.
+        rules_v3_pointer = cloud.take_rules_v3_pointer()
+        if rules_v3_pointer is not None:
+            v3_metadata = validate_rules_v3_pointer(rules_v3_pointer)
+            if v3_metadata is None:
+                rules_v3_rejected = {'reason': rules_v3_pointer_rejection_reason(rules_v3_pointer)}
+                log('V3 staging pointer ignored: {}'.format(rules_v3_rejected['reason']))
+            else:
+                rules_v3_desired_reference = {
+                    'releaseId': v3_metadata['releaseId'],
+                    'packageVersion': v3_metadata['packageVersion'],
+                    'runtimeSchemaVersion': 3,
+                    'contentHash': v3_metadata['contentHash'],
+                }
+                published_rules_reference = dict(rules_v3_desired_reference)
+                published_rules_reference['version'] = v3_metadata['packageVersion']
+                rules_v3_rejected = None
+                if (rules_v3_staged_reference is None or
+                        rules_v3_staged_reference.get('contentHash') !=
+                        rules_v3_desired_reference.get('contentHash')) and \
+                        time.ticks_diff(now, next_rules_v3_request_ms) >= 0:
+                    if cloud.request_rules_v3_release(v3_metadata):
+                        next_rules_v3_request_ms = time.ticks_add(now, RULES_FETCH_RETRY_MS)
+                        log('V3 staging release request queued: {}'.format(
+                            v3_metadata['releaseId']))
+            cloud.set_rules_v3_state(rules_v3_state_report(
+                rules_v3_running_reference, rules_v3_desired_reference,
+                rules_v3_staged_reference, rules_v3_rejected))
+        v3_candidate = cloud.take_rules_v3_release()
+        if v3_candidate is not None:
+            staged_v3, v3_outcome = stage_rules_v3_release(
+                v3_candidate, rules_v3_staged_reference)
+            if staged_v3 is not None:
+                rules_v3_staged_reference = staged_v3['reference']
+                rules_v3_rejected = None
+                log('V3 release staged only: release={}, hash={}'.format(
+                    rules_v3_staged_reference['releaseId'],
+                    rules_v3_staged_reference['contentHash'][:12]))
+            elif v3_outcome != 'already-staged':
+                rejected_pointer = (v3_candidate.get('metadata')
+                                    if isinstance(v3_candidate, dict) else None)
+                rejected_reference = validate_rules_v3_pointer(rejected_pointer)
+                rules_v3_rejected = {
+                    'reason': v3_outcome,
+                    'releaseId': (rejected_reference or {}).get('releaseId'),
+                    'packageVersion': (rejected_reference or {}).get('packageVersion'),
+                    'contentHash': (rejected_reference or {}).get('contentHash'),
+                }
+                log('V3 staging release rejected: {}'.format(v3_outcome))
+            cloud.set_rules_v3_state(rules_v3_state_report(
+                rules_v3_running_reference, rules_v3_desired_reference,
+                rules_v3_staged_reference, rules_v3_rejected))
+
+        # The fresh 15-SPS conversions occupy a material portion of every
+        # cycle. Service touch inside their DRDY waits instead of limiting touch
+        # detection to whatever sleep time happens to remain afterward.
+        adc_started_ms = time.ticks_ms()
+        ads_raw_count = read_ads1110_filtered_raw_count(service_navigation)
+        adc_completed_ms = time.ticks_ms()
+        adc_acquisition_ms = elapsed_ticks_ms(adc_started_ms, adc_completed_ms)
+        if ads_raw_count is not None:
+            last_valid_adc_ms = adc_completed_ms
+
+        if (time.ticks_diff(now, last_battery_diagnostic_ms) >=
+                BATTERY_DIAGNOSTIC_PERIOD_MS):
+            last_battery_diagnostic_ms = now
+            v, a, level, charging = read_battery()
+            battery_valid = v is not None
+            if battery_valid:
+                battery_v, battery_a = v, a
+                battery_level, battery_charging = level, charging
+                battery_sample_ms = time.ticks_ms()
+                if battery_last_read_ok is False:
+                    log('battery monitor recovered: M5.Power readings available')
+            elif battery_last_read_ok is not False:
+                log('battery-monitor YELLOW: M5.Power read unavailable; prior measurements stale')
+            battery_last_read_ok = battery_valid
+        if time.ticks_diff(now, last_battery_policy_ms) >= BATTERY_POLICY_PERIOD_MS:
+            last_battery_policy_ms = now
+            charge_enable, charge_retry_target, attempted_target = battery_charge_policy(
+                battery_level if battery_valid else None,
+                charge_enable, charge_retry_target)
+            if attempted_target is not None:
+                log('battery policy: {}% estimate -> charging request {} ({})'.format(
+                    battery_level if battery_valid else 'unavailable',
+                    'ON' if attempted_target else 'OFF',
+                    'accepted' if charge_enable is attempted_target else 'failed; state unknown'))
         service_navigation()
-        if sample is None:
-            sample_failure_count += 1
-        else:
-            last_valid_sample = sample
-            last_valid_sample_ms = time.ticks_ms()
-            if shelly_resume_confirmation_pending:
-                log('Shelly polling confirmed after connection: sequence={} ticks_ms={}, connected={}, status={}, IP={}'.format(
-                    observation_sequence, last_valid_sample_ms, wifi_connected,
-                    wifi_driver_status, wifi_ip))
-                shelly_resume_confirmation_pending = False
-        shelly1_poll_attempted = True
-        shelly1_started_ms = time.ticks_ms()
-        shelly1_sample, shelly1_routing = read_shelly1(routing=shelly1_routing)
-        shelly1_acquisition_ms = elapsed_ticks_ms(
-            shelly1_started_ms, time.ticks_ms())
-        service_navigation()
-        if shelly1_sample is None:
-            shelly1_failure_count += 1
-        else:
-            last_valid_shelly1 = shelly1_sample
-            last_valid_shelly1_ms = time.ticks_ms()
-            if shelly1_resume_confirmation_pending:
-                log('Shelly 1 polling confirmed: sequence={} SW0={}, RLY0={}'.format(
-                    observation_sequence,
-                    'ON' if shelly1_sample['sw0'] else 'OFF',
-                    'ON' if shelly1_sample['rly0'] else 'OFF'))
-                shelly1_resume_confirmation_pending = False
-            # DIAG: print script liveness on first read and on every change only.
-            if shelly1_sample.get('script_running') != diag_script_running:
-                log('DIAG SHELLY 1 SCRIPT: running={} (was {}) sequence={}'.format(
-                    shelly1_sample.get('script_running'), diag_script_running,
+
+        sample = None
+        shelly1_sample = None
+        shelly_poll_attempted = False
+        shelly1_poll_attempted = False
+        shelly_em_acquisition_ms = None
+        shelly1_acquisition_ms = None
+        if wifi_connected and network_traffic_allowed:
+            acquisition_begun = True   # latched before the reads it authorises
+            shelly_poll_attempted = True
+            service_navigation()
+            shelly_em_started_ms = time.ticks_ms()
+            sample = read_shelly()
+            shelly_em_acquisition_ms = elapsed_ticks_ms(
+                shelly_em_started_ms, time.ticks_ms())
+            service_navigation()
+            if sample is None:
+                sample_failure_count += 1
+            else:
+                last_valid_sample = sample
+                last_valid_sample_ms = time.ticks_ms()
+                if shelly_resume_confirmation_pending:
+                    log('Shelly polling confirmed after connection: sequence={} ticks_ms={}, connected={}, status={}, IP={}'.format(
+                        observation_sequence, last_valid_sample_ms, wifi_connected,
+                        wifi_driver_status, wifi_ip))
+                    shelly_resume_confirmation_pending = False
+            shelly1_poll_attempted = True
+            shelly1_started_ms = time.ticks_ms()
+            shelly1_sample, shelly1_routing = read_shelly1(routing=shelly1_routing)
+            shelly1_acquisition_ms = elapsed_ticks_ms(
+                shelly1_started_ms, time.ticks_ms())
+            service_navigation()
+            if shelly1_sample is None:
+                shelly1_failure_count += 1
+            else:
+                last_valid_shelly1 = shelly1_sample
+                last_valid_shelly1_ms = time.ticks_ms()
+                if shelly1_resume_confirmation_pending:
+                    log('Shelly 1 polling confirmed: sequence={} SW0={}, RLY0={}'.format(
+                        observation_sequence,
+                        'ON' if shelly1_sample['sw0'] else 'OFF',
+                        'ON' if shelly1_sample['rly0'] else 'OFF'))
+                    shelly1_resume_confirmation_pending = False
+                # DIAG: print script liveness on first read and on every change only.
+                if shelly1_sample.get('script_running') != diag_script_running:
+                    log('DIAG SHELLY 1 SCRIPT: running={} (was {}) sequence={}'.format(
+                        shelly1_sample.get('script_running'), diag_script_running,
+                        observation_sequence))
+                    diag_script_running = shelly1_sample.get('script_running')
+            # DIAG: a slow filtered read, rate limited. Success or failure alike.
+            if (isinstance(shelly1_acquisition_ms, int) and
+                    shelly1_acquisition_ms > DIAG_SLOW_S1_MS and
+                    (diag_slow_s1_logged_ms is None or
+                     time.ticks_diff(time.ticks_ms(), diag_slow_s1_logged_ms) >=
+                     DIAG_SLOW_S1_REPEAT_MS)):
+                diag_slow_s1_logged_ms = time.ticks_ms()
+                log('DIAG SHELLY 1 SLOW READ: elapsed_ms={} ok={} sequence={}'.format(
+                    shelly1_acquisition_ms, shelly1_sample is not None,
                     observation_sequence))
-                diag_script_running = shelly1_sample.get('script_running')
-        # DIAG: a slow filtered read, rate limited. Success or failure alike.
-        if (isinstance(shelly1_acquisition_ms, int) and
-                shelly1_acquisition_ms > DIAG_SLOW_S1_MS and
-                (diag_slow_s1_logged_ms is None or
-                 time.ticks_diff(time.ticks_ms(), diag_slow_s1_logged_ms) >=
-                 DIAG_SLOW_S1_REPEAT_MS)):
-            diag_slow_s1_logged_ms = time.ticks_ms()
-            log('DIAG SHELLY 1 SLOW READ: elapsed_ms={} ok={} sequence={}'.format(
-                shelly1_acquisition_ms, shelly1_sample is not None,
-                observation_sequence))
 
-    observation_ticks_ms = time.ticks_ms()
-    observation = build_observation(
-        observation_sequence, observation_ticks_ms, clock_synced,
-        sample if sample is not None else {}, sample is not None,
-        shelly_poll_attempted, last_valid_sample_ms,
-        last_valid_adc_ms,
-        battery_v, battery_a, battery_level, battery_charging,
-        battery_valid, charge_enable, battery_sample_ms,
-        wifi_connected, network_traffic_allowed, wifi_driver_status,
-        wifi_ip, wifi_disconnect_events, sample_failure_count,
-        shelly1_sample, shelly1_sample is not None,
-        shelly1_poll_attempted, last_valid_shelly1_ms,
-        shelly1_failure_count, ads_raw_count=ads_raw_count,
-        acquisition_begun=acquisition_begun)
-    transport_status = cloud.transport_status_snapshot()
-    add_transport_evidence(observation, transport_status, observation_ticks_ms)
-    last_heap_collect_ms, heap_free_after_gc_bytes = periodic_heap_collect(
-        gc, observation_ticks_ms, last_heap_collect_ms, heap_free_after_gc_bytes)
-    add_runtime_health(observation, heap_free_after_gc_bytes, heap_min_free_bytes,
-                       cpu_a_faults, transport_status)
-    observation['status']['rules_runtime_state'] = rules_runtime_state
-    observation['status']['rules_runtime_reason'] = rules_runtime_reason
-    operator_occurrences = None
+        observation_ticks_ms = time.ticks_ms()
+        observation = build_observation(
+            observation_sequence, observation_ticks_ms, clock_synced,
+            sample if sample is not None else {}, sample is not None,
+            shelly_poll_attempted, last_valid_sample_ms,
+            last_valid_adc_ms,
+            battery_v, battery_a, battery_level, battery_charging,
+            battery_valid, charge_enable, battery_sample_ms,
+            wifi_connected, network_traffic_allowed, wifi_driver_status,
+            wifi_ip, wifi_disconnect_events, sample_failure_count,
+            shelly1_sample, shelly1_sample is not None,
+            shelly1_poll_attempted, last_valid_shelly1_ms,
+            shelly1_failure_count, ads_raw_count=ads_raw_count,
+            acquisition_begun=acquisition_begun)
+        transport_status = cloud.transport_status_snapshot()
+        add_transport_evidence(observation, transport_status, observation_ticks_ms)
+        last_heap_collect_ms, heap_free_after_gc_bytes = periodic_heap_collect(
+            gc, observation_ticks_ms, last_heap_collect_ms, heap_free_after_gc_bytes)
+        add_runtime_health(observation, heap_free_after_gc_bytes, heap_min_free_bytes,
+                           cpu_a_faults, transport_status)
+        observation['status']['rules_runtime_state'] = rules_runtime_state
+        observation['status']['rules_runtime_reason'] = rules_runtime_reason
+        operator_occurrences = None
 
-    # First finish any Shelly restart only from a later, fresh acquisition.
-    if shelly_restart_pending is not None:
-        fresh_lock = observation['values'].get('shelly1_lock')
-        confirmation = shelly_restart_confirmation(
-            shelly_restart_pending, observation_sequence,
-            observation_ticks_ms,
-            observation['status'].get('shelly1_available'), fresh_lock)
-        if confirmation is not None:
-            outcome, detail = confirmation
-            log('DIAG SHELLY RESTART RESOLVED: {} {} after_ms={} cycles={} available={} lock={}'.format(
-                outcome, detail,
-                time.ticks_diff(observation_ticks_ms,
-                                shelly_restart_pending.get('startedTicksMs', observation_ticks_ms)),
-                observation_sequence - shelly_restart_pending.get(
-                    'acceptedSequence', observation_sequence),
-                observation['status'].get('shelly1_available'), fresh_lock))
-            command = shelly_restart_pending.get('command')
-            if command is not None:
-                cloud.submit_operator_result(operator_result(
-                    command, device_session_id, outcome, detail))
-            operator_control_status = (
-                'SHELLY RESTART CONFIRMED: ISLOCKED 0'
-                if outcome == 'confirmed-completed' else
-                'SHELLY RESTART FAILED: LOCKOUT REMAINS'
-                if outcome == 'failed' else
-                'SHELLY RESTART UNKNOWN: NO VALID FRESH LOCK EVIDENCE')
-            shelly_restart_pending = None
+        # First finish any Shelly restart only from a later, fresh acquisition.
+        if shelly_restart_pending is not None:
+            fresh_lock = observation['values'].get('shelly1_lock')
+            confirmation = shelly_restart_confirmation(
+                shelly_restart_pending, observation_sequence,
+                observation_ticks_ms,
+                observation['status'].get('shelly1_available'), fresh_lock)
+            if confirmation is not None:
+                outcome, detail = confirmation
+                log('DIAG SHELLY RESTART RESOLVED: {} {} after_ms={} cycles={} available={} lock={}'.format(
+                    outcome, detail,
+                    time.ticks_diff(observation_ticks_ms,
+                                    shelly_restart_pending.get('startedTicksMs', observation_ticks_ms)),
+                    observation_sequence - shelly_restart_pending.get(
+                        'acceptedSequence', observation_sequence),
+                    observation['status'].get('shelly1_available'), fresh_lock))
+                command = shelly_restart_pending.get('command')
+                if command is not None:
+                    cloud.submit_operator_result(operator_result(
+                        command, device_session_id, outcome, detail))
+                operator_control_status = (
+                    'SHELLY RESTART CONFIRMED: ISLOCKED 0'
+                    if outcome == 'confirmed-completed' else
+                    'SHELLY RESTART FAILED: LOCKOUT REMAINS'
+                    if outcome == 'failed' else
+                    'SHELLY RESTART UNKNOWN: NO VALID FRESH LOCK EVIDENCE')
+                shelly_restart_pending = None
 
-    selected_action = None
-    selected_command = None
-    if online_operator_command is not None:
-        # One online request wins this cycle; discard an unexecuted local tap
-        # rather than silently applying two operator actions back-to-back.
-        operator_local_pending_action = None
-        decision, detail = operator_command_execution_decision(
-            online_operator_command, device_session_id,
-            utc_epoch_ms(clock_synced), clock_synced,
-            last_operator_command_sequence, last_operator_command_id)
-        received_sequence = online_operator_command.get('commandSequence')
-        if (online_operator_command.get('targetSessionId') == device_session_id and
-                isinstance(received_sequence, int) and
-                not isinstance(received_sequence, bool) and
-                received_sequence > last_operator_command_sequence):
-            last_operator_command_sequence = received_sequence
-            last_operator_command_id = online_operator_command.get('commandId')
-        if decision != 'accepted':
-            cloud.submit_operator_result(operator_result(
+        selected_action = None
+        selected_command = None
+        if online_operator_command is not None:
+            # One online request wins this cycle; discard an unexecuted local tap
+            # rather than silently applying two operator actions back-to-back.
+            operator_local_pending_action = None
+            decision, detail = operator_command_execution_decision(
                 online_operator_command, device_session_id,
-                'not-delivered', detail))
-            operator_control_status = 'ONLINE NOT DELIVERED: {}'.format(
-                detail.upper())
-        else:
-            cloud.mark_operator_command_applied(
-                online_operator_command.get('commandId'), received_sequence)
-            selected_action = online_operator_command.get('commandType')
-            selected_command = online_operator_command
-    elif operator_local_pending_action is not None:
-        selected_action = operator_local_pending_action
-        operator_local_pending_action = None
+                utc_epoch_ms(clock_synced), clock_synced,
+                last_operator_command_sequence, last_operator_command_id)
+            received_sequence = online_operator_command.get('commandSequence')
+            if (online_operator_command.get('targetSessionId') == device_session_id and
+                    isinstance(received_sequence, int) and
+                    not isinstance(received_sequence, bool) and
+                    received_sequence > last_operator_command_sequence):
+                last_operator_command_sequence = received_sequence
+                last_operator_command_id = online_operator_command.get('commandId')
+            if decision != 'accepted':
+                cloud.submit_operator_result(operator_result(
+                    online_operator_command, device_session_id,
+                    'not-delivered', detail))
+                operator_control_status = 'ONLINE NOT DELIVERED: {}'.format(
+                    detail.upper())
+            else:
+                cloud.mark_operator_command_applied(
+                    online_operator_command.get('commandId'), received_sequence)
+                selected_action = online_operator_command.get('commandType')
+                selected_command = online_operator_command
+        elif operator_local_pending_action is not None:
+            selected_action = operator_local_pending_action
+            operator_local_pending_action = None
 
-    if selected_action == 'enter-user-monitor':
-        occurrence_field = operator_monitor_occurrence_field(
-            rules_v3_runtime['resolved'] if rules_v3_runtime is not None else None)
-        if occurrence_field is None:
-            if selected_command is not None:
+        if selected_action == 'enter-user-monitor':
+            occurrence_field = operator_monitor_occurrence_field(
+                rules_v3_runtime['resolved'] if rules_v3_runtime is not None else None)
+            if occurrence_field is None:
+                if selected_command is not None:
+                    cloud.submit_operator_result(operator_result(
+                        selected_command, device_session_id, 'failed',
+                        'monitor-event-unavailable'))
+                operator_control_status = 'USER MONITOR FAILED: EVENT UNAVAILABLE'
+            else:
+                # Ownership of the inhibition flag, resolved by its device binding.
+                # After RLY0 became read-only there is no pump target to consult, and
+                # reporting "not needed" from its absence would fabricate lock state.
+                inhibit_target = rules_v3_runtime['resolved'].get('inhibitionTarget')
+                had_inhibit = (inhibit_target is not None and _rules_v3_has_owner(
+                    rules_v3_runtime['kernel'], inhibit_target))
+                relay_on = observation['values'].get('shelly1_rly0')
+                lock_value = observation['values'].get('shelly1_lock')
+                monitor_relay_restoration = (
+                    'confirmed' if had_inhibit and relay_on is True and lock_value == 0
+                    else 'unconfirmed' if had_inhibit else 'not-needed')
+                operator_occurrences = {occurrence_field: True}
+                monitor_result_command = selected_command
+                monitor_result_event_id = operator_monitor_event_id(
+                    rules_v3_runtime['resolved'])
+                monitor_result_instance = None
+                if selected_command is not None:
+                    cloud.submit_operator_result(operator_result(
+                        selected_command, device_session_id, 'accepted',
+                        'monitor-request-accepted', monitor_relay_restoration))
+                operator_control_status = 'USER MONITOR ACCEPTED; RELAY {}'.format(
+                    monitor_relay_restoration.upper())
+        elif selected_action == 'restart-tab5':
+            restart_evidence_ready = (
+                selected_command is None or
+                cloud.prepare_tab5_restart(selected_command))
+            if restart_evidence_ready:
+                if selected_command is not None:
+                    cloud.submit_operator_result(operator_result(
+                        selected_command, device_session_id, 'accepted',
+                        'tab5-restart-scheduled'))
+                operator_control_status = 'TAB5 RESTART ACCEPTED; NEW SESSION PENDING'
+                tab5_restart_due_ms = time.ticks_add(
+                    observation_ticks_ms, TAB5_RESTART_DELAY_MS)
+            else:
                 cloud.submit_operator_result(operator_result(
                     selected_command, device_session_id, 'failed',
-                    'monitor-event-unavailable'))
-            operator_control_status = 'USER MONITOR FAILED: EVENT UNAVAILABLE'
-        else:
-            # Ownership of the inhibition flag, resolved by its device binding.
-            # After RLY0 became read-only there is no pump target to consult, and
-            # reporting "not needed" from its absence would fabricate lock state.
-            inhibit_target = rules_v3_runtime['resolved'].get('inhibitionTarget')
-            had_inhibit = (inhibit_target is not None and _rules_v3_has_owner(
-                rules_v3_runtime['kernel'], inhibit_target))
-            relay_on = observation['values'].get('shelly1_rly0')
-            lock_value = observation['values'].get('shelly1_lock')
-            monitor_relay_restoration = (
-                'confirmed' if had_inhibit and relay_on is True and lock_value == 0
-                else 'unconfirmed' if had_inhibit else 'not-needed')
-            operator_occurrences = {occurrence_field: True}
-            monitor_result_command = selected_command
-            monitor_result_event_id = operator_monitor_event_id(
-                rules_v3_runtime['resolved'])
-            monitor_result_instance = None
-            if selected_command is not None:
-                cloud.submit_operator_result(operator_result(
-                    selected_command, device_session_id, 'accepted',
-                    'monitor-request-accepted', monitor_relay_restoration))
-            operator_control_status = 'USER MONITOR ACCEPTED; RELAY {}'.format(
-                monitor_relay_restoration.upper())
-    elif selected_action == 'restart-tab5':
-        restart_evidence_ready = (
-            selected_command is None or
-            cloud.prepare_tab5_restart(selected_command))
-        if restart_evidence_ready:
-            if selected_command is not None:
-                cloud.submit_operator_result(operator_result(
-                    selected_command, device_session_id, 'accepted',
-                    'tab5-restart-scheduled'))
-            operator_control_status = 'TAB5 RESTART ACCEPTED; NEW SESSION PENDING'
-            tab5_restart_due_ms = time.ticks_add(
-                observation_ticks_ms, TAB5_RESTART_DELAY_MS)
-        else:
-            cloud.submit_operator_result(operator_result(
-                selected_command, device_session_id, 'failed',
-                'tab5-restart-evidence-write-failed'))
-            operator_control_status = 'TAB5 RESTART FAILED: EVIDENCE NOT SAVED'
-    elif selected_action == 'restart-shelly1':
-        if observation['status'].get('shelly1_available') is not True:
-            outcome, detail = 'failed', 'shelly-unavailable-before-request'
-        else:
-            outcome, detail = shelly1_restart_request()
-        log('DIAG SHELLY RESTART REQUEST: {} {} sequence={} source={}'.format(
-            outcome, detail, observation_sequence,
-            'online' if selected_command is not None else 'local'))
-        if outcome == 'accepted':
-            shelly_restart_pending = {
-                'command': selected_command,
-                'startedTicksMs': observation_ticks_ms,
-                'acceptedSequence': observation_sequence,
-            }
-            operator_control_status = 'SHELLY RESTART ACCEPTED; CLEAR UNCONFIRMED'
-        else:
-            operator_control_status = 'SHELLY RESTART {}: {}'.format(
-                outcome.upper(), detail.upper())
-        if selected_command is not None:
-            cloud.submit_operator_result(operator_result(
-                selected_command, device_session_id, outcome, detail))
-    durable_fields = None
-    durable_reasons = []
-    v3_processing_ms = None
-    if rules_v3_runtime is not None:
-        v3_actions = []
-        v3_records = []
-        v3_started_ms = time.ticks_ms()
-        try:
-            v3_cycle = run_rules_v3_cycle(
-                rules_v3_runtime, observation, observation_ticks_ms,
-                occurrences=operator_occurrences,
-                cycle_sequence=observation_sequence,
-                observed_at=observation.get('observedAt'),
-                opening_uptime_ms=session_uptime_ms)
-            v3_actions = v3_cycle['actions']
-            v3_records = v3_cycle['records']
-            observation['values'].update(v3_cycle['snapshot'])
-            observation['status']['v3_unavailable_devices'] = v3_cycle['unavailableDeviceIds']
-            observation['status']['v3_active_event_ids'] = [
-                event_id for event_id, state in
-                rules_v3_runtime['kernel']['events'].items()
-                if state.get('active') is True]
-            logging_policies = runtime_logging_policies(active_rules)
-            durable_fields = durable_field_states(
-                v3_cycle['snapshot'], logging_policies)
-            if durable_fields is not None:
-                durable_reasons.extend(durable_trigger_reasons(
-                    durable_fields, durable_available_baselines,
-                    logging_policies))
-                annotate_cloud_cause(durable_reasons, active_rules,
-                                     transport_status, observation_ticks_ms)
-                durable_reasons.extend(event_boundary_reasons(v3_records))
-
-            candidate_board = build_current_event_board(
-                rules_v3_runtime, device_session_id,
-                event_board_sequence + 1, observation_sequence,
-                session_uptime_ms, observation.get('observedAt'))
-            candidate_signature = event_board_signature(candidate_board)
-            board_due = (
-                last_event_board_submit_ms is None or
-                candidate_signature != last_event_board_signature or
-                time.ticks_diff(observation_ticks_ms,
-                                last_event_board_submit_ms) >=
-                EVENT_BOARD_HEARTBEAT_MS)
-            if board_due:
-                if (candidate_board is not None and
-                        candidate_signature is not None and
-                        cloud.submit_event_board(candidate_board)):
-                    event_board_sequence += 1
-                    last_event_board_signature = candidate_signature
-                last_event_board_submit_ms = observation_ticks_ms
-        except Exception as v3_error:
-            log('V3 ENGINE ERROR: {}'.format(v3_error))
-        for record in v3_records:
-            log('V3 EVENT {}: id={} instance={} reason={}'.format(
-                str(record.get('type')).upper(), record.get('eventId'),
-                record.get('eventInstanceId'), record.get('reason')))
-        mode_now = rules_v3_effective_mode(
-            rules_v3_runtime['resolved'], rules_v3_runtime['kernel'])
-        if mode_now != rules_v3_last_mode:
-            log('V3 MODE: {} -> {}'.format(rules_v3_last_mode, mode_now))
-            rules_v3_last_mode = mode_now
-        # Completion is tied to the instance of the user's own Monitor event, not
-        # to effective mode. System Monitor holds the same mode target, so mode
-        # alone would let an unrelated H001 close out a stale user request.
-        live_monitor_instance = user_monitor_instance(
-            rules_v3_runtime, monitor_result_event_id)
-        if operator_occurrences is not None:
-            if live_monitor_instance is not None:
-                monitor_result_instance = live_monitor_instance
-                operator_control_status = 'USER MONITOR ACTIVE; RELAY {}'.format(
-                    monitor_relay_restoration.upper())
-                if monitor_result_command is not None:
-                    cloud.submit_operator_result(operator_result(
-                        monitor_result_command, device_session_id,
-                        'confirmed-completed', 'monitor-active',
-                        monitor_relay_restoration))
-                    monitor_result_command = None
+                    'tab5-restart-evidence-write-failed'))
+                operator_control_status = 'TAB5 RESTART FAILED: EVIDENCE NOT SAVED'
+        elif selected_action == 'restart-shelly1':
+            if observation['status'].get('shelly1_available') is not True:
+                outcome, detail = 'failed', 'shelly-unavailable-before-request'
             else:
-                # The request was accepted but its event did not open. Resolve the
-                # pending result rather than leaving it to be satisfied later by
-                # something the operator did not ask for.
-                operator_control_status = 'USER MONITOR FAILED: EVENT DID NOT OPEN'
-                if monitor_result_command is not None:
-                    cloud.submit_operator_result(operator_result(
-                        monitor_result_command, device_session_id, 'failed',
-                        'monitor-event-did-not-open', monitor_relay_restoration))
-                    monitor_result_command = None
+                outcome, detail = shelly1_restart_request()
+            log('DIAG SHELLY RESTART REQUEST: {} {} sequence={} source={}'.format(
+                outcome, detail, observation_sequence,
+                'online' if selected_command is not None else 'local'))
+            if outcome == 'accepted':
+                shelly_restart_pending = {
+                    'command': selected_command,
+                    'startedTicksMs': observation_ticks_ms,
+                    'acceptedSequence': observation_sequence,
+                }
+                operator_control_status = 'SHELLY RESTART ACCEPTED; CLEAR UNCONFIRMED'
+            else:
+                operator_control_status = 'SHELLY RESTART {}: {}'.format(
+                    outcome.upper(), detail.upper())
+            if selected_command is not None:
+                cloud.submit_operator_result(operator_result(
+                    selected_command, device_session_id, outcome, detail))
+        durable_fields = None
+        durable_reasons = []
+        v3_processing_ms = None
+        if rules_v3_runtime is not None:
+            v3_actions = []
+            v3_records = []
+            v3_started_ms = time.ticks_ms()
+            try:
+                v3_cycle = run_rules_v3_cycle(
+                    rules_v3_runtime, observation, observation_ticks_ms,
+                    occurrences=operator_occurrences,
+                    cycle_sequence=observation_sequence,
+                    observed_at=observation.get('observedAt'),
+                    opening_uptime_ms=session_uptime_ms)
+                v3_actions = v3_cycle['actions']
+                v3_records = v3_cycle['records']
+                observation['values'].update(v3_cycle['snapshot'])
+                observation['status']['v3_unavailable_devices'] = v3_cycle['unavailableDeviceIds']
+                observation['status']['v3_active_event_ids'] = [
+                    event_id for event_id, state in
+                    rules_v3_runtime['kernel']['events'].items()
+                    if state.get('active') is True]
+                logging_policies = runtime_logging_policies(active_rules)
+                durable_fields = durable_field_states(
+                    v3_cycle['snapshot'], logging_policies)
+                if durable_fields is not None:
+                    durable_reasons.extend(durable_trigger_reasons(
+                        durable_fields, durable_available_baselines,
+                        logging_policies))
+                    annotate_cloud_cause(durable_reasons, active_rules,
+                                         transport_status, observation_ticks_ms)
+                    durable_reasons.extend(event_boundary_reasons(v3_records))
+
+                candidate_board = build_current_event_board(
+                    rules_v3_runtime, device_session_id,
+                    event_board_sequence + 1, observation_sequence,
+                    session_uptime_ms, observation.get('observedAt'))
+                candidate_signature = event_board_signature(candidate_board)
+                board_due = (
+                    last_event_board_submit_ms is None or
+                    candidate_signature != last_event_board_signature or
+                    time.ticks_diff(observation_ticks_ms,
+                                    last_event_board_submit_ms) >=
+                    EVENT_BOARD_HEARTBEAT_MS)
+                if board_due:
+                    if (candidate_board is not None and
+                            candidate_signature is not None and
+                            cloud.submit_event_board(candidate_board)):
+                        event_board_sequence += 1
+                        last_event_board_signature = candidate_signature
+                    last_event_board_submit_ms = observation_ticks_ms
+            except Exception as v3_error:
+                log('V3 ENGINE ERROR: {}'.format(v3_error))
+            for record in v3_records:
+                log('V3 EVENT {}: id={} instance={} reason={}'.format(
+                    str(record.get('type')).upper(), record.get('eventId'),
+                    record.get('eventInstanceId'), record.get('reason')))
+            mode_now = rules_v3_effective_mode(
+                rules_v3_runtime['resolved'], rules_v3_runtime['kernel'])
+            if mode_now != rules_v3_last_mode:
+                log('V3 MODE: {} -> {}'.format(rules_v3_last_mode, mode_now))
+                rules_v3_last_mode = mode_now
+            # Completion is tied to the instance of the user's own Monitor event, not
+            # to effective mode. System Monitor holds the same mode target, so mode
+            # alone would let an unrelated H001 close out a stale user request.
+            live_monitor_instance = user_monitor_instance(
+                rules_v3_runtime, monitor_result_event_id)
+            if operator_occurrences is not None:
+                if live_monitor_instance is not None:
+                    monitor_result_instance = live_monitor_instance
+                    operator_control_status = 'USER MONITOR ACTIVE; RELAY {}'.format(
+                        monitor_relay_restoration.upper())
+                    if monitor_result_command is not None:
+                        cloud.submit_operator_result(operator_result(
+                            monitor_result_command, device_session_id,
+                            'confirmed-completed', 'monitor-active',
+                            monitor_relay_restoration))
+                        monitor_result_command = None
+                else:
+                    # The request was accepted but its event did not open. Resolve the
+                    # pending result rather than leaving it to be satisfied later by
+                    # something the operator did not ask for.
+                    operator_control_status = 'USER MONITOR FAILED: EVENT DID NOT OPEN'
+                    if monitor_result_command is not None:
+                        cloud.submit_operator_result(operator_result(
+                            monitor_result_command, device_session_id, 'failed',
+                            'monitor-event-did-not-open', monitor_relay_restoration))
+                        monitor_result_command = None
+                    monitor_result_event_id = None
+                    monitor_relay_restoration = 'not-applicable'
+            if (monitor_result_instance is not None and
+                    live_monitor_instance == monitor_result_instance and
+                    monitor_relay_restoration == 'unconfirmed' and
+                    observation['status'].get('shelly1_available') is True and
+                    observation['values'].get('shelly1_lock') == 0 and
+                    observation['values'].get('shelly1_rly0') is True):
+                # Fresh physical evidence, still required: an accepted Monitor never
+                # proves RLY0 moved.
+                monitor_relay_restoration = 'confirmed'
+                operator_control_status = 'USER MONITOR ACTIVE; RELAY CONFIRMED'
+            if monitor_result_instance is not None and live_monitor_instance is None:
+                # The user's Monitor instance ended with this runtime; nothing later
+                # may report against it.
+                monitor_result_instance = None
                 monitor_result_event_id = None
-                monitor_relay_restoration = 'not-applicable'
-        if (monitor_result_instance is not None and
-                live_monitor_instance == monitor_result_instance and
-                monitor_relay_restoration == 'unconfirmed' and
-                observation['status'].get('shelly1_available') is True and
-                observation['values'].get('shelly1_lock') == 0 and
-                observation['values'].get('shelly1_rly0') is True):
-            # Fresh physical evidence, still required: an accepted Monitor never
-            # proves RLY0 moved.
-            monitor_relay_restoration = 'confirmed'
-            operator_control_status = 'USER MONITOR ACTIVE; RELAY CONFIRMED'
-        if monitor_result_instance is not None and live_monitor_instance is None:
-            # The user's Monitor instance ended with this runtime; nothing later
-            # may report against it.
-            monitor_result_instance = None
-            monitor_result_event_id = None
-        relay_diagnostic = rules_v3_relay_diagnostic(rules_v3_runtime, observation, v3_actions)
-        if relay_diagnostic != rules_v3_last_relay_diagnostic:
-            log('V3 RELAY EVIDENCE: sequence={} inhibit_held={} available={} observed_rly0={} observed_flag={} lock={} selected={}'.format(
-                observation_sequence, *relay_diagnostic))
-            rules_v3_last_relay_diagnostic = relay_diagnostic
-        v3_processing_ms = elapsed_ticks_ms(v3_started_ms, time.ticks_ms())
-        if v3_actions:
-            dispatch_started = time.ticks_ms()
-            dispatched, dropped = dispatch_rules_v3_actions(
-                rules_v3_runtime['resolved'], v3_actions, observation)
-            for action in dropped:
-                log('V3 ACTION DROPPED (conflict): {}={} reason={}'.format(
-                    action.get('target'), action.get('value'), action.get('reason')))
-            for dispatch in dispatched:
-                action = dispatch['action']
-                signature = (action.get('target'), action.get('value'))
-                log('V3 ACTION SELECTED: {}={} reason={} event={}'.format(
-                    action.get('target'), action.get('value'),
-                    action.get('reason'), action.get('eventId')))
-                log('V3 ACTION DISPATCH: {}={} -> {} sequence={} elapsed_ms={}'.format(
-                    signature[0], signature[1], dispatch['outcome'], observation_sequence,
-                    time.ticks_diff(time.ticks_ms(), dispatch_started)))
-    monitor_active = (rules_v3_runtime is not None and
-                      rules_v3_effective_mode(
-                          rules_v3_runtime['resolved'],
-                          rules_v3_runtime['kernel']) == 'Monitor')
-    # Monitor mode is now reachable from System Monitor as well, so the two are
-    # reported separately. Relay restoration describes the user's own request and
-    # is not applicable to a Monitor the operator did not ask for.
-    observation['status']['monitor_mode_active'] = monitor_active
-    observation['status']['user_monitor_active'] = monitor_result_instance is not None
-    observation['status']['tab5_relay_restoration'] = (
-        monitor_relay_restoration if monitor_result_instance is not None
-        else 'not-applicable')
-    observation['status']['operator_control_status'] = operator_control_status
-    if (isinstance(rules_v3_staged_reference, dict) and
-            (not isinstance(rules_v3_running_reference, dict) or
-             rules_v3_staged_reference.get('contentHash') !=
-             rules_v3_running_reference.get('contentHash'))):
-        observation['status']['staged_restart_adoption'] = (
-            rules_v3_staged_reference.get('releaseId'))
-    last_observation = observation
-    append_event_history(event_history, observation)
-    cloud.submit_observation(observation)
-    if durable_fields is not None and active_rules_reference is not None:
-        if not durable_session_started:
-            durable_reasons.insert(0, {'kind': 'session-start'})
-        elapsed_since_durable_ms = (
-            None if last_durable_admission_ms is None else
-            time.ticks_diff(now, last_durable_admission_ms))
-        if (elapsed_since_durable_ms is not None and
-                elapsed_since_durable_ms >= MAX_DURABLE_OBSERVATION_INTERVAL_MS):
-            durable_reasons.append({
-                'kind': 'maximum-interval',
-                'intervalMs': MAX_DURABLE_OBSERVATION_INTERVAL_MS,
-            })
-        if durable_reasons:
-            durable_record = build_durable_observation_v2(
-                observation, device_session_id, active_rules_reference,
-                durable_reasons, durable_fields, session_uptime_ms)
-            if (durable_record is not None and
-                    cloud.submit_durable_record(durable_record)):
-                durable_available_baselines = admitted_durable_baselines(
-                    durable_fields, durable_available_baselines)
-                last_durable_admission_ms = now
-                durable_session_started = True
-                log('Durable observation selected: sequence={}, reasons={}'.format(
-                    observation_sequence, len(durable_reasons)))
+            relay_diagnostic = rules_v3_relay_diagnostic(rules_v3_runtime, observation, v3_actions)
+            if relay_diagnostic != rules_v3_last_relay_diagnostic:
+                log('V3 RELAY EVIDENCE: sequence={} inhibit_held={} available={} observed_rly0={} observed_flag={} lock={} selected={}'.format(
+                    observation_sequence, *relay_diagnostic))
+                rules_v3_last_relay_diagnostic = relay_diagnostic
+            v3_processing_ms = elapsed_ticks_ms(v3_started_ms, time.ticks_ms())
+            if v3_actions:
+                dispatch_started = time.ticks_ms()
+                dispatched, dropped = dispatch_rules_v3_actions(
+                    rules_v3_runtime['resolved'], v3_actions, observation)
+                for action in dropped:
+                    log('V3 ACTION DROPPED (conflict): {}={} reason={}'.format(
+                        action.get('target'), action.get('value'), action.get('reason')))
+                for dispatch in dispatched:
+                    action = dispatch['action']
+                    signature = (action.get('target'), action.get('value'))
+                    log('V3 ACTION SELECTED: {}={} reason={} event={}'.format(
+                        action.get('target'), action.get('value'),
+                        action.get('reason'), action.get('eventId')))
+                    log('V3 ACTION DISPATCH: {}={} -> {} sequence={} elapsed_ms={}'.format(
+                        signature[0], signature[1], dispatch['outcome'], observation_sequence,
+                        time.ticks_diff(time.ticks_ms(), dispatch_started)))
+        monitor_active = (rules_v3_runtime is not None and
+                          rules_v3_effective_mode(
+                              rules_v3_runtime['resolved'],
+                              rules_v3_runtime['kernel']) == 'Monitor')
+        # Monitor mode is now reachable from System Monitor as well, so the two are
+        # reported separately. Relay restoration describes the user's own request and
+        # is not applicable to a Monitor the operator did not ask for.
+        observation['status']['monitor_mode_active'] = monitor_active
+        observation['status']['user_monitor_active'] = monitor_result_instance is not None
+        observation['status']['tab5_relay_restoration'] = (
+            monitor_relay_restoration if monitor_result_instance is not None
+            else 'not-applicable')
+        observation['status']['operator_control_status'] = operator_control_status
+        if (isinstance(rules_v3_staged_reference, dict) and
+                (not isinstance(rules_v3_running_reference, dict) or
+                 rules_v3_staged_reference.get('contentHash') !=
+                 rules_v3_running_reference.get('contentHash'))):
+            observation['status']['staged_restart_adoption'] = (
+                rules_v3_staged_reference.get('releaseId'))
+        last_observation = observation
+        append_event_history(event_history, observation)
+        cloud.submit_observation(observation)
+        if durable_fields is not None and active_rules_reference is not None:
+            if not durable_session_started:
+                durable_reasons.insert(0, {'kind': 'session-start'})
+            elapsed_since_durable_ms = (
+                None if last_durable_admission_ms is None else
+                time.ticks_diff(now, last_durable_admission_ms))
+            if (elapsed_since_durable_ms is not None and
+                    elapsed_since_durable_ms >= MAX_DURABLE_OBSERVATION_INTERVAL_MS):
+                durable_reasons.append({
+                    'kind': 'maximum-interval',
+                    'intervalMs': MAX_DURABLE_OBSERVATION_INTERVAL_MS,
+                })
+            if durable_reasons:
+                durable_record = build_durable_observation_v2(
+                    observation, device_session_id, active_rules_reference,
+                    durable_reasons, durable_fields, session_uptime_ms)
+                if (durable_record is not None and
+                        cloud.submit_durable_record(durable_record)):
+                    durable_available_baselines = admitted_durable_baselines(
+                        durable_fields, durable_available_baselines)
+                    last_durable_admission_ms = now
+                    durable_session_started = True
+                    log('Durable observation selected: sequence={}, reasons={}'.format(
+                        observation_sequence, len(durable_reasons)))
 
-    heap_free_bytes, heap_allocated_bytes, heap_min_free_bytes = heap_diagnostics(
-        gc, heap_min_free_bytes)
-    # Local diagnostics are kept out of the operational/current and durable record
-    # interfaces. A bounded shallow display copy prevents cross-thread mutation after
-    # submit_observation transfers ownership of the operational object to CPU B.
-    hmi_observation = dict(observation)
-    hmi_observation['status'] = dict(observation['status'])
-    hmi_observation['status'].update({
-        'cycle_interval_ms': cycle_interval_ms,
-        'cycle_work_ms': last_cycle_work_ms,
-        'adc_acquisition_ms': adc_acquisition_ms,
-        'shelly_em_acquisition_ms': shelly_em_acquisition_ms,
-        'shelly1_acquisition_ms': shelly1_acquisition_ms,
-        'v3_processing_ms': v3_processing_ms,
-        'heap_free_bytes': heap_free_bytes,
-        'heap_allocated_bytes': heap_allocated_bytes,
-        'heap_min_free_bytes': heap_min_free_bytes,
-    })
-    render_hmi(hmi_page, hmi_observation, active_rules_reference, active_rules,
-               published_rules_reference)
+        heap_free_bytes, heap_allocated_bytes, heap_min_free_bytes = heap_diagnostics(
+            gc, heap_min_free_bytes)
+        # Local diagnostics are kept out of the operational/current and durable record
+        # interfaces. A bounded shallow display copy prevents cross-thread mutation after
+        # submit_observation transfers ownership of the operational object to CPU B.
+        hmi_observation = dict(observation)
+        hmi_observation['status'] = dict(observation['status'])
+        hmi_observation['status'].update({
+            'cycle_interval_ms': cycle_interval_ms,
+            'cycle_work_ms': last_cycle_work_ms,
+            'adc_acquisition_ms': adc_acquisition_ms,
+            'shelly_em_acquisition_ms': shelly_em_acquisition_ms,
+            'shelly1_acquisition_ms': shelly1_acquisition_ms,
+            'v3_processing_ms': v3_processing_ms,
+            'heap_free_bytes': heap_free_bytes,
+            'heap_allocated_bytes': heap_allocated_bytes,
+            'heap_min_free_bytes': heap_min_free_bytes,
+        })
+        render_hmi(hmi_page, hmi_observation, active_rules_reference, active_rules,
+                   published_rules_reference)
 
-    # Sleep out the rest of the sample period, but poll touch every 50 ms so
-    # taps are not missed. Sensor cadence stays at SAMPLE_PERIOD_MS.
-    last_cycle_work_ms = elapsed_ticks_ms(cycle_started_ms, time.ticks_ms())
-    sleep_until = time.ticks_add(now, SAMPLE_PERIOD_MS)
-    while time.ticks_diff(sleep_until, time.ticks_ms()) > 0:
-        # M5.Touch only refreshes when M5.update() runs. Pumping it once per
-        # second in the outer loop left 19 of every 20 touch polls reading a
-        # stale snapshot, which is what made taps feel unresponsive. Safe to
-        # call at this rate now: no machine.I2C handle exists for it to break.
-        if service_navigation():
-            render_hmi(hmi_page, hmi_observation, active_rules_reference,
-                       active_rules, published_rules_reference)
-        time.sleep_ms(50)
+        # Sleep out the rest of the sample period, but poll touch every 50 ms so
+        # taps are not missed. Sensor cadence stays at SAMPLE_PERIOD_MS.
+        last_cycle_work_ms = elapsed_ticks_ms(cycle_started_ms, time.ticks_ms())
+        sleep_until = time.ticks_add(now, SAMPLE_PERIOD_MS)
+        while time.ticks_diff(sleep_until, time.ticks_ms()) > 0:
+            # M5.Touch only refreshes when M5.update() runs. Pumping it once per
+            # second in the outer loop left 19 of every 20 touch polls reading a
+            # stale snapshot, which is what made taps feel unresponsive. Safe to
+            # call at this rate now: no machine.I2C handle exists for it to break.
+            if service_navigation():
+                render_hmi(hmi_page, hmi_observation, active_rules_reference,
+                           active_rules, published_rules_reference)
+            time.sleep_ms(50)
+        cpu_a_consecutive_faults = 0
+    except Exception as loop_error:
+        cpu_a_faults, cpu_a_consecutive_faults, cpu_a_stop = loop_fault_step(
+            cpu_a_faults, cpu_a_consecutive_faults, CPU_A_FAULT_STOP_COUNT)
+        try:
+            log('CPU A LOOP FAULT {} ({} in a row): {}'.format(
+                cpu_a_faults, cpu_a_consecutive_faults, loop_error))
+            sys.print_exception(loop_error)
+        except Exception:
+            pass
+        if cpu_a_stop:
+            log('CPU A STOPPED after {} faults in a row'.format(
+                cpu_a_consecutive_faults))
+            show_cpu_a_stopped(cpu_a_consecutive_faults)
+            break
+        time.sleep_ms(SAMPLE_PERIOD_MS)

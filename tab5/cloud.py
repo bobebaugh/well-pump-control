@@ -1715,231 +1715,261 @@ def _run():
     event_board_failure_count = 0
     last_event_board_item = None
 
+    consecutive_faults = 0
     while True:
-        now = time.ticks_ms()
-        was_connected = connected
-        connected = wlan.isconnected()
+        try:
+            now = time.ticks_ms()
+            was_connected = connected
+            connected = wlan.isconnected()
 
-        if connected and not was_connected:
-            _log_connected_ap(wlan)
-            traffic_ready = False
-            quiet_deadline = time.ticks_add(now, WIFI_QUIET_PERIOD_MS)
-            next_recovery = None
-            log('Wi-Fi connected; network traffic remains paused for {} ms'.format(
-                WIFI_QUIET_PERIOD_MS))
-        elif not connected and was_connected:
-            disconnect_count += 1
-            traffic_ready = False
-            quiet_deadline = None
-            next_recovery = time.ticks_add(now, WIFI_RECOVERY_TRIGGER_MS)
-            log('Wi-Fi disconnected #{}; fresh recovery scheduled in {} ms'.format(
-                disconnect_count, WIFI_RECOVERY_TRIGGER_MS))
+            if connected and not was_connected:
+                _log_connected_ap(wlan)
+                traffic_ready = False
+                quiet_deadline = time.ticks_add(now, WIFI_QUIET_PERIOD_MS)
+                next_recovery = None
+                log('Wi-Fi connected; network traffic remains paused for {} ms'.format(
+                    WIFI_QUIET_PERIOD_MS))
+            elif not connected and was_connected:
+                disconnect_count += 1
+                traffic_ready = False
+                quiet_deadline = None
+                next_recovery = time.ticks_add(now, WIFI_RECOVERY_TRIGGER_MS)
+                log('Wi-Fi disconnected #{}; fresh recovery scheduled in {} ms'.format(
+                    disconnect_count, WIFI_RECOVERY_TRIGGER_MS))
 
-        if not connected and next_recovery is not None:
-            if time.ticks_diff(now, next_recovery) >= 0:
-                try:
-                    _configure_and_connect(wlan, True)
-                except Exception as e:
-                    log('Wi-Fi recovery attempt failed: {}'.format(e))
-                next_recovery = time.ticks_add(now, WIFI_RECOVERY_REPEAT_MS)
+            if not connected and next_recovery is not None:
+                if time.ticks_diff(now, next_recovery) >= 0:
+                    try:
+                        _configure_and_connect(wlan, True)
+                    except Exception as e:
+                        log('Wi-Fi recovery attempt failed: {}'.format(e))
+                    next_recovery = time.ticks_add(now, WIFI_RECOVERY_REPEAT_MS)
 
-        if connected and not traffic_ready and quiet_deadline is not None:
-            if time.ticks_diff(now, quiet_deadline) >= 0:
-                traffic_ready = True
-                log('Wi-Fi quiet period complete; Shelly and remote traffic enabled')
+            if connected and not traffic_ready and quiet_deadline is not None:
+                if time.ticks_diff(now, quiet_deadline) >= 0:
+                    traffic_ready = True
+                    log('Wi-Fi quiet period complete; Shelly and remote traffic enabled')
 
-        if connected and traffic_ready and not clock_synced:
-            if time.ticks_diff(now, next_ntp_attempt) >= 0:
-                clock_synced = _try_ntp_sync()
-                if not clock_synced:
-                    next_ntp_attempt = time.ticks_add(now, NTP_RETRY_MS)
+            if connected and traffic_ready and not clock_synced:
+                if time.ticks_diff(now, next_ntp_attempt) >= 0:
+                    clock_synced = _try_ntp_sync()
+                    if not clock_synced:
+                        next_ntp_attempt = time.ticks_add(now, NTP_RETRY_MS)
 
-        _set_state(connected, traffic_ready, clock_synced, _safe_status(wlan),
-                   _safe_ip(wlan), disconnect_count)
+            _set_state(connected, traffic_ready, clock_synced, _safe_status(wlan),
+                       _safe_ip(wlan), disconnect_count)
 
-        if connected and traffic_ready and clock_synced:
-            pending = _take_pending_observation()
-            if pending is not None:
-                latest_observation = pending
-                latest_legacy_observation = _legacy_observation_candidate(
-                    pending, latest_legacy_observation)
+            if connected and traffic_ready and clock_synced:
+                pending = _take_pending_observation()
+                if pending is not None:
+                    latest_observation = pending
+                    latest_legacy_observation = _legacy_observation_candidate(
+                        pending, latest_legacy_observation)
 
-            retry_due = time.ticks_diff(now, next_publish_attempt) >= 0
-            heartbeat_due = time.ticks_diff(now, last_publish) >= HEARTBEAT_PERIOD_MS
-            monitor_due = (monitoring_active and latest_legacy_observation is not None and
-                           time.ticks_diff(now, last_publish) >= MONITOR_PUBLISH_PERIOD_MS)
-            change_due = (not monitoring_active and latest_legacy_observation is not None and
-                          _material_change(latest_legacy_observation, last_published_observation))
+                retry_due = time.ticks_diff(now, next_publish_attempt) >= 0
+                heartbeat_due = time.ticks_diff(now, last_publish) >= HEARTBEAT_PERIOD_MS
+                monitor_due = (monitoring_active and latest_legacy_observation is not None and
+                               time.ticks_diff(now, last_publish) >= MONITOR_PUBLISH_PERIOD_MS)
+                change_due = (not monitoring_active and latest_legacy_observation is not None and
+                              _material_change(latest_legacy_observation, last_published_observation))
 
-            reason = None
-            if monitor_due:
-                reason = 'monitoring'
-            elif change_due:
-                reason = 'state-change'
-            elif heartbeat_due:
-                reason = 'heartbeat'
+                reason = None
+                if monitor_due:
+                    reason = 'monitoring'
+                elif change_due:
+                    reason = 'state-change'
+                elif heartbeat_due:
+                    reason = 'heartbeat'
 
-            if retry_due and reason is not None:
-                observation = (latest_legacy_observation if latest_legacy_observation is not None
-                               else last_published_observation)
-                if observation is not None:
-                    ok, reported_monitoring = _publish_observation(observation, reason)
-                    _record_transport_result(
-                        'telemetry', ok, time.ticks_ms(), _last_publish_failure)
-                    if ok:
-                        last_publish = now
-                        last_published_observation = observation
-                        next_publish_attempt = now
-                        if (reported_monitoring is not None and
-                                reported_monitoring != monitoring_active):
-                            monitoring_active = reported_monitoring
-                            log('Web monitoring mode {}'.format(
-                                'ON (1 Hz)' if monitoring_active else 'OFF (on-change)'))
-                        log('Netlify publish succeeded ({})'.format(reason))
-                    else:
-                        next_publish_attempt = time.ticks_add(now, PUBLISH_RETRY_MS)
-                        log('Netlify publish failed ({}); retry in {} ms'.format(
-                            reason, PUBLISH_RETRY_MS))
+                if retry_due and reason is not None:
+                    observation = (latest_legacy_observation if latest_legacy_observation is not None
+                                   else last_published_observation)
+                    if observation is not None:
+                        ok, reported_monitoring = _publish_observation(observation, reason)
+                        _record_transport_result(
+                            'telemetry', ok, time.ticks_ms(), _last_publish_failure)
+                        if ok:
+                            last_publish = now
+                            last_published_observation = observation
+                            next_publish_attempt = now
+                            if (reported_monitoring is not None and
+                                    reported_monitoring != monitoring_active):
+                                monitoring_active = reported_monitoring
+                                log('Web monitoring mode {}'.format(
+                                    'ON (1 Hz)' if monitoring_active else 'OFF (on-change)'))
+                            log('Netlify publish succeeded ({})'.format(reason))
+                        else:
+                            next_publish_attempt = time.ticks_add(now, PUBLISH_RETRY_MS)
+                            log('Netlify publish failed ({}); retry in {} ms'.format(
+                                reason, PUBLISH_RETRY_MS))
 
-            # Legacy Netlify publication above retains first service priority.
-            # The replaceable board and durable FIFO are independent. Each pass
-            # performs at most one of their network calls before yielding to RTDB.
-            board_attempted = False
-            event_board = _peek_event_board()
-            if event_board is not None and event_board is not last_event_board_item:
-                last_event_board_item = event_board
-                event_board_failure_count = 0
-                next_event_board_attempt = now
-            if (event_board is not None and not event_board_yield_to_other and
-                    time.ticks_diff(now, next_event_board_attempt) >= 0):
-                board_attempted = True
-                event_board_yield_to_other = True
-                board_sequence = event_board['board'].get('boardSequence')
-                _transport_status_lock.acquire()
-                try:
-                    _transport_status['eventBoardLastAttemptSequence'] = board_sequence
-                finally:
-                    _transport_status_lock.release()
-                try:
-                    decision = _publish_event_board(event_board)
-                    _discard_event_board(event_board)
+                # Legacy Netlify publication above retains first service priority.
+                # The replaceable board and durable FIFO are independent. Each pass
+                # performs at most one of their network calls before yielding to RTDB.
+                board_attempted = False
+                event_board = _peek_event_board()
+                if event_board is not None and event_board is not last_event_board_item:
+                    last_event_board_item = event_board
                     event_board_failure_count = 0
-                    next_event_board_attempt = time.ticks_ms()
+                    next_event_board_attempt = now
+                if (event_board is not None and not event_board_yield_to_other and
+                        time.ticks_diff(now, next_event_board_attempt) >= 0):
+                    board_attempted = True
+                    event_board_yield_to_other = True
+                    board_sequence = event_board['board'].get('boardSequence')
                     _transport_status_lock.acquire()
                     try:
-                        _transport_status['eventBoardLastAcceptedSequence'] = board_sequence
-                        _transport_status['eventBoardLastSuccessTicksMs'] = time.ticks_ms()
-                        _transport_status['eventBoardLastResult'] = decision
+                        _transport_status['eventBoardLastAttemptSequence'] = board_sequence
                     finally:
                         _transport_status_lock.release()
-                    log('Current event board accepted: sequence={}, result={}'.format(
-                        board_sequence, decision))
-                except Exception as e:
-                    status_code = getattr(e, 'status_code', None)
-                    if _is_permanent_http_reject(status_code):
+                    try:
+                        decision = _publish_event_board(event_board)
                         _discard_event_board(event_board)
-                        _increment_transport_counter('eventBoardPermanentRejects')
-                        _transport_status_lock.acquire()
-                        try:
-                            _transport_status['eventBoardLastResult'] = 'rejected'
-                        finally:
-                            _transport_status_lock.release()
                         event_board_failure_count = 0
                         next_event_board_attempt = time.ticks_ms()
-                        log('Current event board permanently rejected: sequence={}, error={}'.format(
-                            board_sequence, e))
-                    else:
-                        _increment_transport_counter('eventBoardTransientFailures')
-                        event_board_failure_count += 1
-                        delay = min(
-                            EVENT_BOARD_RETRY_BASE_MS *
-                            (1 << min(max(event_board_failure_count - 1, 0), 4)),
-                            EVENT_BOARD_RETRY_MAX_MS)
-                        next_event_board_attempt = time.ticks_add(time.ticks_ms(), delay)
-                        log('Current event board transport error: {}; retry in {} ms'.format(
-                            e, delay))
+                        _transport_status_lock.acquire()
+                        try:
+                            _transport_status['eventBoardLastAcceptedSequence'] = board_sequence
+                            _transport_status['eventBoardLastSuccessTicksMs'] = time.ticks_ms()
+                            _transport_status['eventBoardLastResult'] = decision
+                        finally:
+                            _transport_status_lock.release()
+                        log('Current event board accepted: sequence={}, result={}'.format(
+                            board_sequence, decision))
+                    except Exception as e:
+                        status_code = getattr(e, 'status_code', None)
+                        if _is_permanent_http_reject(status_code):
+                            _discard_event_board(event_board)
+                            _increment_transport_counter('eventBoardPermanentRejects')
+                            _transport_status_lock.acquire()
+                            try:
+                                _transport_status['eventBoardLastResult'] = 'rejected'
+                            finally:
+                                _transport_status_lock.release()
+                            event_board_failure_count = 0
+                            next_event_board_attempt = time.ticks_ms()
+                            log('Current event board permanently rejected: sequence={}, error={}'.format(
+                                board_sequence, e))
+                        else:
+                            _increment_transport_counter('eventBoardTransientFailures')
+                            event_board_failure_count += 1
+                            delay = min(
+                                EVENT_BOARD_RETRY_BASE_MS *
+                                (1 << min(max(event_board_failure_count - 1, 0), 4)),
+                                EVENT_BOARD_RETRY_MAX_MS)
+                            next_event_board_attempt = time.ticks_add(time.ticks_ms(), delay)
+                            log('Current event board transport error: {}; retry in {} ms'.format(
+                                e, delay))
 
-            durable_attempted = False
-            durable_record = _peek_durable_record()
-            if (not board_attempted and durable_record is not None and
-                    not durable_yield_to_rtdb and
-                    time.ticks_diff(now, next_durable_attempt) >= 0):
-                durable_attempted = True
-                try:
-                    duplicate = _publish_durable_record(durable_record)
-                    _discard_durable_record(durable_record)
-                    _record_transport_result(
-                        'durable', True, time.ticks_ms())
-                    durable_failure_count = 0
-                    next_durable_attempt = time.ticks_ms()
-                    durable_yield_to_rtdb = True
-                    record = durable_record['record']
-                    if record.get('recordType') == 'observation':
-                        log('Durable observation accepted: sequence={}, duplicate={}'.format(
-                            record.get('cycleSequence', record.get('sequence')), duplicate))
-                    else:
-                        log('Rules audit accepted: type={}, sequence={}, duplicate={}'.format(
-                            record.get('recordType'),
-                            record.get('sequence'), duplicate))
-                except Exception as e:
-                    _record_transport_result(
-                        'durable', False, time.ticks_ms())
-                    status_code = getattr(e, 'status_code', None)
-                    if _is_permanent_http_reject(status_code):
+                durable_attempted = False
+                durable_record = _peek_durable_record()
+                if (not board_attempted and durable_record is not None and
+                        not durable_yield_to_rtdb and
+                        time.ticks_diff(now, next_durable_attempt) >= 0):
+                    durable_attempted = True
+                    try:
+                        duplicate = _publish_durable_record(durable_record)
                         _discard_durable_record(durable_record)
-                        _increment_transport_counter('durablePermanentRejects')
+                        _record_transport_result(
+                            'durable', True, time.ticks_ms())
                         durable_failure_count = 0
                         next_durable_attempt = time.ticks_ms()
-                        log('Durable record permanently rejected: {}'.format(e))
-                    else:
-                        _increment_transport_counter('durableTransientFailures')
-                        durable_failure_count += 1
-                        delay = _durable_retry_delay_ms(durable_failure_count)
-                        next_durable_attempt = time.ticks_add(time.ticks_ms(), delay)
-                        log('Durable observation transport error: {}; retry in {} ms'.format(
-                            e, delay))
-            if not board_attempted and not durable_attempted:
-                rtdb_action = _run_rtdb_step(rtdb_schedule, latest_observation)
-                durable_yield_to_rtdb = False
-                # V3 has an independent pointer/report channel.  This runs
-                # after the unchanged V2 operation selection and never joins
-                # its coordination snapshot or retry state.
-                _run_rules_v3_staging_step(rtdb_schedule, rtdb_action)
-                # Rules bytes are lower priority than legacy telemetry,
-                # durable records, and RTDB coordination. A continuous 1 Hz
-                # disposable-current stream is the one safe exception: serve
-                # one pending package after that update so it cannot starve.
-                # CPU B neither parses nor validates the rules package.
-                if _rules_download_may_follow_rtdb(rtdb_action):
-                    metadata = _take_rules_request()
-                    if metadata is not None:
-                        try:
-                            _queue_rules_release(metadata,
-                                                 _download_rules_release(metadata))
-                            log('Runtime release downloaded for CPU A: release={}'.format(
-                                metadata.get('releaseId')))
-                        except Exception as e:
-                            log('Rules release transport error: {}'.format(e))
-                # A V3 body is only a staging candidate. It has separate
-                # queueing and the exact version=3 endpoint; no V2 metadata
-                # can be interpreted as V3 or vice versa.
-                if _rules_download_may_follow_rtdb(rtdb_action):
-                    metadata = _take_rules_v3_request()
-                    if metadata is not None:
-                        try:
-                            _queue_rules_v3_release(
-                                metadata, _download_rules_v3_release(metadata))
-                            log('V3 staging release downloaded for CPU A: release={}'.format(
-                                metadata.get('releaseId')))
-                        except Exception as e:
-                            log('V3 staging release transport error: {}'.format(e))
+                        durable_yield_to_rtdb = True
+                        record = durable_record['record']
+                        if record.get('recordType') == 'observation':
+                            log('Durable observation accepted: sequence={}, duplicate={}'.format(
+                                record.get('cycleSequence', record.get('sequence')), duplicate))
+                        else:
+                            log('Rules audit accepted: type={}, sequence={}, duplicate={}'.format(
+                                record.get('recordType'),
+                                record.get('sequence'), duplicate))
+                    except Exception as e:
+                        _record_transport_result(
+                            'durable', False, time.ticks_ms())
+                        status_code = getattr(e, 'status_code', None)
+                        if _is_permanent_http_reject(status_code):
+                            _discard_durable_record(durable_record)
+                            _increment_transport_counter('durablePermanentRejects')
+                            durable_failure_count = 0
+                            next_durable_attempt = time.ticks_ms()
+                            log('Durable record permanently rejected: {}'.format(e))
+                        else:
+                            _increment_transport_counter('durableTransientFailures')
+                            durable_failure_count += 1
+                            delay = _durable_retry_delay_ms(durable_failure_count)
+                            next_durable_attempt = time.ticks_add(time.ticks_ms(), delay)
+                            log('Durable observation transport error: {}; retry in {} ms'.format(
+                                e, delay))
+                if not board_attempted and not durable_attempted:
+                    rtdb_action = _run_rtdb_step(rtdb_schedule, latest_observation)
+                    durable_yield_to_rtdb = False
+                    # V3 has an independent pointer/report channel.  This runs
+                    # after the unchanged V2 operation selection and never joins
+                    # its coordination snapshot or retry state.
+                    _run_rules_v3_staging_step(rtdb_schedule, rtdb_action)
+                    # Rules bytes are lower priority than legacy telemetry,
+                    # durable records, and RTDB coordination. A continuous 1 Hz
+                    # disposable-current stream is the one safe exception: serve
+                    # one pending package after that update so it cannot starve.
+                    # CPU B neither parses nor validates the rules package.
+                    if _rules_download_may_follow_rtdb(rtdb_action):
+                        metadata = _take_rules_request()
+                        if metadata is not None:
+                            try:
+                                _queue_rules_release(metadata,
+                                                     _download_rules_release(metadata))
+                                log('Runtime release downloaded for CPU A: release={}'.format(
+                                    metadata.get('releaseId')))
+                            except Exception as e:
+                                log('Rules release transport error: {}'.format(e))
+                    # A V3 body is only a staging candidate. It has separate
+                    # queueing and the exact version=3 endpoint; no V2 metadata
+                    # can be interpreted as V3 or vice versa.
+                    if _rules_download_may_follow_rtdb(rtdb_action):
+                        metadata = _take_rules_v3_request()
+                        if metadata is not None:
+                            try:
+                                _queue_rules_v3_release(
+                                    metadata, _download_rules_v3_release(metadata))
+                                log('V3 staging release downloaded for CPU A: release={}'.format(
+                                    metadata.get('releaseId')))
+                            except Exception as e:
+                                log('V3 staging release transport error: {}'.format(e))
 
-            # One board HTTP attempt must yield at least one pass to the
-            # durable/RTDB side, even if CPU A supersedes it immediately.
-            if not board_attempted:
-                event_board_yield_to_other = False
+                # One board HTTP attempt must yield at least one pass to the
+                # durable/RTDB side, even if CPU A supersedes it immediately.
+                if not board_attempted:
+                    event_board_yield_to_other = False
 
-        time.sleep_ms(100)
+            time.sleep_ms(100)
+            consecutive_faults = 0
+        except Exception as loop_error:
+            consecutive_faults, stop = _loop_fault_step(
+                consecutive_faults, CPU_B_FAULT_STOP_COUNT)
+            try:
+                _increment_transport_counter('cpuBFaults')
+                log('CPU B LOOP FAULT ({} in a row): {}'.format(
+                    consecutive_faults, loop_error))
+                sys.print_exception(loop_error)
+            except Exception:
+                pass
+            if stop:
+                log('CPU B STOPPED after {} faults in a row'.format(
+                    consecutive_faults))
+                _set_state(False, False, False, None, 'unavailable', 0)
+                return
+            time.sleep_ms(CPU_B_FAULT_PAUSE_MS)
+
+
+CPU_B_FAULT_STOP_COUNT = 10
+CPU_B_FAULT_PAUSE_MS = 1000
+
+
+def _loop_fault_step(consecutive, stop_count):
+    """Count one contained CPU B pass fault: (consecutive, stop)."""
+    consecutive = (consecutive if isinstance(consecutive, int) and
+                   not isinstance(consecutive, bool) and consecutive >= 0 else 0) + 1
+    return consecutive, consecutive >= stop_count
 
 
 def _worker():
