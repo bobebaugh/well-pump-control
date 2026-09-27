@@ -218,3 +218,28 @@ test("the badge and the watts beside it come from one endpoint", () => {
     "the badge is rendered from the observation record");
   assert.ok(!html.includes("monitor-toggle"), "the dead live-view control is gone");
 });
+
+test("SW0 and RLY0 show only from a fresh record of a reachable Shelly 1", () => {
+  const view = new Function(`${lift("shelly1RelayView")}\nreturn shelly1RelayView;`)();
+  const online = { available: true, sw0: true, rly0: false };
+  assert.deepEqual(view(online, true), { sw0: true, rly0: false });
+  // A dropout, a quiet Tab5, or firmware that never reported reachability all
+  // leave the relay unknown rather than holding the last ON/OFF on screen.
+  assert.deepEqual(view({ ...online, available: false }, true), { sw0: null, rly0: null });
+  assert.deepEqual(view(online, false), { sw0: null, rly0: null }, "a stale record proves nothing");
+  assert.deepEqual(view({ ...online, available: null }, true), { sw0: null, rly0: null });
+  assert.deepEqual(view({ available: true, sw0: null, rly0: true }, true), { sw0: null, rly0: true });
+  assert.deepEqual(view(undefined, true), { sw0: null, rly0: null });
+});
+
+test("every observation path writes the relay tiles rather than leaving the last value", () => {
+  // The tiles are set unconditionally from the view, not inside the fresh block.
+  const render = lift("renderObservation");
+  assert.match(render, /setBinaryValue\(sw0Value, relay\.sw0\)/);
+  assert.match(render, /setBinaryValue\(rly0Value, relay\.rly0\)/);
+  assert.match(render, /renderShelly1Health\(shelly1, fresh\)/);
+  assert.match(lift("renderShelly1Health"), /if \(!fresh\)/);
+  const failed = lift("checkObservation");
+  assert.match(failed, /setBinaryValue\(sw0Value, null\)/);
+  assert.match(failed, /setBinaryValue\(rly0Value, null\)/);
+});

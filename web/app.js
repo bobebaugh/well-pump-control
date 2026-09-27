@@ -352,10 +352,25 @@ function renderMeterHealth(data) {
   else setHealth(shellyRow, "unavailable", "Meter state unknown");
 }
 
-function renderShelly1Health(shelly1) {
-  if (shelly1.available === true) {
-    setHealth(shelly1Row, "online",
-      `SW0 ${shelly1.sw0 ? "ON" : "OFF"} · RLY0 ${shelly1.rly0 ? "ON" : "OFF"}`);
+// SW0 and RLY0 are current only in a fresh record from a Shelly 1 that answered.
+// Anything else is unknown, so a dropout or a quiet Tab5 never leaves the last
+// ON/OFF on screen looking live.
+function shelly1RelayView(shelly1, fresh) {
+  const live = fresh && shelly1?.available === true;
+  const read = (value) => live && typeof value === "boolean" ? value : null;
+  return { sw0: read(shelly1?.sw0), rly0: read(shelly1?.rly0) };
+}
+
+function binaryText(value) {
+  return typeof value === "boolean" ? (value ? "ON" : "OFF") : "—";
+}
+
+function renderShelly1Health(shelly1, fresh) {
+  if (!fresh) {
+    setHealth(shelly1Row, "unavailable", "No fresh reading · relay state unknown");
+  } else if (shelly1.available === true) {
+    const relay = shelly1RelayView(shelly1, fresh);
+    setHealth(shelly1Row, "online", `SW0 ${binaryText(relay.sw0)} · RLY0 ${binaryText(relay.rly0)}`);
   } else if (shelly1.available === false) {
     setHealth(shelly1Row, "offline", "Not reachable from Tab5 · relay state unknown");
   } else {
@@ -437,16 +452,10 @@ function renderObservation(data) {
     if (Number.isFinite(values.powerW)) powerValue.textContent = values.powerW.toFixed(0);
     if (Number.isFinite(values.voltageV)) voltageValue.textContent = values.voltageV.toFixed(1);
     if (Number.isFinite(values.powerFactor)) pfValue.textContent = values.powerFactor.toFixed(2);
-    // Only display Shelly 1 relay state if the device is actually available
-    if (shelly1.available === true) {
-      if (typeof shelly1.sw0 === "boolean") setBinaryValue(sw0Value, shelly1.sw0);
-      if (typeof shelly1.rly0 === "boolean") setBinaryValue(rly0Value, shelly1.rly0);
-    } else {
-      // Clear Shelly 1 relay state when device is offline
-      setBinaryValue(sw0Value, null);
-      setBinaryValue(rly0Value, null);
-    }
   }
+  const relay = shelly1RelayView(shelly1, fresh);
+  setBinaryValue(sw0Value, relay.sw0);
+  setBinaryValue(rly0Value, relay.rly0);
 
   // The badge and these rows read the same record as everything above, so the
   // state and the watts beside it are one instant. That disagreement between a
@@ -454,7 +463,7 @@ function renderObservation(data) {
   renderPumpBadge(pumpBadgeState(data, fresh));
   renderProtection(data, fresh);
   renderMeterHealth(data);
-  renderShelly1Health(shelly1);
+  renderShelly1Health(shelly1, fresh);
   setHealth(tab5Row, fresh ? "online" : "checking",
     data.ageSeconds === null ? "Timestamp unavailable" : `Last report ${data.ageSeconds}s ago`);
 }
@@ -633,7 +642,12 @@ async function checkObservation() {
     // The read failed rather than the device going quiet, so the age on screen
     // proves nothing. Say the row is unavailable instead of ageing a number
     // nothing refreshed.
-    else setHealth(tab5Row, "offline", "Telemetry unavailable");
+    else {
+      setHealth(tab5Row, "offline", "Telemetry unavailable");
+      setHealth(shelly1Row, "unavailable", "Telemetry unavailable · relay state unknown");
+      setBinaryValue(sw0Value, null);
+      setBinaryValue(rly0Value, null);
+    }
   }
   observationTimer = setTimeout(checkObservation, OBSERVATION_REFRESH_MS);
 }
