@@ -194,7 +194,7 @@ deploy costs 15, so main moves once.
   and notifications arrive through main, and nothing from the device reaches pilot.
 - E. All restarts in one visit, because each resets uptime. Publish the reviewed rules
   package and restart to adopt it; request a Shelly reboot (accepted, then confirmed);
-  restart the Tab5 from the web; last, the battery test.
+  restart the Tab5 from the web; last, the battery test and the whole-house power cut.
 - F. Soak at least 13 days with no restart. The tick counter wraps at 12.4 days, and
   those days give the heap stat its baseline. Outage tests during the soak: internet
   only for 30-60 minutes (both alert messages should arrive), and router off for 10
@@ -220,6 +220,13 @@ Owner tasks, no code:
   recovery. Proposal: remove it for the freeze, after confirming in step E that the Tab5
   restarts unattended with the battery out (cut power 10 s, restore). No rule uses the
   battery.
+- Whole-house power cut, soon: the owner wants it done ahead of the final install, and
+  it does not depend on the new build. Everything restarts together, so the Tab5 likely
+  boots before the router has Wi-Fi. cloud.py reconnects without limit and retries SNTP
+  every 30 s, so it should recover alone; this has never been tested. Watch, after power
+  returns: the home page's live reading, durable records resuming, a new event-board
+  session, both Shellys reporting, and normal pump cycling. The battery test can be done
+  the same day. Repeat both briefly in step E if the visit allows.
 - Caretaker card. No water: power-cycle the Tab5. Still none: selector to Hand. The Tab5
   hold has no time limit, so a Tab5 that stops while holding keeps holding (#4).
 - Freeze contract: keep the Shelly DHCP reservations and PILOT_INGEST_TOKEN. Check the
