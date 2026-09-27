@@ -129,7 +129,8 @@ records. Transport is an oldest-first 100-record/384-KiB RAM FIFO with discard
 accounting, not a flash outbox. A reset or long outage can lose records.
 
 CPU A publishes a complete sparse current-event board on changes, at once after boot,
-and otherwise every 30 minutes (every 30 seconds before M6.45). CPU B keeps only the latest board independently of the FIFO.
+and otherwise every 30 minutes (every 30 seconds before M6.45). CPU B keeps only the
+latest board independently of the FIFO.
 Firestore transactions reconcile newer boards into deterministic event-open/close
 records. Silence never closes an event; disappearance/restart closes have unknown
 device close times. A revision guards the RTDB mirror from delayed overwrites.
