@@ -69,7 +69,8 @@ power-save change.
 
 The pre-freeze round, approved 27 September, is in pilot-working's CURRENT (section
 "Pre-freeze round"). Device items: heap stat, survive one bad loop pass, daily SNTP
-resync, and endpoints moved to main. They ride one install with M6.44.
+resync, endpoints moved to main, and an unchanged event board re-sent every 30 minutes
+instead of 30 s. They ride one install with M6.44.
 
 ## On tab5-working, not yet on Tab5
 
