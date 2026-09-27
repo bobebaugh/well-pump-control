@@ -33,6 +33,13 @@ under docs/rules-packages/ as the editable record of what was published; the sta
 runtime bytes and their server-minted release identity remain the only authority
 for what the device runs.
 
+What the Tab5 posts to Firestore can be read without the Firebase console.
+maintenance/firestore-peek.cjs, on the web/cloud line only, reads collections under
+sites/well-main such as eventRecords, eventBoardState and observations. On 27
+September a cloud session with FIREBASE_SERVICE_ACCOUNT_JSON set read the first two. The
+script is read-only, and the owner provisioned the account read-only. The records
+are what the cloud received, not proof of what the device ran or did.
+
 ## Known limits
 
 Abandoned-inhibit recovery needs the beta decision in FUTURE. Script liveness is
