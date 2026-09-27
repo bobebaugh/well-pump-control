@@ -89,6 +89,18 @@ still asks for the password to view and publishes identically. Main should follo
 Main's rules editor still accepts non-ASCII display names and still says notification
 settings are authoring only; publish rules from the pilot deploy until main follows.
 
+## On pilot-working, not yet on pilot
+
+Keep this list current on every pilot-working change and move rows to the table above
+when pilot is advanced. Docs-only commits (c503d29, feb0684) are not listed.
+
+| Commit | Change | Kind |
+|---|---|---|
+| f0acaa4 | Home SW0/RLY0 tiles show unknown when a fresh record reports Shelly 1 unreachable | screen (home) |
+| e478c6c | SW0/RLY0 tiles and the Shelly 1 health row also show unknown on a stale record or a failed read; the row no longer shows a missing value as OFF | screen (home) |
+
+Both are verified by the web tests only (381 pass); not yet seen on a deploy.
+
 ## Maintenance baseline
 
 Before housekeeping: pilot = 150bb8ab6297062ca6a8157708f05700c6cd74d0;

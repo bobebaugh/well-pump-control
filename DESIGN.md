@@ -134,7 +134,10 @@ The web home displays live RTDB observations and event state. Every live reading
 the pump badge and the Tab5/meter/Shelly 1 health rows come from one observation
 record, so the state and the numbers beside it are the same instant. The badge
 reads SW(0) directly and falls back to meter watts only when Shelly 1 is
-unavailable; unknown is a distinct state and is never shown as stopped. The page
+unavailable; unknown is a distinct state and is never shown as stopped. The SW(0)
+and RLY0 tiles and the Shelly 1 row show a value only from a fresh record in which
+Shelly 1 answered; a stale record, a failed read or an unreachable Shelly 1 shows
+unknown rather than the last value. The page
 displays a disagreement between the contactor and motor current without judging
 it; the rules engine owns what one means. The tank shows the device's net flow estimate
 (TankNetFlowGPM, signed, positive filling) from the same record. It reads zero when

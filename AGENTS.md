@@ -35,6 +35,8 @@ hardware, a capture, or the owner.
   it or require it to equal an older operating branch before a new small fix.
 - Check the affected behavior, then stop testing once the relevant checks pass.
   Docs-only changes need link/content checks, not a hardware or emulator campaign.
+- Every change updates the docs in the same push: its row in CURRENT's promotion
+  list, and DESIGN when the behavior it describes changes.
 - Keep CURRENT short: accepted behavior, installed evidence, next owner decision.
   Put deferred ideas in FUTURE rather than creating new handoff documents.
 
