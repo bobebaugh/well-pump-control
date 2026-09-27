@@ -18,7 +18,9 @@ variable set listed the sites/well-main collections and read eventRecords and
 eventBoardState documents. The owner provisioned the account read-only; that was not
 tested with a write, since Pilot and Main share live data.
 
-The latest device working source is M6.42; the owner believes it is installed.
+Installed on the Tab5: pilot.py M6.43 with DIAG logging, cloud.py M6.37 and main.py
+M6.41, established by comparing the device's own files with Tab5 9e1accb.
+tab5-working carries M6.44, not installed.
 The owner confirms the Shelly 1 protection script is fully unit tested on real
 hardware. Exact installed files/package identity still need a release receipt.
 
@@ -113,6 +115,8 @@ when pilot is advanced.
 
 968af5f changes nothing visible until Tab5 M6.44 is installed: older records carry no
 cause and read as before. Ingest already accepted extra reason keys.
+Docs-only commits also waiting: c04e069, 800b56f, 7a86605 and the approved pre-freeze
+plan that follows them.
 
 ## Maintenance baseline
 
@@ -122,55 +126,106 @@ an additional observation-series repair. Housekeeping adds documentation/test
 maintenance only; it does not promote that repair or change live behavior.
 Old branch tips are archived in maintenance/branch-archive-2026-09-16.csv.
 
-## Pre-freeze round, planned 27 September 2026
+## Pre-freeze round, approved 27 September 2026
 
-After one last device install, pilot.py, cloud.py and main.py are to run untouched for six
-months. The longest Tab5 session on record is 1.85 days, so nothing that only appears
-after weeks of uptime has been seen yet. Device work is on tab5-working; one install
-carries items 1-5.
+After one last device install, pilot.py, cloud.py and main.py run untouched for six
+months. Rules packages and screens can still change during the freeze; device files
+cannot. The owner reviewed and approved this plan on 27 September. The longest Tab5
+session on record is 1.85 days, so nothing that only appears after weeks of uptime has
+been seen yet. Mark an item done only with a commit, a check or the owner's report.
+
+Device work, one install from tab5-working:
 
 1. Done, not installed: M6.44 records why CloudAvailable went false (06d0598, f89ec9b).
-   The records page shows it from 968af5f.
-2. Heap stat: free heap after gc.collect() about every 10 minutes, plus the lowest free
-   seen, as new tab5-runtime bindings. They need a matching entry in
-   rules-engine-defaults.js, with the simulator handling them. Package fields use logging
-   include, so they ride the health record without creating records. The device rejects
-   a package naming an unknown binding, so the order is install, then publish, then
-   restart to adopt.
-3. Survive one bad cycle: contain an unexpected exception per loop pass in CPU B. CPU A
-   awaits the owner's choice. Count faults like the heap stat. No hardware watchdog (#8:
-   bounded recovery, no blind retry loop).
-4. Daily SNTP resync. The device clock gains about 1.8 s a day (records, 21-27 Sep), which
-   would be 5-6 minutes by spring. Ingest has no future-time limit, so nothing is lost.
-5. Move the device endpoints from pilot--well-pump-control.netlify.app to
-   well-pump-control.netlify.app (main), not the custom domain. Main must first be
-   fast-forwarded to pilot: 69601cc is 28 commits behind, including the device-facing
-   event-board and notifier change af8d8e2. Checked 27 Sep: main's five device endpoints
-   reject an unauthenticated POST with 401, so the password is set, and main reads
-   Firestore and RTDB. After the move, main sends notifications, not pilot.
-6. Silent-device alert (cloud only; it can change during the freeze). A scheduled function
-   runs every 15 minutes. It sends one message when the newest durable record is over 30
-   minutes old, and one when records resume. Netlify runs scheduled functions only on the
-   production deploy, so it lives on main.
-7. Owner, no code:
-   - Battery: M5Stack says a battery below 6 V enters protection mode, which needs
-     manual recovery. Proposal: remove it for the freeze, after confirming the Tab5
-     restarts unattended with the battery out (cut power 10 s, restore). No rule uses
-     the battery.
-   - Outage tests after the install: internet only for 30-60 minutes, and router off
-     for 10 minutes. The 100-record queue lasts about 12 hours when quiet and about 4
-     hours on a typical day; each pump run adds about 45 records.
-   - Run the final build at least 13 days before freezing. The tick counter wraps at
-     12.4 days, and those days give the heap stat its baseline.
-   - Freeze contract: keep the Shelly DHCP reservations and PILOT_INGEST_TOKEN. Check
-     the Netlify plan allowance against about 145,000 device function calls a month.
+   The records page shows it from 968af5f. It rides the final install instead of going
+   in alone. A week of causes would decide whether to raise RTDB_TIMEOUT_S from 1 to 2 s,
+   but that would cost a second install, and a flag that recovers in 3-9 s is not a
+   freeze risk.
+2. Not started: heap stat. Free heap after gc.collect() about every 10 minutes, plus the
+   lowest free seen, as new tab5-runtime bindings. pilot.py already measures both for
+   its screen. The bindings need an entry in rules-engine-defaults.js and simulator
+   support. That is rules-package pipeline, so main and pilot both carry it before a
+   package uses it. The device rejects a package naming an unknown binding, so the
+   order is install, then publish, then restart to adopt.
+3. Not started: survive one bad loop pass, counting faults like the heap stat. CPU B
+   (cloud.py) is agreed. CPU A (pilot.py) awaits the owner, and the doc session
+   recommends it: CPU A takes the web restart command, so if it dies only an on-site
+   power cycle recovers. Contain the pass, count it, and stop cleanly after a run of
+   consecutive faults so the silent-device alert fires. No hardware watchdog and no
+   endless retry (#8).
+4. Not started: daily SNTP resync. cloud.py syncs only until its first success after
+   boot. The clock gains about 1.8 s a day (records, 21-27 Sep), 5-6 minutes by spring.
+5. Not started: move the device endpoints from pilot--well-pump-control.netlify.app to
+   well-pump-control.netlify.app (main), not the custom domain. Main then serves the
+   device as well as the screens and sends the notifications. Pilot becomes a test
+   deploy that still writes live data. BETA and DESIGN change in the same push. Keep
+   pilot's device functions working until the freeze, as the rollback for the old
+   device files. Checked 27 Sep: main's five device endpoints reject an unauthenticated
+   POST with 401 and main reads Firestore and RTDB.
+
+Cloud work on pilot-working:
+
+6. Not started: silent-device alert. A scheduled function runs every 15 minutes. It
+   sends one message when the newest durable record is over 30 minutes old, and one
+   when records resume. Netlify runs scheduled functions only on production, so it goes
+   live with main's deploy. The internet outage test is its first live check.
+7. Not started: the heap-stat catalog entry and simulator support for item 2.
+
+Sequence. Pilot is a branch deploy and costs no Netlify credits; each main production
+deploy costs 15, so main moves once.
+
+- A. Owner: decide CPU A containment (item 3).
+- B. Build items 2-7 on the working branches.
+- C. Promote pilot-working to pilot, then fast-forward main to pilot: the single main
+  deploy. Main (69601cc) is 27 commits behind pilot, including the device-facing
+  event-board and notifier change af8d8e2 and the dashboard changes f0acaa4-46d19ca.
+- D. Install the final Tab5 build and record its file set and stamps. Confirm records
+  and notifications arrive through main, and nothing from the device reaches pilot.
+- E. All restarts in one visit, because each resets uptime. Publish the reviewed rules
+  package and restart to adopt it; request a Shelly reboot (accepted, then confirmed);
+  restart the Tab5 from the web; last, the battery test.
+- F. Soak at least 13 days with no restart. The tick counter wraps at 12.4 days, and
+  those days give the heap stat its baseline. Outage tests during the soak: internet
+  only for 30-60 minutes (both alert messages should arrive), and router off for 10
+  minutes. The 100-record queue lasts about 12 hours when quiet and about 4 hours on a
+  typical day; each pump run adds about 45 records. A device fault found here means a
+  reinstall, and the 13 days start again.
+- G. Freeze. Record the running files and package in CURRENT. Add to AGENTS that the
+  device-facing functions (ingest-power, ingest-record, event-board, device-sync,
+  package delivery) and interfaces/ stay compatible with the installed files.
+
+Owner tasks, no code:
+
+- 28 Sep, with the next bucket test: connect the Shelly 1 relay into the 0 V leg. The
+  technical record says it was disconnected for testing, so until then a Tab5 hold has
+  no physical effect. Then confirm that a Tab5 hold stops a demand in Auto.
+- Before step E, review the rules package. Reverse the test setting still in it (W09 at
+  3,600 W, intended 2,600 W). Settle P013's name against its 3,600 s condition, and E007
+  at 266 V against the motor's 253 V terminal limit. Add or check Hand-mode detection:
+  contactor on with idle watts for 5 s or more means Hand or centre 0, or a contactor,
+  box or motor fault. Detection rules have given trouble, so run it in the simulator
+  before publishing.
+- Battery: M5Stack says a battery below 6 V enters protection mode, which needs manual
+  recovery. Proposal: remove it for the freeze, after confirming in step E that the Tab5
+  restarts unattended with the battery out (cut power 10 s, restore). No rule uses the
+  battery.
+- Caretaker card. No water: power-cycle the Tab5. Still none: selector to Hand. The Tab5
+  hold has no time limit, so a Tab5 that stops while holding keeps holding (#4).
+- Freeze contract: keep the Shelly DHCP reservations and PILOT_INGEST_TOKEN. Check the
+  Netlify credit allowance against about 145,000 device function calls a month. Web
+  requests cost 2 credits per 10,000 plus function compute, on branch and production
+  deploys alike, so the endpoint move does not change the running cost.
+
+Live readings need no change for the freeze. With no one watching, the Tab5 posts on a
+material power or voltage change or a 60-second heartbeat; 1 Hz runs only while a
+screen has monitoring on. The steady RTDB traffic is the 10-second coordination poll
+that lets a web restart arrive within its 45-second lifetime, and the 30-second presence.
 
 ## Next owner decisions
 
 1. Review the remaining beta reliability choices in FUTURE. No application fix was
    authorized or applied by housekeeping.
-2. Promote the accepted working candidates to pilot/Tab5 when ready, and advance main
-   to pilot when production should follow.
+2. Work through the pre-freeze round above. It sets when pilot, Tab5 and main advance.
 3. Finish activation from BETA: confirm the mfwell.ebaugh.net certificate, owner access
    and rejection of a missing or wrong password on production, and that Netlify branch
    deploys remain restricted to pilot.
@@ -206,8 +261,8 @@ carries items 1-5.
    em-dash, which is outside the GSM-7 alphabet and forces UCS-2 at seventy characters
    per segment, so watch how a full-length name such as W07 arrives during the soak.
 
-7. Review the dashboard changes now on pilot (f0acaa4-46d19ca), then include them in the
-   next main deploy. Cloud sessions can now read records directly with
+7. Review the dashboard changes now on pilot (f0acaa4-46d19ca). They reach main in the
+   single main deploy, step C of the pre-freeze round. Cloud sessions can now read records directly with
    maintenance/firestore-peek.cjs instead of from a CSV export.
 
 No DNS, Netlify settings, Firebase configuration, device upload, restart or source

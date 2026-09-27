@@ -87,7 +87,9 @@ goes stale. Measured shape on 25 September 2026: about 100-250 records a day.
 Source: the owner's well-head flow test (details kept outside the repo). Software items only.
 
 - **Fill time, switch and leak-down trends:** built on pilot-working (46d19ca), with one
-  delivery estimate for day and week. On the 18-27 September export normal fills took
+  delivery estimate for day and week. This is the record's 40-to-60 psi fill-time trend,
+  timed from 48 to 58 psi so the switch's cut-in and cut-out scatter and the start delay
+  stay out of it. Not built: a flow-at-50-psi trend. On the 18-27 September export normal fills took
   43.8-46.3 s from 48 to 58 psi and the drawn-down well 54.3 s. Draw before a start did not
   predict a slow fill, so only draw after cut-out marks a fill not clean.
 - **Tank model:** calibrate against a bucket drain between static pressures, then adjust the
@@ -127,6 +129,20 @@ Source: the owner's well-head flow test (details kept outside the repo). Softwar
   power-cycle only the adapter and watch idle watts. An idle step may be network-side, not
   pump-side.
 
+## Technical record consistency (owner's document, not the app)
+
+Found reading revision 3 of the owner's technical record (linked from AGENTS) on 27
+September. None affects the app.
+
+- Appendix B says the control run is about 350 ft; revision 3.0 corrected it to 250 ft.
+  Neither run is measured: about 50 ft to the basement subpanel, then about 250 ft buried.
+- The file is named rev 3-3, while its header and revision table end at 3.0.
+- Section 14 still lists as unrecorded the timer, interface relay and coil suppressor
+  models, which Appendix B now gives (ProSense T2R-M3-ADJ-240U, Murrelektronik 51152,
+  HMX1-SSVRC-DC).
+- Appendix B section 7 says the Shelly 1 relay leads are disconnected for testing. The
+  owner plans to reconnect them on 28 September; update the record then.
+
 ## Owner password and device credential
 
 The owner password checked by the browser-called functions is the same
@@ -156,6 +172,9 @@ default reduce how often the password is typed.
   deliberately bounded RAM/best effort; sharing live databases is the beta plan.
 - Remove obsolete V1/V2 UI/endpoints or compiled firmware source only as an explicit
   cleanup after checking consumers. They are not the current device platform.
+- A sense point on the +24 VDC demand leg would make the start delay, a latched timer
+  and Hand mode directly observable (technical record, Appendix B section 7). New
+  hardware; not a freeze item.
 - File-wide formatting, architecture rewrites, additional hardware/control authority,
   new accounts/MFA and workflow complexity are not beta prerequisites.
 
