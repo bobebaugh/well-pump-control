@@ -137,6 +137,14 @@ class CpuALoopFaultTests(unittest.TestCase):
         self.assertIn("break", handler)
         self.assertIn("time.sleep_ms(SAMPLE_PERIOD_MS)", handler)
 
+    def test_an_unchanged_board_is_resent_every_30_minutes(self):
+        heartbeat = load_logic({"EVENT_BOARD_HEARTBEAT_MS"})["EVENT_BOARD_HEARTBEAT_MS"]
+        self.assertEqual(heartbeat, 1800000)
+        board_due = ast.unparse(self.loop)
+        # Changes and the first board still go out at once.
+        self.assertIn("last_event_board_submit_ms is None or "
+                      "candidate_signature != last_event_board_signature", board_due)
+
     def test_the_fault_count_reaches_the_health_binding(self):
         body = ast.unparse(self.loop)
         self.assertIn("add_runtime_health(observation, heap_free_after_gc_bytes, "

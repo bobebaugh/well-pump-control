@@ -103,7 +103,12 @@ TAB5_RESTART_DELAY_MS = 1500
 SITE_ID = 'well-main'
 DEVICE_ID = 'tab5-well-main'
 MAX_DURABLE_OBSERVATION_INTERVAL_MS = 600000
-EVENT_BOARD_HEARTBEAT_MS = 30000
+# An unchanged board is re-sent this often. A change in open events, and the first
+# board after boot, go out at once. A board CPU B cannot queue is offered again
+# next cycle, and CPU B retries a failed post with backoff. The re-send only
+# recovers from a board the cloud rejected outright and has since been fixed to
+# accept. 30 s cost 2,880 calls a day; this is 48.
+EVENT_BOARD_HEARTBEAT_MS = 1800000
 EVENT_HISTORY_DEPTH = 600
 SHELLY_AVAILABILITY_CONFIRMATION_SAMPLES = 3
 MATERIAL_NUMERIC_THRESHOLDS = {
