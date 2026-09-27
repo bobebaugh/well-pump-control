@@ -117,6 +117,15 @@ Source: the owner's well-head flow test (details kept outside the repo). Softwar
   watts is the running indicator. The screens should not label Hand-idle as running.
 - **Shelly EM vs clamp:** the EM-derived current read about 6 % above a clamp meter at the
   Franklin box; both within rating. Note before treating EM watts as motor input.
+- **Idle watts step, unexplained:** idle watts include the wellhead network gear (on its own
+  breaker). On 26 September between 12:59 and 13:09, with the pump automation off, idle
+  rose about 1.8 W (15 %; 12.0 to 13.9 W with the Shelly 1 on) with power factor unchanged,
+  at the time of a momentary powerline-link fault; the adapter was never de-powered. On 27
+  September the owner power-cycled everything there, the Shelly EM for the first time
+  since, and idle returned to 12 W. Likely the powerline adapter holding some new task
+  after the fault; not confirmed, and an EM low-end offset is not ruled out. If it recurs,
+  power-cycle only the adapter and watch idle watts. An idle step may be network-side, not
+  pump-side.
 
 ## Owner password and device credential
 
