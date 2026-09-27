@@ -150,6 +150,14 @@ class CloudTransportTests(unittest.TestCase):
         self.assertEqual(self.cloud.device_session_id(), first)
         self.assertTrue(first.startswith("boot_"))
 
+    def test_startup_log_names_the_stamped_release(self):
+        """tab5/AGENTS.md: the header release and the CPU B startup log agree."""
+        source = pathlib.Path(self.cloud.__file__).read_text(encoding="utf-8")
+        header = source.splitlines()[0]
+        release = header.split()[3]
+        self.assertTrue(header.startswith("# Release: "), header)
+        self.assertIn("log('CPU B release {}:".format(release), source)
+
     def test_failure_note_is_bounded_and_cleared_by_success(self):
         """M6.44: CPU A can say why CloudAvailable went false."""
         self.assertTrue(self.cloud._record_transport_result(

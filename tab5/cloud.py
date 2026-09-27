@@ -1958,7 +1958,7 @@ def start():
         if _started:
             return False
         _started = True
-        log('CPU B release M6.37: monotonic operator control transport')
+        log('CPU B release M6.44: failure cause for CloudAvailable')
         _thread.start_new_thread(_worker, ())
         return True
     finally:
