@@ -99,6 +99,14 @@ class CpuBTimingTests(unittest.TestCase):
         # ticks_diff is valid below 2**29 ms, about 6.2 days.
         self.assertLess(self.cloud.NTP_RESYNC_MS, 1 << 29)
 
+    def test_every_device_endpoint_is_mains_production_host(self):
+        for name in ("INGEST_URL", "DURABLE_INGEST_URL", "EVENT_BOARD_URL",
+                     "DEVICE_SYNC_URL", "RULES_RELEASE_ORIGIN"):
+            self.assertTrue(getattr(self.cloud, name).startswith(
+                "https://well-pump-control.netlify.app"), name)
+        source = pathlib.Path(self.cloud.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("pilot--", source)
+
 
 class CpuALoopFaultTests(unittest.TestCase):
     @classmethod

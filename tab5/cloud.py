@@ -44,25 +44,27 @@ MONITOR_PUBLISH_PERIOD_MS = 1000
 POWER_CHANGE_W = 50.0
 VOLTAGE_CHANGE_V = 2.0
 DEVICE_ID = 'shelly-em-well'
-INGEST_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/ingest-power'
+# Main's production deploy, not a custom domain (fewer dependencies). Install
+# only after main is fast-forwarded to pilot. Pilot's copies stay as rollback.
+INGEST_URL = 'https://well-pump-control.netlify.app/.netlify/functions/ingest-power'
 PUBLISH_TIMEOUT_S = 3
-DURABLE_INGEST_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/ingest-record'
+DURABLE_INGEST_URL = 'https://well-pump-control.netlify.app/.netlify/functions/ingest-record'
 DURABLE_INGEST_TIMEOUT_S = 3
 DURABLE_QUEUE_DEPTH = 100
 DURABLE_QUEUE_MAX_BYTES = 393216
 DURABLE_RETRY_BASE_MS = 5000
 DURABLE_RETRY_MAX_MS = 60000
-EVENT_BOARD_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/event-board'
+EVENT_BOARD_URL = 'https://well-pump-control.netlify.app/.netlify/functions/event-board'
 EVENT_BOARD_TIMEOUT_S = 3
 EVENT_BOARD_RETRY_BASE_MS = 5000
 EVENT_BOARD_RETRY_MAX_MS = 60000
 EVENT_BOARD_MAX_BYTES = 65536
-RULES_RELEASE_ORIGIN = 'https://pilot--well-pump-control.netlify.app'
+RULES_RELEASE_ORIGIN = 'https://well-pump-control.netlify.app'
 MAX_RULES_RELEASE_BYTES = 65536
 
 SITE_ID = 'well-main'
 RTDB_DEVICE_ID = 'tab5-well-main'
-DEVICE_SYNC_URL = 'https://pilot--well-pump-control.netlify.app/.netlify/functions/device-sync'
+DEVICE_SYNC_URL = 'https://well-pump-control.netlify.app/.netlify/functions/device-sync'
 DEVICE_SYNC_TIMEOUT_S = 3
 RTDB_TIMEOUT_S = 1
 RTDB_COORDINATION_PERIOD_MS = 10000
