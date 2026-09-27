@@ -245,8 +245,11 @@ Owner tasks, no code:
   boots before the router has Wi-Fi. cloud.py reconnects without limit and retries SNTP
   every 30 s, so it should recover alone; this has never been tested. Watch, after power
   returns: the home page's live reading, durable records resuming, a new event-board
-  session, both Shellys reporting, and normal pump cycling. The battery test can be done
-  the same day. Repeat both briefly in step E if the visit allows.
+  session, both Shellys reporting, and normal pump cycling. Do it with the battery in:
+  a battery-out run waits until the package has moved BatteryPercent (see Battery), or
+  pressure and its rules go blank. Repeat briefly in step E if the visit allows. On 27
+  Sep at 18:45 EDT the owner unplugged the Tab5 with the battery in, to see how long it
+  runs and whether it restarts alone when power returns after running flat.
 - Caretaker card. No water: power-cycle the Tab5. Still none: selector to Hand. The Tab5
   hold has no time limit, so a Tab5 that stops while holding keeps holding (#4).
 - Network, the owner's largest freeze risk: the UniFi system as a whole, not its DHCP.
