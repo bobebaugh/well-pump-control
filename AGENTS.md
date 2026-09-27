@@ -20,7 +20,11 @@ authoritative device files are the installed ones.
 A code comment is not evidence for a physical or electrical fact. A comment sits
 inside deployed source, so it reads as satisfying the rule above while describing
 something that was never true or has since changed. Confirm those against the
-hardware, a capture, or the owner.
+hardware, a capture, or the owner. The owner's as-installed technical record (site,
+hydraulic, electrical and panel wiring, with the 26 September test) is a private Google
+Drive document, kept out of Git because this repository is public:
+https://docs.google.com/document/d/1E9fcJ4ok2895-3HjUt5wDldw-unZJUXT/edit
+Read it only when a task depends on such a fact; it is too much for anything else.
 
 ## Small fixes with minimum overhead
 
@@ -35,6 +39,8 @@ hardware, a capture, or the owner.
   it or require it to equal an older operating branch before a new small fix.
 - Check the affected behavior, then stop testing once the relevant checks pass.
   Docs-only changes need link/content checks, not a hardware or emulator campaign.
+- Every change updates the docs in the same push: its row in CURRENT's promotion
+  list, and DESIGN when the behavior it describes changes.
 - Keep CURRENT short: accepted behavior, installed evidence, next owner decision.
   Put deferred ideas in FUTURE rather than creating new handoff documents.
 

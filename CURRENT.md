@@ -3,13 +3,12 @@
 As of 22 September 2026. Release stamps are per file, not per bundle.
 
 Installed and running: pilot.py M6.43 plus diagnostic instrumentation, cloud.py
-M6.37, main.py M6.41. The running pilot.py is not in Git. It is tab5-working's
-M6.43 with edge-triggered log() calls tagged DIAG and no logic change: bindings
-resolved at startup, Boyle pump edges, script liveness transitions, slow Shelly 1
-reads, and Shelly restart request and resolution. The running cloud.py is
-byte-identical to tab5-working at 732e4e9, one commit before Wi-Fi modem sleep was
-disabled. Both operating branches therefore differ from the device until the source
-is reconciled.
+M6.37, main.py M6.41. pilot.py carries edge-triggered log() calls tagged DIAG and no
+logic change: bindings resolved at startup, Boyle pump edges, script liveness
+transitions, slow Shelly 1 reads, and Shelly restart request and resolution. 9e1accb,
+on Tab5 and tab5-working, made pilot.py and cloud.py byte-identical to the files the
+owner pulled off the device; cloud.py is back at M6.37, without the withdrawn Wi-Fi
+modem sleep change.
 
 ## Implemented and verified
 
@@ -53,11 +52,9 @@ effort, not a persistent outbox. See FUTURE for all deferred work.
 
 ## Next owner decisions
 
-Reconcile source with the device, then approve synchronization into Tab5. That
-means committing the DIAG instrumentation to pilot.py and reverting cloud.py to
-M6.37, undoing aaf1e22 and the cloud.py half of df290e6. Until then a rejected
-change sits in the source and Git does not describe the device. Also choose any
-beta reliability repairs and record the running package and recovery procedure.
+The pre-freeze round is the plan: see pilot-working's CURRENT, section "Pre-freeze
+round". Source already matches the device (9e1accb). Record the running package and
+recovery procedure at the final install.
 Source promotion does not reinstall files or change Shelly settings.
 Main/ebaugh.net activation concerns the web/cloud line and is planned in BETA.
 
@@ -65,14 +62,26 @@ M6.44 is on tab5-working (06d0598), not installed. It changes cloud.py and pilot
 only. CloudAvailable turns false on one failed telemetry post or RTDB call: 10-20
 times a day, each back within 3-9 s, about 1 in 3,000-5,000 RTDB calls. The cause
 of each failure reached only the console. M6.44 adds it to the durable reason as
-cause, and the records page shows it. Install it on its own. After a week, the
-causes decide whether raising RTDB_TIMEOUT_S from 1 to 2 s is worth doing. Host
+cause, and the records page shows it. It rides the final pre-freeze install rather
+than going in alone, so RTDB_TIMEOUT_S stays at 1 s for the freeze. Host
 tests: 268 run. Four WifiPowerSaveTests errors predate it; they test the withdrawn
 power-save change.
 
-The pre-freeze round is planned in pilot-working's CURRENT (section "Pre-freeze
-round"). Device items: heap stat, survive one bad cycle, daily SNTP resync, and
-endpoints moved to main. They ride one install with M6.44.
+The pre-freeze round, approved 27 September, is in pilot-working's CURRENT (section
+"Pre-freeze round"). Device items: heap stat, survive one bad loop pass, daily SNTP
+resync, and endpoints moved to main. They ride one install with M6.44.
+
+## On tab5-working, not yet on Tab5
+
+Keep this list current on every tab5-working change; clear it when Tab5 advances.
+
+| tab5-working commit | Change | Kind |
+|---|---|---|
+| 06d0598, f89ec9b | M6.44: durable reason carries the cause when CloudAvailable goes false; CPU B startup log names its release | cloud.py + pilot.py |
+| ca0595b | Cloud-session start hook | session support |
+| 08415b4, 9ae039e, 348aaad, ccbcd5d | Mirrored shared docs, Firestore peek, M6.44 and pre-freeze notes | docs |
+
+The approved-plan update that follows them is docs-only too.
 
 M6.43 needs device evidence for two things: one Shelly reboot reporting accepted
 then confirmed-completed, and the script liveness field reading true in normal
