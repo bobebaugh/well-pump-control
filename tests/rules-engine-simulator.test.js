@@ -293,3 +293,18 @@ test("the counter controls are wired and shown", () => {
   assert.match(source, /assumeCounter: document\.querySelector\('#sim-counter'\)\.checked/);
   assert.match(source, /Still asserting/);
 });
+
+test("Tab5 health readings simulate as healthy until a leak or loop fault is injected", () => {
+  const pkg = { devices: [{ id: "tab5-health", driver: "tab5-runtime", enabled: true, fields: [
+    { systemName: "HeapFreeAfterGc", object: "status.heap_free_after_gc_bytes", type: "integer" },
+    { systemName: "HeapLowestFree", object: "status.heap_lowest_free_bytes", type: "integer" },
+    { systemName: "CpuAFaults", object: "status.cpu_a_faults", type: "integer" },
+    { systemName: "CpuBFaults", object: "status.cpu_b_faults", type: "integer" }] }] };
+  const shelly = { rly0: false, isLocked: 0 };
+  const snapshot = cycle => sim.simNominalSnapshot(pkg, simWorldAt({ injections: [
+    { kind: "heaplow", atCycle: 3 }, { kind: "loopfault", atCycle: 5 }] }, cycle), shelly);
+  assert.deepEqual(snapshot(1), { HeapFreeAfterGc: 500000, HeapLowestFree: 400000, CpuAFaults: 0, CpuBFaults: 0 });
+  assert.equal(snapshot(3).HeapFreeAfterGc < snapshot(1).HeapFreeAfterGc, true);
+  assert.equal(snapshot(5).CpuAFaults, 1);
+  assert.equal(sim.simFaultKinds().some(([kind]) => kind === "heaplow"), true);
+});

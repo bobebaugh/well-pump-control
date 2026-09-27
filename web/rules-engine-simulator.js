@@ -83,7 +83,9 @@ function simFaultKinds() {
     ["shortcycle", "Short cycle — Shelly scores a strike"],
     ["hand", "HAND selected"],
     ["demandoff", "Pressure switch satisfied — no demand"],
-    ["demandon", "Pressure switch calls for water"]
+    ["demandon", "Pressure switch calls for water"],
+    ["heaplow", "Tab5 heap runs low (a leak)"],
+    ["loopfault", "Tab5 loop faults once (CPU A and CPU B)"]
   ];
 }
 
@@ -141,7 +143,8 @@ function simCondition(condition, snapshot, previous, occurrences) {
 function simWorldAt(scenario, cycle) {
   const world = {
     utilityPower: true, lan: true, emUp: true, shelly1Up: true,
-    demand: true, hand: false, tab5Restart: false, shellyReboot: false, strike: false
+    demand: true, hand: false, tab5Restart: false, shellyReboot: false, strike: false,
+    heapLow: false, loopFaults: 0
   };
   for (const injection of scenario.injections || []) {
     if (injection.kind === "event") continue;
@@ -161,6 +164,9 @@ function simWorldAt(scenario, cycle) {
     if (now && injection.kind === "tab5restart") world.tab5Restart = true;
     if (now && injection.kind === "shellyreboot") world.shellyReboot = true;
     if (now && injection.kind === "shortcycle") world.strike = true;
+    if (sticky && injection.kind === "heaplow") world.heapLow = true;
+    // Fault counts only grow within a session; restore does not reset them.
+    if (sticky && injection.kind === "loopfault") world.loopFaults += 1;
   }
   // The Shellys are mains powered and reached over the LAN. Tab5 has a battery,
   // which is why cutting the power no longer resets anything.
@@ -207,6 +213,10 @@ function simNominalSnapshot(pkg, world, shelly) {
       else if (object === "UDF(IsLocked)") snapshot[field.systemName] = shelly.isLocked;
       else if (object === "status.wifi_connected") snapshot[field.systemName] = world.lan;
       else if (object === "status.cloud_available") snapshot[field.systemName] = world.lan;
+      // Nominal heap figures are illustrative, not a measured Tab5 baseline.
+      else if (object === "status.heap_free_after_gc_bytes") snapshot[field.systemName] = world.heapLow ? 40000 : 500000;
+      else if (object === "status.heap_lowest_free_bytes") snapshot[field.systemName] = world.heapLow ? 20000 : 400000;
+      else if (object === "status.cpu_a_faults" || object === "status.cpu_b_faults") snapshot[field.systemName] = world.loopFaults;
       else if (field.type === "boolean") snapshot[field.systemName] = true;
       else if (field.type === "number" || field.type === "integer") snapshot[field.systemName] = 0;
     }
@@ -423,7 +433,7 @@ function simulateScenario(input, scenarioInput) {
 
 if (typeof module === "object" && module.exports) {
   module.exports = {
-    simulateScenario, simCondition, simWorldAt, simInjectedOpen, simShellyTick,
+    simulateScenario, simCondition, simWorldAt, simInjectedOpen, simShellyTick, simNominalSnapshot,
     simDefaultScenario, simFaultKinds, simInjectableEvents,
     simDeclaredCounters, simLoadCounter, simCounterValue, SIM_ASSUMED_COUNTER,
     SIM_PUMP_TARGET, SIM_MAX_CYCLES, SIM_INIT_LOCK_TIME, SIM_MAX_LOCKOUT

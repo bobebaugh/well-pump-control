@@ -246,12 +246,15 @@ function renderDevice() {
   if (!device) { editor.innerHTML = "<p class='empty-editor'>Add a device to begin.</p>"; return; }
   const readCommands = {'shelly-gen1-em':'GET /emeter/0', 'shelly-gen4-switch':'One filtered Shelly.GetComponents naming switch:0, input:0 and the named virtual components, with config/status included', 'tab5-runtime':'Local acquisition (no Shelly command)'};
   const driverOptions = Object.entries(state.capabilities.drivers).map(([id, label]) => `<option value="${escapeHtml(id)}"${id === device.driver ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
+  // The objects this driver implements, offered as suggestions; picking one fills
+  // its required type, unit and access. Validate still checks every field.
+  const objectOptions = Object.keys(state.capabilities.bindings?.[device.driver] || {}).map(object => `<option value="${escapeHtml(object)}"></option>`).join("");
   const rows = device.fields.map((field, index) => `
     <div class="device-field-row" data-index="${index}">
       <div class="device-field-primary">
         <label class="field-system"><span>System name</span><input data-key="systemName" value="${escapeHtml(field.systemName)}"></label>
         <label class="field-label"><span>Label</span><input data-key="label" value="${escapeHtml(field.label)}"></label>
-        <label class="field-object"><span>Object</span><input data-key="object" value="${escapeHtml(field.object)}"></label>
+        <label class="field-object"><span>Object</span><input data-key="object" list="device-objects" value="${escapeHtml(field.object)}"></label>
         <label class="field-type"><span>Type</span><select data-key="type"><option${field.type === "number" ? " selected" : ""}>number</option><option${field.type === "integer" ? " selected" : ""}>integer</option><option${field.type === "boolean" ? " selected" : ""}>boolean</option><option${field.type === "enum" ? " selected" : ""}>enum</option></select></label>
         <label class="field-unit"><span>Unit</span><input data-key="unit" value="${escapeHtml(field.unit || "")}"></label>
         <label class="field-log"><span>Log</span><select data-key="logMode">${logModeOptions(field.logging?.mode)}</select></label>
@@ -278,6 +281,7 @@ function renderDevice() {
     </div>
     <p class="form-help">Current acquisition: ${escapeHtml(readCommands[device.driver] || "Choose a supported driver")}</p>
     <div class="subsection-heading"><div><p class="kicker">NAMED FIELDS</p><h2>Telemetry and actions</h2></div><button class="secondary-button compact-button" id="add-device-field" type="button">Add field</button></div>
+    <datalist id="device-objects">${objectOptions}</datalist>
     <div class="device-fields-grid">${rows}</div>
     <p class="form-help">Rules reference system names. The only supported write is Boolean.Set on UDF(Tab5IsLocked), which sends {value:true|false} to the component id Tab5 discovers by name. RLY(0) is observed, not written: the Shelly script is the relay's sole writer and closes it only when IsLocked is 0 and Tab5IsLocked is false. Setting the flag inhibits; it is released when the last owning event closes or while Monitor is engaged, never by an authored false. Device addresses are descriptive here; installed Tab5 configuration owns polling endpoints.</p>`;
 }
@@ -935,6 +939,17 @@ editor.addEventListener("change", event => {
   }
   if (event.target.id === "calculation-function") {
     captureCalculation(); const calculation = state.draft.calculatedFields[state.selected.calculatedFields]; normalizeCalculationFunction(calculation, event.target.value); renderEditor(); return;
+  }
+  if (event.target.dataset.key === "object" && state.section === "devices") {
+    const device = state.draft.devices[state.selected.devices];
+    const binding = state.capabilities.bindings?.[device?.driver]?.[event.target.value.trim()];
+    if (binding) {
+      const row = event.target.closest(".device-field-row");
+      row.querySelector("[data-key=type]").value = binding.type;
+      row.querySelector("[data-key=unit]").value = binding.unit || "";
+      row.querySelector("[data-key=access]").value = binding.access;
+      captureDevice(); renderEditor(); return;
+    }
   }
   if (event.target.dataset.key === "access" || event.target.dataset.key === "logMode") {
     if (state.section === "devices") { captureDevice(); renderEditor(); return; }

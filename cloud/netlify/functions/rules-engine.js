@@ -1,7 +1,7 @@
 "use strict";
 
 const { createHash, timingSafeEqual } = require("node:crypto");
-const { defaults, DEVICE_DRIVERS, FUNCTION_CATALOG, SUMMARY_OPERATIONS, TYPE_OPERATORS } = require("../lib/rules-engine-defaults");
+const { defaults, DEVICE_DRIVERS, DRIVER_BINDINGS, FUNCTION_CATALOG, SUMMARY_OPERATIONS, TYPE_OPERATORS } = require("../lib/rules-engine-defaults");
 const { validateAndCompile } = require("../lib/rules-engine-contract");
 const { SECTIONS } = require("../lib/rules-engine-store");
 const { defaults: v3Defaults } = require("../lib/rules-engine-v3-defaults");
@@ -97,7 +97,7 @@ function createHandler(dependencies = {}) {
         const releases = await store.listReleases();
         return response(200, {
           status: "ok", signedIn, draft: loaded.draft, current: loaded.current, releases,
-          capabilities: { functions: FUNCTION_CATALOG, operators: TYPE_OPERATORS, drivers: DEVICE_DRIVERS, summaryOperations: SUMMARY_OPERATIONS, ...(v3 ? { packageSchemaVersion: 3, deliveryAvailable: true } : {}) },
+          capabilities: { functions: FUNCTION_CATALOG, operators: TYPE_OPERATORS, drivers: DEVICE_DRIVERS, bindings: DRIVER_BINDINGS, summaryOperations: SUMMARY_OPERATIONS, ...(v3 ? { packageSchemaVersion: 3, deliveryAvailable: true } : {}) },
           delivery: {
             enabled: loaded.current?.deliveryEnabled === true,
             releaseId: loaded.current?.delivery?.releaseId || null,

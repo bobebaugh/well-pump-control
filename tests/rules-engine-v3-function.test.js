@@ -67,6 +67,9 @@ test("V3 endpoint validates, publishes, reopens, and restores an isolated immuta
   assert.deepEqual(Object.keys(loaded.draft.revisions), ["devices", "calculatedFields", "systemFields", "events"]);
   assert.equal(loaded.delivery.enabled, false);
   assert.equal(loaded.capabilities.deliveryAvailable, true);
+  // The editor offers each driver's objects and fills their contract from this.
+  assert.deepEqual(loaded.capabilities.bindings["tab5-runtime"]["status.cpu_a_faults"],
+    { type: "integer", unit: "count", access: "read" });
 
   const validation = JSON.parse((await handler(request("POST", { action: "validate" }))).body);
   assert.equal(validation.status, "valid");
