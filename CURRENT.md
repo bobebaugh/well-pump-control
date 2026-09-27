@@ -147,10 +147,10 @@ Device work, one install from tab5-working:
    support. That is rules-package pipeline, so main and pilot both carry it before a
    package uses it. The device rejects a package naming an unknown binding, so the
    order is install, then publish, then restart to adopt.
-3. Not started: survive one bad loop pass, counting faults like the heap stat. CPU B
-   (cloud.py) is agreed. CPU A (pilot.py) awaits the owner, and the doc session
-   recommends it: CPU A takes the web restart command, so if it dies only an on-site
-   power cycle recovers. Contain the pass, count it, and stop cleanly after a run of
+3. Not started: survive one bad loop pass, counting faults like the heap stat, in both
+   CPU B (cloud.py) and CPU A (pilot.py); the owner approved CPU A on 27 September.
+   CPU A takes the web restart command, so if it dies only an on-site power cycle
+   recovers. Contain the pass, count it, and stop cleanly after a run of
    consecutive faults so the silent-device alert fires. No hardware watchdog and no
    endless retry (#8).
 4. Not started: daily SNTP resync. cloud.py syncs only until its first success after
@@ -174,7 +174,7 @@ Cloud work on pilot-working:
 Sequence. Pilot is a branch deploy and costs no Netlify credits; each main production
 deploy costs 15, so main moves once.
 
-- A. Owner: decide CPU A containment (item 3).
+- A. Owner: CPU A containment approved 27 September (item 3).
 - B. Build items 2-7 on the working branches.
 - C. Promote pilot-working to pilot, then fast-forward main to pilot: the single main
   deploy. Main (69601cc) is 27 commits behind pilot, including the device-facing
@@ -214,7 +214,16 @@ Owner tasks, no code:
 - Freeze contract: keep the Shelly DHCP reservations and PILOT_INGEST_TOKEN. Check the
   Netlify credit allowance against about 145,000 device function calls a month. Web
   requests cost 2 credits per 10,000 plus function compute, on branch and production
-  deploys alike, so the endpoint move does not change the running cost.
+  deploys alike, so the endpoint move does not change the running cost. The account is
+  on the free plan: 300 credits a month shared by all its projects, and at zero every
+  project pauses until the next cycle, the device path and the silent alert included.
+  Owner's screenshots, 27 Sep: 32.3 credits used since 23 Sep, about 200 a month at
+  that pace, mostly function compute. Pilot's last 24 h: event-board 2.8K calls
+  (30-second heartbeat), ingest-power 1.4K (60-second heartbeat), ingest-record 254;
+  by count times median duration the device is about 90% of that compute, so an idle
+  screen saves little. Open: lengthen the event-board heartbeat in the final install
+  (the home page calls a board stale after 120 s, so that changes with it), or move to
+  a paid plan for the freeze.
 
 Live readings need no change for the freeze. With no one watching, the Tab5 posts on a
 material power or voltage change or a 60-second heartbeat; 1 Hz runs only while a
