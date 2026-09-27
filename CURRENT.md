@@ -79,12 +79,22 @@ clear it when main is fast-forwarded to pilot. Docs-only commits change no behav
 | 0b6170d | Last pump run at the top of the home page, from the day's durable records | screen (home + observation-series) |
 | cb39d23 | Energy and Pump load history views from ShellyEnergyWh and LoadRatioPercent | screen (home + observation-series) |
 | 0902a8f | Rules Engine opens on the published package read-only; V3 reads open, writes and seeding GETs keyed | rules-engine read access + editor screen; compile, publish and delivery unchanged |
+| f0acaa4 | Home SW0/RLY0 tiles show unknown when a fresh record reports Shelly 1 unreachable | screen (home) |
+| e478c6c | SW0/RLY0 tiles and the Shelly 1 health row also show unknown on a stale record or a failed read; the row no longer shows a missing value as OFF | screen (home) |
+| 5e497ca | Owner controls moved below the events, at the bottom of the home page | screen (home) |
+| 46d19ca | History on its own full-width row with a two-handle zoom rail and a 30-day range; Pump load replaced by Fill time (48-58 psi), Switch (cut-in/cut-out per run) and Leak-down views; water used and a run's delivered gallons use one delivery estimate from the trailing week's clean fills, so day and week agree | screen (home) + observation-series |
 
 5923abf was promoted to pilot on 25 September for the owner to test before main; pilot
 was 53c0028 before it. d8d65e4 followed on the owner's direction (pilot was da860d2), then f0baf41-0902a8f
 (pilot was 6766003). BETA lists rules-engine under the package pipeline that moves
 to main and pilot together; 0902a8f changes only who may read it, so a lagging main
-still asks for the password to view and publishes identically. Main should follow in the owner's next grouped main deploy.
+still asks for the password to view and publishes identically. f0acaa4-46d19ca followed on
+the owner's direction on 27 September (pilot was fa63caf), fast-forwarded with the docs to
+b0af6de; they change only the home page and observation-series, which the device never calls.
+Verified by the web tests (394 pass) and a browser run of the page against the real series
+code fed the owner's 18-27 September export. 46d19ca makes the day view read the trailing
+week (about 2,600 records) so its delivery matches the week's; 30 days reads about 11,000
+and is re-read at most every 30 minutes. Main should follow in the owner's next grouped main deploy.
 
 Main's rules editor still accepts non-ASCII display names and still says notification
 settings are authoring only; publish rules from the pilot deploy until main follows.
@@ -92,20 +102,7 @@ settings are authoring only; publish rules from the pilot deploy until main foll
 ## On pilot-working, not yet on pilot
 
 Keep this list current on every pilot-working change and move rows to the table above
-when pilot is advanced. Docs-only commits (c503d29, feb0684) are not listed.
-
-| Commit | Change | Kind |
-|---|---|---|
-| f0acaa4 | Home SW0/RLY0 tiles show unknown when a fresh record reports Shelly 1 unreachable | screen (home) |
-| e478c6c | SW0/RLY0 tiles and the Shelly 1 health row also show unknown on a stale record or a failed read; the row no longer shows a missing value as OFF | screen (home) |
-| 5e497ca | Owner controls moved below the events, at the bottom of the home page | screen (home) |
-| 46d19ca | History on its own full-width row with a two-handle zoom rail and a 30-day range; Pump load replaced by Fill time (48-58 psi), Switch (cut-in/cut-out per run) and Leak-down views; water used and a run's delivered gallons use one delivery estimate from the trailing week's clean fills, so day and week agree | screen (home) + observation-series |
-
-Verified by the web tests (394 pass) and, for 46d19ca, by the page in a browser against
-the real series code fed the owner's 18-27 September export; not yet seen on a deploy.
-46d19ca makes the day view read the trailing week (about 2,600 records at current rates)
-so its delivery matches the week's; the 30-day view reads about 11,000 and is re-read at
-most every 30 minutes.
+when pilot is advanced. Nothing is waiting: pilot and pilot-working carry the same source.
 
 ## Maintenance baseline
 
@@ -156,8 +153,8 @@ Old branch tips are archived in maintenance/branch-archive-2026-09-16.csv.
    em-dash, which is outside the GSM-7 alphabet and forces UCS-2 at seventy characters
    per segment, so watch how a full-length name such as W07 arrives during the soak.
 
-7. Review the pilot-working dashboard rows above in a branch preview or after promotion,
-   and direct promotion to pilot when ready. To let cloud sessions read records directly
+7. Review the dashboard changes now on pilot (f0acaa4-46d19ca), then include them in the
+   next main deploy. To let cloud sessions read records directly
    instead of from a CSV export, add a viewer-scoped FIREBASE_SERVICE_ACCOUNT_JSON to the
    cloud environment's settings (maintenance/firestore-peek.cjs reads it).
 
