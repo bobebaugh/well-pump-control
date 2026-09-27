@@ -70,7 +70,10 @@ power-save change.
 The pre-freeze round, approved 27 September, is in pilot-working's CURRENT (section
 "Pre-freeze round"). Device items: heap stat, survive one bad loop pass, daily SNTP
 resync, endpoints moved to main, and an unchanged event board re-sent every 30 minutes
-instead of 30 s. They ride one install with M6.44.
+instead of 30 s. They ride one install with M6.44's change, both files stamped M6.45.
+Built so far: heap stat (95e5545). Declare it, and BatteryPercent, on a separate Tab5
+device: records are atomic per device, so a missing battery reading on tab5-main would
+make pressure unavailable (DESIGN).
 
 ## On tab5-working, not yet on Tab5
 
@@ -79,6 +82,7 @@ Keep this list current on every tab5-working change; clear it when Tab5 advances
 | tab5-working commit | Change | Kind |
 |---|---|---|
 | 06d0598, f89ec9b | M6.44: durable reason carries the cause when CloudAvailable goes false; CPU B startup log names its release | cloud.py + pilot.py |
+| 95e5545 | M6.45: heap and loop-fault health as tab5-runtime bindings; periodic gc.collect() every 10 minutes | cloud.py + pilot.py |
 | ca0595b | Cloud-session start hook | session support |
 | 08415b4, 9ae039e, 348aaad, ccbcd5d | Mirrored shared docs, Firestore peek, M6.44 and pre-freeze notes | docs |
 
