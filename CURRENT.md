@@ -13,7 +13,10 @@ the intended shared stores for Pilot and Main. No database move is planned.
 For troubleshooting, maintenance/firestore-peek.cjs reads any collection from the
 command line - read-only by construction - so a record can be inspected without copying
 it out of the Firebase console. It needs FIREBASE_SERVICE_ACCOUNT_JSON in the
-environment, ideally from a viewer-scoped account, and adds no public route.
+environment and adds no public route. On 27 September a cloud session with that
+variable set listed the sites/well-main collections and read eventRecords and
+eventBoardState documents. The owner provisioned the account read-only; that was not
+tested with a write, since Pilot and Main share live data.
 
 The latest device working source is M6.42; the owner believes it is installed.
 The owner confirms the Shelly 1 protection script is fully unit tested on real
@@ -154,9 +157,8 @@ Old branch tips are archived in maintenance/branch-archive-2026-09-16.csv.
    per segment, so watch how a full-length name such as W07 arrives during the soak.
 
 7. Review the dashboard changes now on pilot (f0acaa4-46d19ca), then include them in the
-   next main deploy. To let cloud sessions read records directly
-   instead of from a CSV export, add a viewer-scoped FIREBASE_SERVICE_ACCOUNT_JSON to the
-   cloud environment's settings (maintenance/firestore-peek.cjs reads it).
+   next main deploy. Cloud sessions can now read records directly with
+   maintenance/firestore-peek.cjs instead of from a CSV export.
 
 No DNS, Netlify settings, Firebase configuration, device upload, restart or source
 promotion was performed by this housekeeping. History is in Git; all deferred work
