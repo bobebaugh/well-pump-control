@@ -122,6 +122,49 @@ an additional observation-series repair. Housekeeping adds documentation/test
 maintenance only; it does not promote that repair or change live behavior.
 Old branch tips are archived in maintenance/branch-archive-2026-09-16.csv.
 
+## Pre-freeze round, planned 27 September 2026
+
+After one last device install, pilot.py, cloud.py and main.py are to run untouched for six
+months. The longest Tab5 session on record is 1.85 days, so nothing that only appears
+after weeks of uptime has been seen yet. Device work is on tab5-working; one install
+carries items 1-5.
+
+1. Done, not installed: M6.44 records why CloudAvailable went false (06d0598, f89ec9b).
+   The records page shows it from 968af5f.
+2. Heap stat: free heap after gc.collect() about every 10 minutes, plus the lowest free
+   seen, as new tab5-runtime bindings. They need a matching entry in
+   rules-engine-defaults.js, with the simulator handling them. Package fields use logging
+   include, so they ride the health record without creating records. The device rejects
+   a package naming an unknown binding, so the order is install, then publish, then
+   restart to adopt.
+3. Survive one bad cycle: contain an unexpected exception per loop pass in CPU B. CPU A
+   awaits the owner's choice. Count faults like the heap stat. No hardware watchdog (#8:
+   bounded recovery, no blind retry loop).
+4. Daily SNTP resync. The device clock gains about 1.8 s a day (records, 21-27 Sep), which
+   would be 5-6 minutes by spring. Ingest has no future-time limit, so nothing is lost.
+5. Move the device endpoints from pilot--well-pump-control.netlify.app to
+   well-pump-control.netlify.app (main), not the custom domain. Main must first be
+   fast-forwarded to pilot: 69601cc is 28 commits behind, including the device-facing
+   event-board and notifier change af8d8e2. Checked 27 Sep: main's five device endpoints
+   reject an unauthenticated POST with 401, so the password is set, and main reads
+   Firestore and RTDB. After the move, main sends notifications, not pilot.
+6. Silent-device alert (cloud only; it can change during the freeze). A scheduled function
+   runs every 15 minutes. It sends one message when the newest durable record is over 30
+   minutes old, and one when records resume. Netlify runs scheduled functions only on the
+   production deploy, so it lives on main.
+7. Owner, no code:
+   - Battery: M5Stack says a battery below 6 V enters protection mode, which needs
+     manual recovery. Proposal: remove it for the freeze, after confirming the Tab5
+     restarts unattended with the battery out (cut power 10 s, restore). No rule uses
+     the battery.
+   - Outage tests after the install: internet only for 30-60 minutes, and router off
+     for 10 minutes. The 100-record queue lasts about 12 hours when quiet and about 4
+     hours on a typical day; each pump run adds about 45 records.
+   - Run the final build at least 13 days before freezing. The tick counter wraps at
+     12.4 days, and those days give the heap stat its baseline.
+   - Freeze contract: keep the Shelly DHCP reservations and PILOT_INGEST_TOKEN. Check
+     the Netlify plan allowance against about 145,000 device function calls a month.
+
 ## Next owner decisions
 
 1. Review the remaining beta reliability choices in FUTURE. No application fix was
