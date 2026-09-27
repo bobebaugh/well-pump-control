@@ -419,6 +419,8 @@ function renderObservation(data) {
   // Two seconds of cadence plus a little slack. Past that the number on screen
   // is a memory, and saying so matters more than showing a stale digit.
   const fresh = data.ageSeconds !== null && data.ageSeconds <= 30;
+  liveReading = { fresh, ageSeconds: data.ageSeconds, at: Date.now() };
+  renderEventStatus();
   const psi = Number.isFinite(values.pressurePsi) ? values.pressurePsi : null;
 
   if (psi !== null && fresh) {
@@ -679,6 +681,8 @@ async function checkObservation() {
   try {
     renderObservation(await fetchStatus("/.netlify/functions/current-observation"));
   } catch (error) {
+    liveReading = { fresh: false, ageSeconds: null, at: Date.now() };
+    renderEventStatus();
     if (error.body?.code === "telemetry_missing") clearObservation();
     // The read failed rather than the device going quiet, so the age on screen
     // proves nothing. Say the row is unavailable instead of ageing a number
@@ -697,6 +701,25 @@ function eventTime(value) { return value ? formatTime(new Date(value)) : "Unknow
 function eventLink(event) { const cycle = event?.opening?.cycleSequence || 0; return `/records.html?session=${encodeURIComponent(event.sessionId || "")}&cycle=${cycle}&event=${encodeURIComponent(event.eventDefinitionId || "")}`; }
 function escapeEventHtml(value) { return String(value ?? "").replace(/[&<>\"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character]); }
 function eventCard(event, close = null) { const severity = String(event.severity || "Info").toLowerCase(); const opening = event?.opening?.observedAt ? `Device opening ${escapeEventHtml(eventTime(event.opening.observedAt))}` : `Device opening time unknown${event?.firstReportedAt ? `; first reported ${escapeEventHtml(eventTime(event.firstReportedAt))}` : ""}`; const closure = close ? `<span>Closed by ${escapeEventHtml(close.closeReason)}; cloud detection ${escapeEventHtml(eventTime(close.detectedAt || close.restartDetectedAt))}. Device close time unknown.</span>` : "<span>Open in the last successful board</span>"; return `<article class="event-card ${severity}"><strong>${escapeEventHtml(event.severity || "Info")} · ${escapeEventHtml(event.displayName || event.eventDefinitionId)}</strong><span>${opening}</span>${closure}<a href="${eventLink(event)}">View nearby observations</a></article>`; }
+// The Tab5 re-sends an unchanged event board only every 30 minutes, so a board's age
+// says nothing by itself. Changes in open events are sent at once, so while the live
+// reading is fresh the board is current. The live reading is judged by the same rule
+// as the readings panel, and only if it was checked recently.
+const LIVE_STATUS_MAX_AGE_MS = 30000;
+let liveReading = null;
+let lastEventBoard = null;
+function compactAge(seconds) { return seconds < 120 ? `${seconds}s` : `${Math.round(seconds / 60)} min`; }
+function eventBoardStatus(board, live, nowMs) {
+  if (!board) return "No successful event board is stored yet.";
+  const last = board.lastReportAt ? formatTime(new Date(board.lastReportAt)) : "an unknown time";
+  const known = Boolean(live) && nowMs - live.at <= LIVE_STATUS_MAX_AGE_MS;
+  if (known && live.fresh) return `Current: the Tab5 is reporting live and sends any change in open events at once. Last board ${last}.`;
+  const age = known && Number.isFinite(live.ageSeconds) ? `${compactAge(live.ageSeconds)} old` : "unavailable";
+  return `The Tab5's live reading is ${age}, so these open events are as of its last board, ${last}.`;
+}
+function renderEventStatus() {
+  if (lastEventBoard !== null) eventStatus.textContent = eventBoardStatus(lastEventBoard, liveReading, Date.now());
+}
 async function checkEvents() {
   // The heaviest of the remaining repeating polls: one call assembles the event
   // board and the recent closed occurrences rather than reading a document.
@@ -708,8 +731,8 @@ async function checkEvents() {
     const open = Object.values(board?.openEvents || {});
     openEvents.innerHTML = open.length ? open.map(entry => eventCard({ ...entry, ...entry.slot, opening: entry.slot?.opening })).join("") : "<p class='event-empty'>No open events reported by the latest successful board.</p>";
     closedEvents.innerHTML = data.recentClosed?.length ? data.recentClosed.map(item => eventCard(item.open, item.close)).join("") : "<p class='event-empty'>No recent closed occurrences.</p>";
-    const ageSeconds = board?.lastReportAt ? Math.max(0, Math.round((Date.now() - Date.parse(board.lastReportAt)) / 1000)) : null;
-    eventStatus.textContent = board ? (ageSeconds > 120 ? `Event board is stale (${ageSeconds}s since the last successful board); open events are retained.` : `Last successful board ${formatTime(new Date(board.lastReportAt))}.`) : "No successful event board is stored yet.";
+    lastEventBoard = board || null;
+    eventStatus.textContent = eventBoardStatus(lastEventBoard, liveReading, Date.now());
     localStorage.setItem("pilotLastEventBoard", JSON.stringify({ board, at: Date.now() }));
   } catch (error) {
     const prior = JSON.parse(localStorage.getItem("pilotLastEventBoard") || "null");
