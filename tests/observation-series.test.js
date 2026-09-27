@@ -4,9 +4,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { Timestamp } = require("firebase-admin/firestore");
 const {
-  LEVEL_CARRY_LIMIT_MS, REFERENCE_DELIVERY, WINDOWS, buildSeries, deliveryCurve,
-  pumpDeliveryGpm, recordField, samplesFromRecords, switchSummary, tankModelFromDraft,
-  tankWaterGallons
+  LEVEL_CARRY_LIMIT_MS, REFERENCE_DELIVERY, WINDOWS, buildSeries, deliveryFromFills,
+  pumpCycles, pumpDeliveryGpm, quietStretches, recordField, samplesFromRecords, switchSummary,
+  tankModelFromDraft, tankWaterGallons
 } = require("../cloud/netlify/lib/observation-series");
 const { createHandler } = require("../cloud/netlify/functions/observation-series");
 
@@ -185,7 +185,7 @@ function handlerFor({ records = [], draft = { items: [{ id: "calc-tank", paramet
   const docs = records.map(data => ({ data: () => data }));
   const query = { docs };
   const chain = {
-    where: () => chain, orderBy: () => chain, limit: () => chain,
+    where: () => chain, orderBy: () => chain, limit: () => chain, select: () => chain,
     get: async () => query
   };
   const site = {
@@ -234,7 +234,7 @@ test("the week window is served at its own bucket size", async () => {
 });
 
 test("an unknown window is rejected rather than silently served as a day", async () => {
-  const reply = await call({}, { window: "30d" });
+  const reply = await call({}, { window: "90d" });
   assert.equal(reply.statusCode, 400);
   assert.equal(reply.code, "invalid_window");
 });
@@ -312,30 +312,6 @@ function cycle(fromPsi, toPsi, bleedGpm = 0, offsetMs = 0) {
 }
 
 const fill = cycle;
-
-test("delivery is never nothing: too few fills falls back to the measured prior", () => {
-  const curve = deliveryCurve([]);
-  assert.equal(curve.basis, "reference");
-  assert.equal(curve.intercept, REFERENCE_DELIVERY.intercept);
-  // Every window yields a usable curve. Withholding an estimate is not an option
-  // the charts have; without flow meters on either leg they are all estimates.
-  assert.ok(Number.isFinite(pumpDeliveryGpm(50, curve)));
-});
-
-test("a window with its own fills derives its own curve, and flow falls with pressure", () => {
-  const curve = deliveryCurve(fill(40, 60));
-  assert.equal(curve.basis, "window");
-  assert.ok(curve.bands >= 3, `expected several pressure bands, got ${curve.bands}`);
-  assert.ok(curve.slopePerPsi < 0, "a centrifugal pump delivers less as head rises");
-  // Recovered from the fill rather than read from the prior, so it tracks the
-  // well's water level instead of freezing one August measurement.
-  assert.ok(Math.abs(pumpDeliveryGpm(50, curve) - pumpDeliveryGpm(50, REFERENCE_DELIVERY)) < 1.5);
-});
-
-test("a sample cadence finer than the minimum span still yields a curve", () => {
-  // Pairing only adjacent samples would find nothing in a 1 Hz capture.
-  assert.equal(deliveryCurve(fill(40, 60)).basis, "window");
-});
 
 test("delivery never goes negative however far the curve is extrapolated", () => {
   assert.equal(pumpDeliveryGpm(500, REFERENCE_DELIVERY), 0);
@@ -467,31 +443,6 @@ test("pressure comes off the record, or is inverted from gallons when it is not"
 });
 
 
-test("the curve follows the fastest fills, because those are the ones with no draw", () => {
-  // Three fills in one window: two with the house drawing hard, one quiet. The
-  // quiet one is the pump's actual delivery, and averaging them all would read
-  // the pump as far weaker than it is.
-  const busy = [
-    ...fill(40, 60, 6, 0),
-    ...fill(40, 60, 5, 1200000),
-    ...fill(40, 60, 0, 2400000)
-  ];
-  const curve = deliveryCurve(busy);
-  assert.equal(curve.basis, "window");
-  const derived = pumpDeliveryGpm(50, curve);
-  const quiet = pumpDeliveryGpm(50, deliveryCurve(fill(40, 60)));
-  assert.ok(Math.abs(derived - quiet) < 1.5,
-    `upper envelope should recover the quiet fill: ${derived.toFixed(2)} against ${quiet.toFixed(2)}`);
-  // An average over all three would be dragged down by the drawn fills.
-  assert.ok(derived > quiet - 3);
-});
-
-test("two pressure bands are not enough to fit a line through", () => {
-  // A fill spanning barely one band: a two-point fit would be confidently wrong.
-  const curve = deliveryCurve(fill(40, 44));
-  assert.equal(curve.basis, "reference");
-});
-
 // The pump run of 2026-09-25 as the durable records carried it (UTC).
 const RUN_0925 = [
   ["12:48:26", 12.21, 39.746, 2.62], ["12:48:39", 12.19, 39.202, 1.82], ["12:48:41", 2972.33, 39.783, 2.68],
@@ -543,4 +494,132 @@ test("energy is the rise in the meter's total, skipping a reset, and load averag
   assert.equal(series.buckets[0].loadRatio, 101.4);
   assert.equal(series.buckets[0].loadCount, 2);
   assert.equal(series.buckets[1].loadRatio, null);
+});
+
+// Fill time, switch pressures, delivery and leak-down, the trend views.
+
+const NEVER_NOW = { nowMs: Infinity };
+
+test("a clean fill is timed through 48-58 psi and gives the pump's delivery", () => {
+  const [cycle] = pumpCycles(fill(40, 60), NEVER_NOW);
+  // About 9.3 gallons at 12-13 GPM on the measured curve.
+  assert.ok(cycle.fillSeconds > 40 && cycle.fillSeconds < 50, `fill took ${cycle.fillSeconds}s`);
+  assert.ok(Math.abs(cycle.fillGpm - pumpDeliveryGpm(53 - 1.35, REFERENCE_DELIVERY)) < 0.6,
+    `fill rate ${cycle.fillGpm} GPM`);
+  assert.equal(cycle.clean, true);
+  assert.ok(cycle.afterFallGallons < 0.5);
+});
+
+test("draw during a fill slows it, and draw after cut-out marks it not clean", () => {
+  const [quiet] = pumpCycles(fill(40, 60), NEVER_NOW);
+  const [drawn] = pumpCycles(fill(40, 60, 4), NEVER_NOW);
+  assert.ok(drawn.fillSeconds > quiet.fillSeconds + 10);
+  // The same fill, then three gallons leave in the minutes after it settled.
+  const samples = fill(40, 60);
+  const last = samples.at(-1);
+  for (let minute = 1; minute <= 4; minute += 1) {
+    samples.push({ ...last, timeMs: last.timeMs + minute * 60000, gallons: last.gallons - minute * 0.75 });
+  }
+  const [after] = pumpCycles(samples, NEVER_NOW);
+  assert.equal(after.clean, false);
+  assert.ok(after.afterFallGallons >= 2.9);
+});
+
+test("a fill is not called clean until five minutes after cut-out have passed", () => {
+  const samples = fill(40, 60);
+  const [pending] = pumpCycles(samples, { nowMs: samples.at(-1).timeMs });
+  assert.equal(pending.clean, null);
+  assert.equal(pending.afterFallGallons, null);
+  const [decided] = pumpCycles(samples, { nowMs: samples.at(-1).timeMs + 5 * 60000 });
+  assert.equal(decided.clean, true);
+});
+
+test("a record gap inside the band leaves the fill untimed rather than guessed", () => {
+  const samples = fill(40, 60).filter(sample => !(sample.watts > 500 && sample.psi > 50 && sample.psi < 57));
+  const [cycle] = pumpCycles(samples, NEVER_NOW);
+  assert.equal(cycle.fillSeconds, null);
+  assert.equal(cycle.clean, false);
+});
+
+test("a run that never reaches 58 psi has no fill time and no switch cut-out", () => {
+  const [cycle] = pumpCycles(fill(40, 50), NEVER_NOW);
+  assert.equal(cycle.fillSeconds, null);
+  assert.equal(cycle.cutOutPsi, null, "it stopped some other way than the switch opening");
+  assert.ok(cycle.cutInPsi > 39 && cycle.cutInPsi < 41);
+});
+
+test("the switch's cut-in and cut-out are the pressures it actually switched at", () => {
+  const [cycle] = pumpCycles(RUN_0925, NEVER_NOW);
+  assert.equal(cycle.cutInPsi, 39.2, "the reading as the contactor closed");
+  assert.equal(cycle.cutOutPsi, 61.77, "the reading as it opened, above the last running one");
+  // This excerpt keeps one record in 30 s through the band, too sparse to time.
+  assert.equal(cycle.fillSeconds, null);
+});
+
+test("delivery is never nothing: too few clean fills falls back to the measured curve", () => {
+  const curve = deliveryFromFills([]);
+  assert.equal(curve.basis, "reference");
+  assert.equal(curve.intercept, REFERENCE_DELIVERY.intercept);
+  assert.equal(curve.fills, 0);
+  const two = deliveryFromFills([{ clean: true, fillGpm: 12 }, { clean: true, fillGpm: 13 }]);
+  assert.equal(two.basis, "reference");
+});
+
+test("delivery follows the fast clean fills, skipping the single fastest and any drawn one", () => {
+  const cycles = [
+    { clean: true, fillGpm: 12.6 }, { clean: true, fillGpm: 12.5 }, { clean: true, fillGpm: 11.0 },
+    { clean: true, fillGpm: 14.9 }, { clean: false, fillGpm: 16 }, { clean: null, fillGpm: 17 }
+  ];
+  const curve = deliveryFromFills(cycles);
+  assert.equal(curve.basis, "fills");
+  assert.equal(curve.fills, 4);
+  assert.equal(curve.slopePerPsi, REFERENCE_DELIVERY.slopePerPsi);
+  assert.equal(pumpDeliveryGpm(53, curve).toFixed(2), "12.60");
+});
+
+test("a real fill's delivery lands on the measured curve", () => {
+  const cycles = [0, 1, 2].map(index => pumpCycles(fill(40, 60, 0, index * 3600000), NEVER_NOW)[0]);
+  const curve = deliveryFromFills(cycles);
+  assert.equal(curve.basis, "fills");
+  assert.ok(Math.abs(pumpDeliveryGpm(50, curve) - pumpDeliveryGpm(50, REFERENCE_DELIVERY)) < 0.8);
+});
+
+test("leak-down is read from quiet stretches that begin an hour after the last run or draw", () => {
+  const at = minutes => T0 + minutes * 60000;
+  const samples = [];
+  // A run, then eight hours idle losing 0.1 gal an hour, with a one-gallon draw at hour four.
+  samples.push({ timeMs: at(0), watts: 2900, psi: 55, gallons: 20 });
+  let gallons = 22;
+  for (let minute = 1; minute <= 480; minute += 10) {
+    if (minute === 241) gallons -= 1;
+    gallons -= 0.1 / 6;
+    samples.push({ timeMs: at(minute), watts: 12, psi: 58, gallons });
+  }
+  const stretches = quietStretches(samples);
+  assert.equal(stretches.length, 2);
+  assert.ok(stretches[0].startMs >= at(60), "not before the air has cooled after cut-out");
+  assert.ok(stretches[1].startMs >= at(241 + 60), "nor before it has recovered after a draw");
+  for (const stretch of stretches) assert.ok(Math.abs(stretch.gallonsPerHour - 0.1) < 0.02, `${stretch.gallonsPerHour} gal/h`);
+});
+
+test("a reporting gap ends a quiet stretch rather than spanning it", () => {
+  const at = minutes => T0 + minutes * 60000;
+  const samples = [];
+  for (let minute = 0; minute <= 600; minute += 10) {
+    if (minute > 200 && minute < 260) continue;
+    samples.push({ timeMs: at(minute), watts: 12, psi: 50, gallons: 15 });
+  }
+  const stretches = quietStretches(samples);
+  assert.equal(stretches.length, 2);
+  assert.equal(stretches[0].endMs, at(200));
+});
+
+test("the month window is served hourly, cached longer, with the runs and quiet stretches", async () => {
+  const reply = await call({ records: [v2(T0 - 60000, { TankWaterGallons: 21, PumpWatts: 12 })] }, { window: "30d" });
+  assert.equal(reply.statusCode, 200);
+  assert.equal(reply.buckets.length, 720);
+  assert.equal(reply.headers["Cache-Control"], "public, max-age=1800");
+  assert.deepEqual(reply.cycles, []);
+  assert.deepEqual(reply.quiet, []);
+  assert.equal(reply.delivery.basis, "reference");
 });

@@ -10,7 +10,8 @@
 const { Timestamp } = require("firebase-admin/firestore");
 const { ConfigurationError, getPilotFirestore } = require("../lib/firebase");
 const {
-  MAX_SERIES_ROWS, WINDOWS, buildSeries, deliveryCurve, samplesFromRecords, tankModelFromDraft
+  DELIVERY_LOOKBACK_MS, MAX_SERIES_ROWS, WINDOWS, buildSeries, deliveryFromFills, pumpCycles,
+  quietStretches, recordTimeMs, samplesFromRecords, tankModelFromDraft
 } = require("../lib/observation-series");
 
 const SITE_ID = "well-main";
@@ -20,7 +21,15 @@ const DEVICE_ID = "tab5-well-main";
 // it is cached briefly. A week view can cost thousands of Firestore reads to
 // assemble and the page polls live values every two seconds; without this the
 // history would be re-read alongside them.
-const CACHE_SECONDS = { "1d": 60, "7d": 300 };
+const CACHE_SECONDS = { "1d": 60, "7d": 300, "30d": 1800 };
+
+// Only the fields the series reads. Each record is still one read, but a month
+// of full records is tens of megabytes to fetch and parse; these are a fraction.
+const SERIES_FIELDS = {
+  1: ["schemaVersion", "observedAt", "values", "status"],
+  2: ["schemaVersion", "time.observedAt", "fields.PressurePSI", "fields.PumpWatts",
+      "fields.TankWaterGallons", "fields.ShellyEnergyWh", "fields.LoadRatioPercent"]
+};
 
 function headers(window) {
   return {
@@ -51,6 +60,7 @@ async function windowRecords(site, startMs, endMs) {
     .where(field, ">=", Timestamp.fromMillis(startMs))
     .where(field, "<=", Timestamp.fromMillis(endMs))
     .orderBy(field, "asc")
+    .select(...SERIES_FIELDS[schemaVersion])
     .limit(MAX_SERIES_ROWS)
     .get();
   const [one, two] = await Promise.all([read(1, "observedAt"), read(2, "time.observedAt")]);
@@ -92,6 +102,9 @@ function createHandler(dependencies = {}) {
     const { spanMs, bucketMs } = WINDOWS[window];
     const endMs = now();
     const startMs = endMs - spanMs;
+    // Delivery comes from the trailing week in every view, so a day view reads
+    // the week too; that is what makes a run's gallons the same in both.
+    const readFromMs = Math.min(startMs, endMs - DELIVERY_LOOKBACK_MS);
 
     let db;
     try {
@@ -112,17 +125,18 @@ function createHandler(dependencies = {}) {
       // reading. A missing draft degrades the live number, not the history.
       [model, page] = await Promise.all([
         savedTankModel(site).catch(() => null),
-        windowRecords(site, startMs, endMs)
+        windowRecords(site, readFromMs, endMs)
       ]);
     } catch (error) {
       return response(502, { status: "error", code: "history_read_failed" }, window);
     }
 
-    const samples = samplesFromRecords(page.records, model);
-    // The curve comes from this window's own fills where it can, so it follows
-    // the well's water level through the seasons instead of freezing one fit.
-    const curve = deliveryCurve(samples);
+    const all = samplesFromRecords(page.records, model);
+    const allCycles = pumpCycles(all, { nowMs: endMs });
+    const curve = deliveryFromFills(allCycles.filter(cycle => cycle.startMs >= endMs - DELIVERY_LOOKBACK_MS));
+    const samples = all.filter(sample => sample.timeMs >= startMs);
     const series = buildSeries(samples, { startMs, endMs, bucketMs, curve });
+    const inWindow = page.records.filter(record => !(recordTimeMs(record) < startMs));
 
     return response(200, {
       status: series.buckets.some(bucket => bucket.gallons !== null) ? "ok" : "empty",
@@ -130,18 +144,22 @@ function createHandler(dependencies = {}) {
       startMs,
       endMs,
       bucketMs,
-      recordCount: page.records.length,
+      recordCount: inWindow.length,
       truncated: page.truncated,
       tankModel: model,
       // Every figure here is an estimate; this says what the water-used estimate
       // rests on, so the page can label it rather than imply a meter. The series
       // also carries pressureSwitch, the cut-in and cut-out this window actually
       // observed, so nothing downstream has to assume 40/60.
-      delivery: { basis: curve.basis, bands: curve.bands,
+      delivery: { basis: curve.basis, fills: curve.fills,
                   gpmAt50Psi: Number((curve.intercept + curve.slopePerPsi * 50).toFixed(2)) },
+      // Every run in the window with its switch pressures and 48-58 psi fill
+      // time, and the quiet stretches leak-down is read from.
+      cycles: allCycles.filter(cycle => cycle.startMs >= startMs),
+      quiet: quietStretches(samples),
       // Energy is the rise in the meter's ShellyEnergyWh total; false when no
       // record in the window carried it.
-      energyAvailable: page.records.some(record => record?.fields?.ShellyEnergyWh?.state === "available"),
+      energyAvailable: inWindow.some(record => record?.fields?.ShellyEnergyWh?.state === "available"),
       // The one check the gallons output cannot provide: it is computed from
       // the stored precharge, so it can never contradict it. Cut-in can.
       prechargeCheck: prechargeCheck(model, series.pressureSwitch),

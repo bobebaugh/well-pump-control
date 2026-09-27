@@ -98,7 +98,7 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
 .workspace {
   margin-top: 18px;
   display: grid;
-  grid-template-columns: minmax(300px, 1.05fr) minmax(360px, 1.55fr) minmax(250px, .8fr);
+  grid-template-columns: minmax(300px, 1.2fr) minmax(250px, 1fr);
   gap: 18px;
 }
 
@@ -110,6 +110,9 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
 }
 
 .process-panel, .trend-panel, .health-panel { min-height: 390px; padding: 18px; }
+/* The history chart takes its own full-width row under the tank and health, so
+   a week or a month has room to be read and zoomed. */
+.trend-panel { grid-column: 1 / -1; order: 3; }
 .panel-heading { min-height: 45px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 
 .tank-scene {
@@ -161,7 +164,7 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
   --chart-used: #33a866;
   --chart-starts: #c2882a;
   --chart-energy: #8f6fd8;
-  --chart-load: #d0598a;
+  --chart-fill: #d0598a;
 }
 .hero { font-size: 1.45rem; font-weight: 600; letter-spacing: -.01em; color: var(--text); }
 .chart-controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; margin-top: 16px; }
@@ -171,12 +174,16 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
   font: inherit; font-size: .72rem; cursor: pointer;
 }
 .segmented button + button { border-left: 1px solid var(--line); }
+/* Seven views do not fit a phone: the row scrolls sideways instead of forcing
+   the page wider than the screen. */
+.chart-controls .segmented { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.chart-controls .segmented button { white-space: nowrap; flex: 0 0 auto; }
 .segmented button:hover { color: var(--text); background: rgba(132, 158, 190, .08); }
 .segmented button.on { background: var(--panel-2); color: var(--text); }
 .segmented button:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 
 .chart-figure { margin: 14px 0 0; }
-.chart-canvas { position: relative; min-height: 260px; }
+.chart-canvas { position: relative; min-height: 320px; }
 .chart-caption { margin-top: 10px; color: var(--muted); font-size: .68rem; }
 
 .hc-grid { stroke: var(--line-soft); stroke-width: 1; }
@@ -204,8 +211,25 @@ main { padding: 20px clamp(14px, 2.5vw, 36px) 30px; }
 .hc-bar.hc-used { fill: var(--chart-used); stroke: none; }
 .hc-bar.hc-starts { fill: var(--chart-starts); stroke: none; }
 .hc-bar.hc-energy { fill: var(--chart-energy); stroke: none; }
-.hc-line.hc-load { stroke: var(--chart-load); fill: none; }
-.hc-dot.hc-load { fill: var(--chart-load); stroke: none; }
+/* Trend views: dots per run or day, each lane its own series colour. A hollow
+   dot is a reading the view does not vouch for (a fill with draw after it). */
+.hc-line.hc-fill { stroke: var(--chart-fill); fill: none; }
+.hc-dot.hc-fill { fill: var(--chart-fill); stroke: var(--chart-fill); stroke-width: 1.5; }
+.hc-dot.hc-cutout { fill: var(--chart-level); stroke: none; }
+.hc-dot.hc-cutin { fill: var(--chart-starts); stroke: none; }
+.hc-line.hc-leak { stroke: var(--chart-energy); fill: none; }
+.hc-dot.hc-leak { fill: var(--chart-energy); stroke: none; }
+.hc-dot.hollow { fill: var(--panel); }
+.hc-lane { fill: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+/* The zoom rail under the chart. */
+.chart-rail { margin-top: 6px; }
+.hc-rail { display: block; touch-action: none; }
+.hc-rail-track { stroke: var(--line); stroke-width: 4; stroke-linecap: round; }
+.hc-rail-range { stroke: var(--blue); stroke-width: 4; stroke-linecap: round; }
+.hc-rail-handle { fill: var(--panel); stroke: var(--blue); stroke-width: 2; cursor: grab; }
+.hc-rail-handle:active { cursor: grabbing; }
+.hc-rail-handle:focus-visible { outline: none; stroke-width: 3; stroke: var(--text); }
+.hc-rail-labels { display: flex; justify-content: space-between; padding: 0 14px 0 48px; color: var(--muted); font-size: .64rem; }
 .hc-hit { cursor: crosshair; }
 .hc-tip {
   position: absolute; top: 6px; padding: 5px 9px; border: 1px solid var(--line);
@@ -273,14 +297,14 @@ footer { display: flex; justify-content: space-between; gap: 20px; padding: 14px
   /* Six readings over three columns is two full rows; four left a ragged pair. */
   .status-strip { grid-template-columns: repeat(3, 1fr); }
   .pump-state { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--line); }
-  .workspace { grid-template-columns: 1fr 1fr; }
-  .health-panel { grid-column: 1 / -1; min-height: auto; }
+  .health-panel { min-height: auto; }
   .health-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 20px; }
 }
 
 @media (max-width: 700px) {
   .topbar { align-items: flex-start; }
-  .status-strip, .workspace { grid-template-columns: 1fr; }
+  .status-strip { grid-template-columns: 1fr; }
+  .workspace { grid-template-columns: minmax(0, 1fr); }
   .pump-state, .metric { grid-column: auto; border-right: 0; border-bottom: 1px solid var(--line); }
   .metric:last-child { border-bottom: 0; }
   .health-panel { grid-column: auto; }

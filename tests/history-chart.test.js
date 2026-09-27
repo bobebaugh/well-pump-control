@@ -93,16 +93,18 @@ test("the axis carries a handful of time labels, not one per bucket", () => {
   const day = Array.from({ length: 288 }, (unused, index) => ({ startMs: T0 + index * 300000 }));
   assert.ok(chart.timeLabels("1d", day).length <= 7);
   const week = Array.from({ length: 7 }, (unused, index) => ({ startMs: T0 + index * 86400000 }));
-  assert.equal(chart.timeLabels("7d", week).length, 7);
+  // One per local midnight in the week: six or seven depending on the zone.
+  const labels = chart.timeLabels("7d", week).length;
+  assert.ok(labels >= 6 && labels <= 7, `${labels} labels`);
 });
 
 test("the caption says what the water-used figure rests on, never implying a meter", () => {
   const base = { totals: { usedGallons: 41.2, starts: 9, runSeconds: 900 },
                  pressureSwitch: { cycles: 9, cutInPsi: 39.1, settledPsi: 60 } };
-  const fitted = chart.caption({ ...base, delivery: { basis: "window", bands: 6 } }, "used");
+  const fitted = chart.caption({ ...base, delivery: { basis: "fills", fills: 16 } }, "used");
   assert.match(fitted, /estimated/);
-  assert.match(fitted, /fitted from 6 pressure bands/);
-  const fallback = chart.caption({ ...base, delivery: { basis: "reference", bands: 1 } }, "used");
+  assert.match(fitted, /fastest clean fills of the last 7 days \(16\)/);
+  const fallback = chart.caption({ ...base, delivery: { basis: "reference", fills: 1 } }, "used");
   assert.match(fallback, /qualification fill/);
 });
 
@@ -119,25 +121,95 @@ test("the rendered SVG reports emptiness so the page can explain it", () => {
   const something = chart.svgFor({ buckets: bucketsOf(288, index => ({ gallons: 10 + index % 5, used: 1, starts: 0 })) },
                                  "gallons", "1d", 640);
   assert.equal(something.empty, false);
-  assert.match(something.markup, /<svg viewBox="0 0 640 260"/);
+  assert.match(something.markup, /<svg viewBox="0 0 640 320"/);
 });
 
 test("markup is escaped, since labels come from Intl and flow into HTML", () => {
   assert.equal(chart.escape('<b>&"'), "&lt;b&gt;&amp;&quot;");
 });
 
-test("load groups as a weighted average of running readings and zooms its axis to them", () => {
-  const buckets = [
-    { startMs: 0, loadRatio: 101, loadCount: 3, energyKWh: 0.01 },
-    { startMs: 1, loadRatio: null, loadCount: 0, energyKWh: 0.02 },
-    { startMs: 2, loadRatio: 102, loadCount: 1, energyKWh: 0.03 }
-  ];
-  const [load] = chart.groupBuckets(buckets, 3, "loadRatio");
-  assert.equal(load.value, 101.25);
-  const [energy] = chart.groupBuckets(buckets, 3, "energyKWh");
-  assert.equal(Number(energy.value.toFixed(2)), 0.06);
+test("a trend axis zooms to its readings, keeping zero for a rate of either sign", () => {
   const scale = chart.axis([{ value: 100.5 }, { value: null }, { value: 102.4 }], { floor: true });
   assert.ok(scale.min > 90 && scale.min <= 100.5, `min ${scale.min}`);
   assert.ok(scale.max >= 102.4 && scale.max < 110, `max ${scale.max}`);
-  assert.equal(chart.axis([{ value: 3 }]).min, 0, "other views still start at zero");
+  assert.equal(chart.axis([{ value: 3 }]).min, 0, "bucket views still start at zero");
+  const fill = chart.axis([{ value: 44.2 }, { value: 45.1 }], { floor: true, minSpan: 6 });
+  assert.ok(fill.max - fill.min >= 6 && fill.max - fill.min <= 12, "a steady fill time is not magnified into a trend");
+  const leak = chart.axis([{ value: 0.01 }, { value: 0.04 }], { floor: true, minSpan: 0.2, zero: true });
+  assert.ok(leak.min <= 0 && leak.max >= 0.04 && leak.max <= 0.5);
+});
+
+// The zoom rail and the trend views.
+
+const HOUR = 3600000;
+const DAY = 24 * HOUR;
+
+test("zoom handles stay inside the window and at least the minimum span apart", () => {
+  const extent = [T0, T0 + DAY];
+  assert.deepEqual(chart.clampZoom("from", T0 - HOUR, [T0, T0 + DAY], extent, HOUR), [T0, T0 + DAY]);
+  assert.deepEqual(chart.clampZoom("from", T0 + DAY, [T0, T0 + 10 * HOUR], extent, HOUR), [T0 + 9 * HOUR, T0 + 10 * HOUR]);
+  assert.deepEqual(chart.clampZoom("to", T0 + 2 * DAY, [T0, T0 + 10 * HOUR], extent, HOUR), [T0, T0 + DAY]);
+  assert.deepEqual(chart.clampZoom("to", T0, [T0 + 5 * HOUR, T0 + 10 * HOUR], extent, HOUR), [T0 + 5 * HOUR, T0 + 6 * HOUR]);
+});
+
+test("a zoomed range cuts the bucket series to the buckets it covers", () => {
+  const data = { startMs: T0, endMs: T0 + DAY, buckets: bucketsOf(288, index => ({ gallons: index, used: 1, starts: 0 })) };
+  assert.equal(chart.points(data, "gallons", "1d").length, 288);
+  const zoomed = chart.points(data, "gallons", "1d", [T0 + 6 * HOUR, T0 + 8 * HOUR]);
+  assert.equal(zoomed.length, 24);
+  assert.equal(zoomed[0].startMs, T0 + 6 * HOUR);
+  // Hourly bars keep a bar that is only partly inside the range.
+  assert.equal(chart.points(data, "used", "1d", [T0 + 6.5 * HOUR, T0 + 8 * HOUR]).length, 2);
+});
+
+test("the daily fill point is the fastest clean fill, and a day of drawn fills is best available", () => {
+  const dayOf = ms => Math.floor(ms / DAY);
+  const cycles = [
+    { startMs: T0 + HOUR, fillSeconds: 46.0, clean: true },
+    { startMs: T0 + 2 * HOUR, fillSeconds: 44.5, clean: true },
+    { startMs: T0 + 3 * HOUR, fillSeconds: 41.0, clean: false },
+    { startMs: T0 + DAY + HOUR, fillSeconds: 53.9, clean: false },
+    { startMs: T0 + DAY + 2 * HOUR, fillSeconds: 50.0, clean: null },
+    { startMs: T0 + 2 * DAY, fillSeconds: null, clean: false }
+  ];
+  const days = chart.dailyBest(cycles, dayOf);
+  assert.deepEqual(days.map(day => [day.value, day.clean]), [[44.5, true], [50.0, false]]);
+});
+
+test("the daily leak-down point is the day's longest quiet stretch", () => {
+  const dayOf = ms => Math.floor(ms / DAY);
+  const days = chart.dailyLeak([
+    { startMs: T0, endMs: T0 + 3 * HOUR, gallonsPerHour: 0.2 },
+    { startMs: T0 + 4 * HOUR, endMs: T0 + 9 * HOUR, gallonsPerHour: 0.01 },
+    { startMs: T0 + 3 * DAY, endMs: T0 + 3 * DAY + 2 * HOUR, gallonsPerHour: 0.05 }
+  ], dayOf);
+  assert.deepEqual(days.map(day => day.value), [0.01, 0.05]);
+  assert.equal(days[0].hours, 5);
+  // Two days apart: no line is drawn across the day with nothing measured.
+  assert.equal(chart.joinDaily(days).length, 2);
+});
+
+test("time ticks are round and few, whatever the zoom", () => {
+  for (const span of [2 * HOUR, DAY, 7 * DAY, 30 * DAY]) {
+    const ticks = chart.timeTicks(T0 + 1234567, T0 + 1234567 + span);
+    assert.ok(ticks.length >= 2 && ticks.length <= 8, `${ticks.length} ticks over ${span / HOUR} h`);
+    for (const tick of ticks) assert.ok(tick.ms >= T0 + 1234567 && tick.ms <= T0 + 1234567 + span);
+  }
+});
+
+test("the trend views draw runs where they happened, and say when there are none", () => {
+  const data = { startMs: T0, endMs: T0 + DAY, buckets: [], quiet: [], cycles: [
+    { startMs: T0 + HOUR, fillSeconds: 44.9, clean: true, cutInPsi: 39.2, cutOutPsi: 61.4 },
+    { startMs: T0 + 5 * HOUR, fillSeconds: 53.9, clean: false, cutInPsi: 39.7, cutOutPsi: 61.2 }
+  ] };
+  const fill = chart.svgFor(data, "fill", "1d", 640);
+  assert.equal(fill.empty, false);
+  assert.equal(fill.series.length, 2);
+  assert.equal((fill.markup.match(/hollow/g) || []).length, 1, "the drawn fill is hollow");
+  const switches = chart.svgFor(data, "switch", "1d", 640);
+  assert.equal(switches.series.length, 4, "a cut-in and a cut-out per run, in their own lanes");
+  assert.match(switches.markup, /Cut-out/);
+  assert.equal(chart.svgFor(data, "leak", "1d", 640).empty, true);
+  const zoomed = chart.svgFor(data, "fill", "1d", 640, [T0 + 4 * HOUR, T0 + 6 * HOUR]);
+  assert.equal(zoomed.series.length, 1);
 });

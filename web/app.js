@@ -18,6 +18,7 @@ const statStarts = document.querySelector("#stat-starts");
 const statRun = document.querySelector("#stat-run");
 const historyViewButtons = [...document.querySelectorAll("#history-view button")];
 const historyRangeButtons = [...document.querySelectorAll("#history-range button")];
+const historyRail = document.querySelector("#history-rail");
 const tankWater = document.querySelector("#tank-water");
 const pressureTag = document.querySelector("#pressure-tag");
 const pressureRow = document.querySelector("#health-pressure");
@@ -47,6 +48,9 @@ let operatorSignedIn = false;
 // faster than the device writes only burns requests for the same record.
 const OBSERVATION_REFRESH_MS = 2000;
 const HISTORY_REFRESH_MS = 300000;
+// A month is about 11,000 reads, and a run or two a day barely moves it, so it
+// is re-read at the endpoint's own cache age rather than every five minutes.
+const HISTORY_MAX_AGE_MS = { "1d": 0, "7d": 0, "30d": 1800000 };
 // The tank cutaway shows WATER against the range this system actually uses.
 //
 // Two scales were wrong before. Pressure on a linear 0-70 scale drew a tank 71%
@@ -70,6 +74,10 @@ let historyWindow = "1d";
 // Keyed by window: switching between chart views must not refetch, and the two
 // windows are cached separately so flipping back is instant.
 const historyData = {};
+const historyLoadedAt = {};
+// The zoomed range per window, as times. Null shows the whole window. A range
+// whose end is at "now" follows the window forward as it refreshes.
+const historyZoom = {};
 let operatorBusy = false;
 let operatorTimer;
 let lastOperatorStatus = null;
@@ -534,10 +542,24 @@ function renderDayStats() {
   statRun.textContent = runTimeText(totals.runSeconds);
 }
 
-// The latest hour or day with a running reading, as the chart groups them.
-function loadHero(data) {
-  const points = HistoryChart.points(data, "load", historyWindow).filter(point => Number.isFinite(point.value));
-  return points.length ? `${points.at(-1).value.toFixed(1)}%` : "\u2014";
+// The trend views' headline: the latest day's figure, or the latest run's.
+function trendHero(data, view) {
+  if (view === "fill") {
+    const best = HistoryChart.dailyBest(data.cycles).filter(point => point.clean).at(-1);
+    return best ? `${best.value.toFixed(1)} s` : "\u2014";
+  }
+  if (view === "switch") {
+    const cycle = (data.cycles || []).filter(item => Number.isFinite(item.cutInPsi) && Number.isFinite(item.cutOutPsi)).at(-1);
+    return cycle ? `${cycle.cutInPsi.toFixed(1)}\u2013${cycle.cutOutPsi.toFixed(1)} psi` : "\u2014";
+  }
+  const day = HistoryChart.dailyLeak(data.quiet).at(-1);
+  return day ? `${day.value.toFixed(2)} gal/h` : "\u2014";
+}
+
+function historyRange(data) {
+  const zoom = historyZoom[historyWindow];
+  if (!zoom) return [data.startMs, data.endMs];
+  return [Math.max(data.startMs, zoom[0]), Math.min(data.endMs, zoom[1])];
 }
 
 function renderHistory() {
@@ -555,17 +577,34 @@ function renderHistory() {
       ? `${totals.usedGallons ?? 0} gal`
       : historyView === "energy"
         ? `${totals.energyKWh ?? 0} kWh`
-        : historyView === "load"
-          ? loadHero(data)
+        : HistoryChart.VIEWS[historyView].mark === "scatter"
+          ? trendHero(data, historyView)
           : `${totals.starts ?? 0}`;
-  HistoryChart.mount(historyChart, data, historyView, historyWindow);
+  const range = historyRange(data);
+  HistoryChart.mount(historyChart, data, historyView, historyWindow, range);
+  HistoryChart.mountRail(historyRail, {
+    extent: [data.startMs, data.endMs], range, minSpanMs: HistoryChart.ZOOM_MIN_MS[historyWindow],
+    onChange: next => {
+      const whole = next[0] <= data.startMs && next[1] >= data.endMs;
+      historyZoom[historyWindow] = whole ? null : next;
+      HistoryChart.mount(historyChart, data, historyView, historyWindow, historyRange(data));
+    }
+  });
   historyCaption.textContent = HistoryChart.caption(data, historyView);
 }
 
 async function loadHistory(windowKey) {
   const data = await fetchStatus(
     `/.netlify/functions/observation-series?window=${encodeURIComponent(windowKey)}`);
+  // A zoom that reached the old "now" moves forward with the new one.
+  const previous = historyData[windowKey];
+  const zoom = historyZoom[windowKey];
+  if (previous && zoom && zoom[1] >= previous.endMs - 60000) {
+    const shift = data.endMs - previous.endMs;
+    historyZoom[windowKey] = [zoom[0] + shift, zoom[1] + shift];
+  }
   historyData[windowKey] = data;
+  historyLoadedAt[windowKey] = Date.now();
   if (data.tankModel) tankModel = data.tankModel;
   if (data.pressureSwitch?.cycles > 0) pressureSwitch = data.pressureSwitch;
   return data;
@@ -581,7 +620,9 @@ async function checkHistory() {
     // The day window is always refreshed: the tank cutaway and the 24h tiles
     // both need it even when the chart is showing the week.
     await loadHistory("1d");
-    if (historyWindow !== "1d") await loadHistory(historyWindow);
+    if (historyWindow !== "1d" && !(Date.now() - (historyLoadedAt[historyWindow] || 0) < HISTORY_MAX_AGE_MS[historyWindow])) {
+      await loadHistory(historyWindow);
+    }
     renderDayStats();
     renderHistory();
   } catch (error) {

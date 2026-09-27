@@ -39,9 +39,10 @@ const LEVEL_CARRY_LIMIT_MS = 20 * 60 * 1000;
 //
 // This is a PRIOR, not a constant.  Well water level moves the curve -- the
 // higher the water in the well, the less lift, the more flow -- so a stored fit
-// goes stale across a season.  A window carrying enough fills of its own
-// derives its own curve and this is never consulted.  It is what gets used when
-// the window cannot, because an educated guess from a real measured fill beats
+// goes stale across a season.  The trailing week's clean fills set the level
+// of the curve (deliveryFromFills) and only its slope is taken from here.  The
+// whole curve is used when the week has too few clean fills, because an
+// educated guess from a real measured fill beats
 // refusing to answer: without calibrated flow meters on the well-to-tank and
 // tank-to-house legs, every number here is an estimate anyway, and withholding
 // one is a bigger error than publishing it labelled.
@@ -63,23 +64,50 @@ const PUMP_SETTLING_MS = 20000;
 // switch's cut-in.
 const PRECHARGE_BELOW_CUT_IN_PSI = 2;
 
-// A fill rate is only evidence over a span long enough to outrun the 1 gallon
-// logging threshold.
-const DELIVERY_MIN_SPAN_MS = 4000;
-const DELIVERY_BAND_PSI = 3;
-const DELIVERY_MIN_PER_BAND = 3;
-const DELIVERY_MIN_BANDS = 3;
+// The fill-time band. Every normal fill passes through it with the pump well
+// clear of the cut-in step and the cut-out overshoot, inside the 40-61 psi the
+// sensor fit is qualified for, and a couple of psi of switch drift at either end
+// still leaves it whole. Readings in it are the sensor's while the pump runs,
+// i.e. discharge pressure about 1.4 psi above the tank's, the same on every fill.
+const FILL_LOW_PSI = 48;
+const FILL_HIGH_PSI = 58;
+// Records arrive about every gallon (about 5 s) through a fill; a longer silence
+// inside the band means a crossing time would be a guess.
+const FILL_MAX_GAP_MS = 15000;
+// House draw can only slow a fill. Draw that is still running after cut-out
+// usually ran through the fill too, so a fill is clean only if the settled tank
+// then holds. On the 18-27 September records a quiet cut-out loses 0.3-1.5 gal
+// in the next five minutes as the compressed air cools; draw shows as 2-6 gal.
+const AFTER_FILL_MS = 5 * 60 * 1000;
+const AFTER_FILL_CLEAN_GALLONS = 2;
+// Delivery is taken from the clean fills of the trailing week whatever the view,
+// so the day and week views estimate every run with the same pump.
+const DELIVERY_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+const DELIVERY_MIN_FILLS = 3;
+// Leak-down is read only on stretches with nothing going on. After a cut-out the
+// air cools and the pressure sags for most of an hour, and after a draw it warms
+// and recovers, so a stretch starts an hour after the last run or draw. A record
+// gap longer than two heartbeats ends it.
+const QUIET_SETTLE_MS = 60 * 60 * 1000;
+const QUIET_MIN_MS = 2 * 60 * 60 * 1000;
+const QUIET_MAX_GAP_MS = 25 * 60 * 1000;
+// A draw is half a gallon lost within ten minutes (3 gal/h and up); a slower
+// fall stays in the stretch and is what leak-down measures. Readings jitter by a
+// few hundredths of a gallon, which is not a fall.
+const QUIET_MIN_DRAW_GALLONS = 0.5;
+const QUIET_DRAW_LOOKBACK_MS = 10 * 60 * 1000;
+const QUIET_JITTER_GALLONS = 0.1;
 
 const WINDOWS = {
   "1d": { spanMs: 24 * 60 * 60 * 1000, bucketMs: 5 * 60 * 1000 },
-  "7d": { spanMs: 7 * 24 * 60 * 60 * 1000, bucketMs: 60 * 60 * 1000 }
+  "7d": { spanMs: 7 * 24 * 60 * 60 * 1000, bucketMs: 60 * 60 * 1000 },
+  "30d": { spanMs: 30 * 24 * 60 * 60 * 1000, bucketMs: 60 * 60 * 1000 }
 };
 
-// A week of records: the 10-minute maximum interval alone is about 1000, and
-// pressure deltas during normal cycling add several thousand more. This bounds
-// one request; beyond it the reply says it was truncated rather than quietly
-// charting part of the window.
-const MAX_SERIES_ROWS = 12000;
+// The 18-27 September records ran 240-800 a day, so thirty days is up to about
+// 24,000. This bounds one request per schema; beyond it the reply says it was
+// truncated rather than quietly charting part of the window.
+const MAX_SERIES_ROWS = 40000;
 
 function numberOrNull(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -189,65 +217,182 @@ function spread(buckets, startMs, bucketMs, fromMs, toMs, amount, key) {
   }
 }
 
+function running(sample) {
+  return sample.watts !== null && sample.watts >= PUMP_RUNNING_WATTS;
+}
+
+// Where a rising reading crossed a pressure, interpolated between the two
+// records either side, with the gallons at that instant when both carry them.
+function crossing(before, after, psi) {
+  const share = (psi - before.psi) / (after.psi - before.psi);
+  const gallons = before.gallons !== null && after.gallons !== null
+    ? before.gallons + share * (after.gallons - before.gallons) : null;
+  return { timeMs: before.timeMs + share * (after.timeMs - before.timeMs), gallons, gapMs: after.timeMs - before.timeMs };
+}
+
+// The 48-58 psi fill of one run, or null when the run never crossed the band
+// cleanly: no rising crossing, a record gap inside it, or a fall in pressure
+// part-way (a draw heavy enough to beat the pump).
+function fillThroughBand(runSamples) {
+  const readings = runSamples.filter(sample => sample.psi !== null);
+  let low = null; let lowIndex = -1;
+  for (let index = 1; index < readings.length; index += 1) {
+    const [before, after] = [readings[index - 1], readings[index]];
+    if (low === null && before.psi < FILL_LOW_PSI && after.psi >= FILL_LOW_PSI) {
+      low = crossing(before, after, FILL_LOW_PSI); lowIndex = index - 1;
+    }
+    if (low !== null && before.psi < FILL_HIGH_PSI && after.psi >= FILL_HIGH_PSI) {
+      const high = crossing(before, after, FILL_HIGH_PSI);
+      const span = readings.slice(lowIndex, index + 1);
+      let peak = -Infinity;
+      for (let step = 0; step < span.length; step += 1) {
+        if (step && span[step].timeMs - span[step - 1].timeMs > FILL_MAX_GAP_MS) return null;
+        if (span[step].psi < peak - 1) return null;
+        peak = Math.max(peak, span[step].psi);
+      }
+      const seconds = (high.timeMs - low.timeMs) / 1000;
+      if (!(seconds > 0)) return null;
+      const gallons = low.gallons !== null && high.gallons !== null ? high.gallons - low.gallons : null;
+      return { atMs: low.timeMs, seconds, gpm: gallons !== null && gallons > 0 ? gallons / (seconds / 60) : null };
+    }
+  }
+  return null;
+}
+
 /**
- * Derive this window's pump delivery curve from its own fills.
+ * Every pump run in a sample series, with what the trend views need: the
+ * switch's cut-in and cut-out as the sensor saw them, the 48-58 psi fill time,
+ * and whether the tank then held (a clean fill) or kept falling (draw).
  *
- * Within a run the tank rises at (pump delivery - household draw), so across
- * many fills the FASTEST rise seen at a given pressure is the one where nobody
- * was drawing, and the upper envelope of observed rates is the pump curve at
- * this period's well level.  Deriving it per window means it follows the well
- * through the seasons with nothing stored to go stale.
- *
- * Returns the reference prior when the window has too few fills to fit -- never
- * nothing.  The basis says which, so the page can label the estimate.
+ * clean is null while the five minutes after cut-out have not yet passed.
  */
-function deliveryCurve(samples) {
-  const usable = sample => sample.gallons !== null && sample.psi !== null &&
-    sample.watts !== null && sample.watts >= PUMP_RUNNING_WATTS;
-
-  const bands = new Map();
+function pumpCycles(samples, { nowMs = Infinity } = {}) {
+  const cycles = [];
+  let current = null;
+  let state = false;
   for (let index = 0; index < samples.length; index += 1) {
-    const previous = samples[index];
-    if (!usable(previous)) continue;
-    // Pair with the first later sample that spans enough time to outrun the
-    // logging threshold, rather than the next one: at the 1 Hz of a capture no
-    // adjacent pair would ever qualify, and the whole window would fall back.
-    let partner = index + 1;
-    while (partner < samples.length &&
-           samples[partner].timeMs - previous.timeMs < DELIVERY_MIN_SPAN_MS &&
-           usable(samples[partner])) partner += 1;
-    if (partner >= samples.length) break;
-    const current = samples[partner];
-    const spanMs = current.timeMs - previous.timeMs;
-    if (spanMs < DELIVERY_MIN_SPAN_MS || !usable(current)) continue;
-    const rate = (current.gallons - previous.gallons) / (spanMs / 60000);
-    if (!(rate > 0)) continue;
-    const band = Math.floor(((previous.psi + current.psi) / 2) / DELIVERY_BAND_PSI);
-    if (!bands.has(band)) bands.set(band, []);
-    bands.get(band).push(rate);
+    const sample = samples[index];
+    if (sample.watts === null) { if (current) current.samples.push(sample); continue; }
+    const on = running(sample);
+    if (on && !state) {
+      const before = samples.slice(0, index).reverse().find(item => item.psi !== null);
+      current = { startIndex: index, samples: [sample], stop: null,
+                  cutInPsi: before && sample.timeMs - before.timeMs <= 60000 ? before.psi : null };
+      cycles.push(current);
+    } else if (on && current) {
+      current.samples.push(sample);
+    } else if (!on && state && current) {
+      current.stop = sample; current.stopIndex = index; current = null;
+    }
+    state = on;
   }
 
-  // The second-highest rate rather than the highest: one noisy pair should not
-  // set the envelope for a whole pressure band.
-  const points = [];
-  for (const [band, rates] of bands) {
-    if (rates.length < DELIVERY_MIN_PER_BAND) continue;
-    rates.sort((left, right) => right - left);
-    points.push([(band + 0.5) * DELIVERY_BAND_PSI, rates[1]]);
+  return cycles.map((cycle, position) => {
+    const last = cycle.samples.filter(running).at(-1) || cycle.samples[0];
+    const trip = [...cycle.samples, ...(cycle.stop && cycle.stop.timeMs - last.timeMs <= 10000 ? [cycle.stop] : [])]
+      .map(sample => sample.psi).filter(psi => psi !== null);
+    const fill = fillThroughBand(cycle.samples);
+    let afterFallGallons = null; let clean = null;
+    if (cycle.stop) {
+      const nextStart = cycles[position + 1]?.samples[0].timeMs ?? Infinity;
+      const after = samples.slice(cycle.stopIndex).filter(sample =>
+        sample.timeMs < nextStart && sample.gallons !== null && !running(sample));
+      const settled = after.find(sample => sample.timeMs - cycle.stop.timeMs >= PUMP_SETTLING_MS);
+      if (settled) {
+        const until = settled.timeMs + AFTER_FILL_MS;
+        const held = after.filter(sample => sample.timeMs >= settled.timeMs && sample.timeMs <= until);
+        // Records are written on every gallon of change, so no record by then
+        // means no gallon was lost. Only the passage of time can say so.
+        const decided = nextStart <= until || nowMs >= until || after.some(sample => sample.timeMs > until);
+        if (decided) {
+          afterFallGallons = Math.max(0, settled.gallons - Math.min(...held.map(sample => sample.gallons)));
+          clean = fill !== null && afterFallGallons <= AFTER_FILL_CLEAN_GALLONS;
+        }
+      }
+    }
+    const round = (value, places) => value === null || !Number.isFinite(value) ? null : Number(value.toFixed(places));
+    return {
+      startMs: cycle.samples[0].timeMs,
+      stopMs: cycle.stop ? cycle.stop.timeMs : null,
+      cutInPsi: round(cycle.cutInPsi, 2),
+      // A run stopped short of the band's top ended some other way (a lockout,
+      // an inhibit, the power) and says nothing about where the switch opens.
+      cutOutPsi: trip.length && cycle.stop && Math.max(...trip) >= FILL_HIGH_PSI ? round(Math.max(...trip), 2) : null,
+      fillSeconds: fill ? round(fill.seconds, 1) : null,
+      fillGpm: fill ? round(fill.gpm, 2) : null,
+      afterFallGallons: round(afterFallGallons, 2),
+      clean
+    };
+  });
+}
+
+/**
+ * Pump delivery for every run, from the clean fills rather than a fit.
+ *
+ * Draw can only slow a fill, so the fastest clean fills are the pump's own
+ * delivery at the band's pressure. The second fastest of them is used, so one
+ * lucky pair of records does not set it. The slope across pressure is the
+ * measured 2026-08-26 one; a single band cannot give a slope. Too few clean
+ * fills falls back to that whole measured curve -- never nothing.
+ */
+function deliveryFromFills(cycles) {
+  const rates = (Array.isArray(cycles) ? cycles : [])
+    .filter(cycle => cycle.clean === true && Number.isFinite(cycle.fillGpm))
+    .map(cycle => cycle.fillGpm).sort((left, right) => right - left);
+  if (rates.length < DELIVERY_MIN_FILLS) {
+    return { ...REFERENCE_DELIVERY, basis: "reference", fills: rates.length };
   }
-  if (points.length < DELIVERY_MIN_BANDS) {
-    return { ...REFERENCE_DELIVERY, basis: "reference", bands: points.length };
+  const gpm = rates[1];
+  const midPsi = (FILL_LOW_PSI + FILL_HIGH_PSI) / 2;
+  return { intercept: gpm - REFERENCE_DELIVERY.slopePerPsi * midPsi,
+           slopePerPsi: REFERENCE_DELIVERY.slopePerPsi, basis: "fills", fills: rates.length };
+}
+
+/**
+ * Stretches of at least two hours with the pump off and nothing drawing, for
+ * leak-down. A slow steady fall across one is a leak (check valve, fixture,
+ * pipe); a steady tank reads about zero.
+ */
+function quietStretches(samples) {
+  const stretches = [];
+  let eligibleFromMs = -Infinity;
+  let points = [];
+  let recent = [];
+  let wasRunning = false;
+  const close = (end = points.at(-1)) => {
+    const start = points[0];
+    if (start && end && end.timeMs - start.timeMs >= QUIET_MIN_MS) {
+      const hours = (end.timeMs - start.timeMs) / 3600000;
+      const fall = start.gallons - end.gallons;
+      stretches.push({ startMs: start.timeMs, endMs: end.timeMs,
+                       fallGallons: Number(fall.toFixed(2)), gallonsPerHour: Number((fall / hours).toFixed(3)) });
+    }
+    points = [];
+  };
+  for (const sample of samples) {
+    if (running(sample)) { close(); recent = []; eligibleFromMs = Infinity; wasRunning = true; continue; }
+    if (wasRunning && sample.watts !== null) { eligibleFromMs = sample.timeMs + QUIET_SETTLE_MS; wasRunning = false; }
+    if (sample.gallons === null) continue;
+    if (points.length && sample.timeMs - points.at(-1).timeMs > QUIET_MAX_GAP_MS) close();
+    // A draw is a real fall from a level held in the last few minutes, at more
+    // than a trickle's rate. It may arrive as several small steps a few seconds
+    // apart, so it is measured from that level, not from the previous record.
+    recent = recent.filter(item => sample.timeMs - item.timeMs <= QUIET_DRAW_LOOKBACK_MS);
+    const high = recent.reduce((best, item) => (best === null || item.gallons > best.gallons ? item : best), null);
+    const fall = high ? high.gallons - sample.gallons : 0;
+    if (fall >= QUIET_MIN_DRAW_GALLONS) {
+      // End the stretch where the level last stood before the fall began.
+      const onset = recent.filter(item => item.gallons >= high.gallons - QUIET_JITTER_GALLONS).at(-1);
+      close(points.includes(onset) ? onset : undefined);
+      points = [];
+      eligibleFromMs = sample.timeMs + QUIET_SETTLE_MS;
+    } else if (sample.timeMs >= eligibleFromMs) {
+      points.push(sample);
+    }
+    recent.push(sample);
   }
-  const meanPsi = points.reduce((sum, [psi]) => sum + psi, 0) / points.length;
-  const meanRate = points.reduce((sum, [, rate]) => sum + rate, 0) / points.length;
-  const variance = points.reduce((sum, [psi]) => sum + (psi - meanPsi) ** 2, 0);
-  if (!(variance > 0)) {
-    return { ...REFERENCE_DELIVERY, basis: "reference", bands: points.length };
-  }
-  const slopePerPsi = points.reduce((sum, [psi, rate]) =>
-    sum + (psi - meanPsi) * (rate - meanRate), 0) / variance;
-  return { intercept: meanRate - slopePerPsi * meanPsi, slopePerPsi,
-           basis: "window", bands: points.length };
+  close();
+  return stretches;
 }
 
 function mean(values) {
@@ -486,6 +631,7 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
 module.exports = {
   LEVEL_CARRY_LIMIT_MS, MAX_SERIES_ROWS, PRECHARGE_BELOW_CUT_IN_PSI, PUMP_RUNNING_WATTS,
   REFERENCE_DELIVERY, WINDOWS,
-  buildSeries, deliveryCurve, pumpDeliveryGpm, recordField, recordTimeMs, samplesFromRecords,
-  switchSummary, tankModelFromDraft, tankWaterGallons
+  DELIVERY_LOOKBACK_MS, FILL_HIGH_PSI, FILL_LOW_PSI,
+  buildSeries, deliveryFromFills, pumpCycles, pumpDeliveryGpm, quietStretches, recordField, recordTimeMs,
+  samplesFromRecords, switchSummary, tankModelFromDraft, tankWaterGallons
 };
