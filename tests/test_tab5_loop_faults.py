@@ -83,6 +83,23 @@ class CpuBLoopFaultTests(unittest.TestCase):
         self.assertEqual(step(None, 10), (1, False))
 
 
+class CpuBTimingTests(unittest.TestCase):
+    """M6.45: daily SNTP resync, main endpoints."""
+
+    def setUp(self):
+        self.cloud, _ = load_cloud()
+
+    def test_sntp_resyncs_daily_and_a_failed_resync_keeps_sync(self):
+        delay = self.cloud._next_ntp_delay_ms
+        self.assertEqual(self.cloud.NTP_RESYNC_MS, 86400000)
+        self.assertEqual(delay(False, True), 86400000)
+        self.assertEqual(delay(True, True), 86400000)
+        self.assertEqual(delay(False, False), self.cloud.NTP_RETRY_MS)
+        self.assertEqual(delay(True, False), 3600000)
+        # ticks_diff is valid below 2**29 ms, about 6.2 days.
+        self.assertLess(self.cloud.NTP_RESYNC_MS, 1 << 29)
+
+
 class CpuALoopFaultTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -32,6 +32,11 @@ WIFI_RECOVERY_TRIGGER_MS = 5000
 WIFI_RECOVERY_REPEAT_MS = 15000
 WIFI_RESTART_PAUSE_MS = 250
 NTP_RETRY_MS = 30000
+# Resync daily: the clock gains about 1.8 s a day, and operator commands are
+# accepted only inside a 45 s wall-clock window. A failed resync keeps the synced
+# state and retries hourly.
+NTP_RESYNC_MS = 86400000
+NTP_RESYNC_RETRY_MS = 3600000
 NTP_HOSTS = ('pool.ntp.org', 'time.google.com', 'time.cloudflare.com')
 PUBLISH_RETRY_MS = 60000
 HEARTBEAT_PERIOD_MS = 60000
@@ -1296,6 +1301,13 @@ def _try_ntp_sync():
     return False
 
 
+def _next_ntp_delay_ms(was_synced, succeeded):
+    """Delay to the next SNTP attempt; a resync failure never unsets sync."""
+    if succeeded:
+        return NTP_RESYNC_MS
+    return NTP_RESYNC_RETRY_MS if was_synced else NTP_RETRY_MS
+
+
 def _sync_request():
     global _sync_sequence
     _sync_sequence += 1
@@ -1750,11 +1762,12 @@ def _run():
                     traffic_ready = True
                     log('Wi-Fi quiet period complete; Shelly and remote traffic enabled')
 
-            if connected and traffic_ready and not clock_synced:
-                if time.ticks_diff(now, next_ntp_attempt) >= 0:
-                    clock_synced = _try_ntp_sync()
-                    if not clock_synced:
-                        next_ntp_attempt = time.ticks_add(now, NTP_RETRY_MS)
+            if (connected and traffic_ready and
+                    time.ticks_diff(now, next_ntp_attempt) >= 0):
+                synced_now = _try_ntp_sync()
+                next_ntp_attempt = time.ticks_add(
+                    now, _next_ntp_delay_ms(clock_synced, synced_now))
+                clock_synced = clock_synced or synced_now
 
             _set_state(connected, traffic_ready, clock_synced, _safe_status(wlan),
                        _safe_ip(wlan), disconnect_count)
