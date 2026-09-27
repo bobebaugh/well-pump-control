@@ -98,8 +98,14 @@ when pilot is advanced. Docs-only commits (c503d29, feb0684) are not listed.
 |---|---|---|
 | f0acaa4 | Home SW0/RLY0 tiles show unknown when a fresh record reports Shelly 1 unreachable | screen (home) |
 | e478c6c | SW0/RLY0 tiles and the Shelly 1 health row also show unknown on a stale record or a failed read; the row no longer shows a missing value as OFF | screen (home) |
+| 5e497ca | Owner controls moved below the events, at the bottom of the home page | screen (home) |
+| 46d19ca | History on its own full-width row with a two-handle zoom rail and a 30-day range; Pump load replaced by Fill time (48-58 psi), Switch (cut-in/cut-out per run) and Leak-down views; water used and a run's delivered gallons use one delivery estimate from the trailing week's clean fills, so day and week agree | screen (home) + observation-series |
 
-Both are verified by the web tests only (381 pass); not yet seen on a deploy.
+Verified by the web tests (394 pass) and, for 46d19ca, by the page in a browser against
+the real series code fed the owner's 18-27 September export; not yet seen on a deploy.
+46d19ca makes the day view read the trailing week (about 2,600 records at current rates)
+so its delivery matches the week's; the 30-day view reads about 11,000 and is re-read at
+most every 30 minutes.
 
 ## Maintenance baseline
 
@@ -149,6 +155,11 @@ Old branch tips are archived in maintenance/branch-archive-2026-09-16.csv.
    that last gap. Only the short T010 message has been sent: the display names carry an
    em-dash, which is outside the GSM-7 alphabet and forces UCS-2 at seventy characters
    per segment, so watch how a full-length name such as W07 arrives during the soak.
+
+7. Review the pilot-working dashboard rows above in a branch preview or after promotion,
+   and direct promotion to pilot when ready. To let cloud sessions read records directly
+   instead of from a CSV export, add a viewer-scoped FIREBASE_SERVICE_ACCOUNT_JSON to the
+   cloud environment's settings (maintenance/firestore-peek.cjs reads it).
 
 No DNS, Netlify settings, Firebase configuration, device upload, restart or source
 promotion was performed by this housekeeping. History is in Git; all deferred work

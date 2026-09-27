@@ -86,16 +86,24 @@ goes stale. Measured shape on 25 September 2026: about 100-250 records a day.
 
 Source: the owner's well-head flow test (details kept outside the repo). Software items only.
 
-- **Replace the Pump load view with a fill-time trend.** Pump watts moved about 2 % over
-  roughly 90 ft of drawdown, so load is a motor check, not a level indicator. The time to
-  fill 40-60 psi (or 50-60 psi, less disturbed by a flush at cut-in) tracks pump flow
-  without the tank model: 89-93 s on normal days, 114 s with the well drawn down. Plot the
-  day's fastest clean fill; mark runs with draw before start or after stop. Built from the
-  records observation-series already reads.
+- **Fill time, switch and leak-down trends:** built on pilot-working (46d19ca), with one
+  delivery estimate for day and week. On the 18-27 September export normal fills took
+  43.8-46.3 s from 48 to 58 psi and the drawn-down well 54.3 s. Draw before a start did not
+  predict a slow fill, so only draw after cut-out marks a fill not clean.
 - **Tank model:** calibrate against a bucket drain between static pressures, then adjust the
   Boyle parameters (79.3 gal, 38 psi precharge; the tank was replaced with a same-size unit,
-  precharge to confirm). Use one delivery curve for both day and week views (the same run
-  showed 22.5 and 29.3 gal delivered).
+  precharge to confirm). Let each static pressure sit about an hour before reading it: the
+  records show the tank sagging about 3 psi (2-3 gal) over most of an hour after cut-out
+  and recovering about 0.9 gal after a draw, as the air cools after compression and warms
+  after expansion.
+- **Water used overcounts after draws:** it sums falls in level between runs, so the thermal
+  recovery after a draw is never netted back (roughly a gallon per draw that does not end
+  in a pump start). Fix with the calibration above.
+- **Switch cut-in held back:** a start delayed by a lockout or Tab5 inhibit shows as a low
+  cut-in (34.9 psi during the well test). Separating those needs PumpEnable/IsLocked in the
+  series read.
+- **Season views:** 30 days reads about 11,000 records per load. A daily summary written
+  once per day would make 90-day and yearly fill-time and leak-down views cheap.
 - **Pressure sensor range:** the ADC fit is qualified for about 40-61 psi; the test ran at
   10-42 psi and gauges disagreed by about 3 psi at 60. Qualify at more points before relying
   on low-pressure readings.

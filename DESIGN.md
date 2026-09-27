@@ -142,7 +142,21 @@ displays a disagreement between the contactor and motor current without judging
 it; the rules engine owns what one means. The tank shows the device's net flow estimate
 (TankNetFlowGPM, signed, positive filling) from the same record. It reads zero when
 TankFlowQuality is not VALID or the magnitude is under a provisional noise floor,
-and a dash only when the record carries no flow calculation. The record browser supports selected
+and a dash only when the record carries no flow calculation.
+
+History charts a day, a week or 30 days, zoomed by a two-handle rail. Water used and
+a run's delivered gallons rest on one delivery estimate in every view: the second
+fastest clean 48-58 psi fill of the trailing week sets the level of the measured
+August pump curve (its slope kept), or that whole curve when the week has fewer than
+three clean fills. The trend views read the same records. Fill time is seconds from 48
+to 58 psi at the sensor while running; a fill is untimed across a record gap over 15 s
+or a fall part-way, and clean only when the settled tank loses no more than 2 gal in
+the five minutes after cut-out (undecided until then). Switch shows each run's cut-in
+(the reading as the pump started) and cut-out (the highest reading to the stop record),
+the cut-out only for a run that reached 58 psi. Leak-down is tank level lost per hour
+over quiet stretches of at least two hours that start an hour after the last run or
+draw (half a gallon lost within ten minutes) and end at a draw, a run or a record gap
+over 25 minutes. The record browser supports selected
 columns, event/session navigation, paging, date anchors and daily CSV export. Its
 columns are the fields the records on the page carry, so they follow the package
 that wrote them rather than the draft being edited. Standard (contactor, watts,
