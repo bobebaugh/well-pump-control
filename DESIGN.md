@@ -123,11 +123,16 @@ records. Transport is an oldest-first 100-record/384-KiB RAM FIFO with discard
 accounting, not a flash outbox. A reset or long outage can lose records.
 
 CPU A publishes a complete sparse current-event board on changes, at once after boot,
-and otherwise every 30 minutes (every 30 seconds before M6.45). CPU B keeps only the latest board independently of the FIFO.
+and otherwise every 30 minutes (every 30 seconds before M6.45). CPU B keeps only the
+latest board independently of the FIFO.
 Firestore transactions reconcile newer boards into deterministic event-open/close
 records. Silence never closes an event; disappearance/restart closes have unknown
 device close times. A revision guards the RTDB mirror from delayed overwrites.
 Events entirely between delivered boards may be absent from cloud history.
+Because an unchanged board is re-sent only every 30 minutes, the home page judges the
+board by the live reading, not its age: while the live reading is fresh (30 s or less,
+the readings panel's rule) the board is current; otherwise its open events are as of the
+last board.
 
 Open and close records notify from the event's own `web` block (Notify on open/close,
 Open/Close message) in the release the record names. The compiler strips `web` from the
@@ -136,6 +141,14 @@ releaseId and content hash identify the one the device ran. The message is the e
 number in a marked subject and that open or close message in the body, or the record's
 display name when the message is empty. If the release cannot be read or does not match
 the reported hash, a cloud-side table keyed by event ID decides instead.
+
+The silent-device alert is a scheduled function (device-silence, every 15 minutes,
+production deploy only). It reads the newest durable record by receipt time; more than
+30 minutes without one sends one email and text, and records arriving again send one
+more. It uses the notifier's settings and dry run, in plain ASCII. Its state is
+sites/well-main/alerts/device-silence, written only after a send, so a failed send is
+retried on the next run. On a branch deploy it runs only when invoked, and an extra
+invocation cannot repeat a message.
 
 Event display names and enum choices are text the Tab5 posts back, and it sends those
 bodies with a character-count Content-Length, so a character over one byte truncates the

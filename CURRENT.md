@@ -113,6 +113,8 @@ when pilot is advanced.
 |---|---|---|
 | 968af5f | Records page row detail shows the cause a Tab5 M6.44 record carries when CloudAvailable goes false; durable-observation-v2 documents the optional cause | screen (records) + interface doc |
 | 7573678 | Rules catalog offers Tab5 M6.45 heap and loop-fault readings; the editor suggests each driver's objects and fills their contract; simulator values and injections | rules-package pipeline + editor screen |
+| 68de8ec | Silent-device alert: scheduled every 15 minutes on production; one message after 30 minutes without a durable record, one when records resume | scheduled function (new) |
+| 1d0ce79 | Home page's events panel judges the board by the live reading's freshness, not the board's age | screen (home) |
 
 7573678 is rules-package pipeline, so main and pilot both carry it before a package
 uses the new readings. 968af5f changes nothing visible until Tab5 M6.45 is installed: older records carry no
@@ -172,7 +174,7 @@ Device work, one install from tab5-working:
    device files. Checked 27 Sep: main's five device endpoints reject an unauthenticated
    POST with 401 and main reads Firestore and RTDB; rules-engine-release, the V3
    package download, also answers 401 on both. BETA and DESIGN updated.
-   DO NOT INSTALL THIS BUILD BEFORE MAIN IS FAST-FORWARDED TO PILOT (step C): until
+   Do not install this build before main is fast-forwarded to pilot (step C): until
    then main lacks af8d8e2 and the other device-facing changes the Tab5 relies on.
 6. Built, not installed (b25bc21): re-send an unchanged event board every 30 minutes instead of 30 s
    (EVENT_BOARD_HEARTBEAT_MS), approved 27 September to save Netlify credits. A change
@@ -184,13 +186,14 @@ Device work, one install from tab5-working:
 
 Cloud work on pilot-working:
 
-7. Not started: silent-device alert. A scheduled function runs every 15 minutes. It
-   sends one message when the newest durable record is over 30 minutes old, and one
-   when records resume. Netlify runs scheduled functions only on production, so it goes
-   live with main's deploy. The internet outage test is its first live check.
+7. Built (68de8ec; goes live with main's deploy): silent-device alert. A scheduled
+   function runs every 15 minutes. It sends one message when the newest durable record
+   is over 30 minutes old, and one when records resume. Netlify runs scheduled
+   functions only on production, so it goes live with main's deploy. The internet
+   outage test is its first live check.
 8. Built: the heap-stat catalog entry and simulator support for item 2 (7573678). The
    editor now suggests each driver's objects and fills their type, unit and access.
-9. Not started: the home page's events panel follows the live reading instead of the
+9. Built (1d0ce79): the home page's events panel follows the live reading instead of the
    board's age. While the reading is fresh the board is current, since changes are sent
    at once; when it is stale, say the open events are as of the Tab5's last report.
    Today it calls a board stale after 120 s, which a 30-minute re-send would trip.
