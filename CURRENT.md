@@ -152,22 +152,29 @@ Device work, one install from tab5-working:
    support. That is rules-package pipeline, so main and pilot both carry it before a
    package uses it. The device rejects a package naming an unknown binding, so the
    order is install, then publish, then restart to adopt.
-3. Not started: survive one bad loop pass, counting faults like the heap stat, in both
+3. Built, not installed (2b273d8 on tab5-working): survive one bad loop pass, counting faults like the heap stat, in both
    CPU B (cloud.py) and CPU A (pilot.py); the owner approved CPU A on 27 September.
    CPU A takes the web restart command, so if it dies only an on-site power cycle
    recovers. Contain the pass, count it, and stop cleanly after a run of
    consecutive faults so the silent-device alert fires. No hardware watchdog and no
-   endless retry (#8).
-4. Not started: daily SNTP resync. cloud.py syncs only until its first success after
-   boot. The clock gains about 1.8 s a day (records, 21-27 Sep), 5-6 minutes by spring.
-5. Not started: move the device endpoints from pilot--well-pump-control.netlify.app to
+   endless retry (#8). Ten faults in a row stop that CPU; CPU A says so on screen and
+   any Tab5 hold stays in force.
+4. Built, not installed (f16e01a): daily SNTP resync, hourly retry keeping sync. cloud.py
+   synced only until its first success after boot. The clock gains about 1.8 s a day
+   (records, 21-27 Sep), 5-6 minutes by spring. Found while building: operator commands
+   are accepted only inside a 45 s wall-clock window, so without a resync a web restart
+   would start being refused as expired within about 2-3 weeks of uptime.
+5. Built, not installed (f4a357f): move the device endpoints from pilot--well-pump-control.netlify.app to
    well-pump-control.netlify.app (main), not the custom domain. Main then serves the
    device as well as the screens and sends the notifications. Pilot becomes a test
    deploy that still writes live data. BETA and DESIGN change in the same push. Keep
    pilot's device functions working until the freeze, as the rollback for the old
    device files. Checked 27 Sep: main's five device endpoints reject an unauthenticated
-   POST with 401 and main reads Firestore and RTDB.
-6. Not started: re-send an unchanged event board every 30 minutes instead of 30 s
+   POST with 401 and main reads Firestore and RTDB; rules-engine-release, the V3
+   package download, also answers 401 on both. BETA and DESIGN updated.
+   DO NOT INSTALL THIS BUILD BEFORE MAIN IS FAST-FORWARDED TO PILOT (step C): until
+   then main lacks af8d8e2 and the other device-facing changes the Tab5 relies on.
+6. Built, not installed (b25bc21): re-send an unchanged event board every 30 minutes instead of 30 s
    (EVENT_BOARD_HEARTBEAT_MS), approved 27 September to save Netlify credits. A change
    in open events is still sent at once, the first board after boot is still sent at
    once, and cloud.py still retries an undelivered board, so boards and notifications

@@ -27,7 +27,13 @@ the ADC and utility selection. pilot.py (CPU A) owns acquisition, calculations,
 events, display and local dispatch. cloud.py (CPU B) owns Wi-Fi recovery, clock
 sync, authenticated cloud transport and bounded RAM mailboxes. WebREPL is LAN
 maintenance. Pressure qualification is a separate startup utility that runs instead
-of both normal workers. Worker crash recovery is not yet supervised automatically.
+of both normal workers. From M6.45 every loop pass of both workers is contained: a
+fault is logged and counted (CpuAFaults, CpuBFaults), and ten in a row stop that worker
+cleanly, so durable records stop and the silent-device alert fires. CPU A then says so
+on screen, and any Tab5 hold stays in force. Recovery is an on-site power cycle; there
+is no watchdog and no automatic restart. CPU B resyncs SNTP every 24 hours (hourly
+retry, keeping the synced state), which steps the clock back about 2 s a day; operator
+commands are accepted only inside a 45 s wall-clock window.
 
 Normal acquisition is scheduled every two seconds. ADS1110 acquisition uses three
 fresh conversions and a median. Shelly EM supplies electrical measurements. Shelly
@@ -116,8 +122,8 @@ Session start, event boundaries and the ten-minute maximum interval also select
 records. Transport is an oldest-first 100-record/384-KiB RAM FIFO with discard
 accounting, not a flash outbox. A reset or long outage can lose records.
 
-CPU A publishes a complete sparse current-event board on changes and approximately
-every 30 seconds. CPU B keeps only the latest board independently of the FIFO.
+CPU A publishes a complete sparse current-event board on changes, at once after boot,
+and otherwise every 30 minutes (every 30 seconds before M6.45). CPU B keeps only the latest board independently of the FIFO.
 Firestore transactions reconcile newer boards into deterministic event-open/close
 records. Silence never closes an event; disappearance/restart closes have unknown
 device close times. A revision guards the RTDB mirror from delayed overwrites.

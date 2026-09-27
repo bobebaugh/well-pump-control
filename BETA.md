@@ -8,8 +8,9 @@
 3. Run the relevant test file. Before a release, run the branch's host suite. Commit
    with a short problem/result description and push the working branch.
 4. When the owner requests a release, promote the exact tested candidate to pilot
-   or Tab5. Main advances only for a screen change, and only by fast-forwarding to a
-   pilot commit. Keep a tag of the previous accepted release. No mandatory PR, duplicate review document,
+   or Tab5. Main advances only by fast-forwarding to a pilot commit; see Production
+   surfaces for what each kind of change needs. Keep a tag of the previous accepted
+   release. No mandatory PR, duplicate review document,
    or new feature branch is needed for an ordinary repair.
 5. Record only the installed version/package and any remaining limitation in CURRENT.
 
@@ -93,37 +94,50 @@ Keep branch deployment restricted to pilot; working branches are source maintena
 
 The notification variables are a separate set: RESEND_API_KEY, NOTIFY_FROM,
 NOTIFY_EMAIL_TO, NOTIFY_SMS_TO, and NOTIFY_DRY_RUN while testing. Set them for the
-context the notifier actually runs in. Because the Tab5 posts to the pilot branch
-deploy, production-only values leave the channel inert while everything else looks
-healthy. Netlify injects variables at deploy time, so a site that is already deployed
-does not see a new variable until it is redeployed - and "Trigger deploy" rebuilds
-production only, so pilot's latest deploy has to be retried separately. Prove the
-channel through the path the device uses, an event opened via event-board on the
-pilot deploy, not through whichever copy answers a manual call.
+context the notifier actually runs in: the deploy the installed Tab5 posts to, pilot
+before M6.45 and main from it. Values set only on the other deploy leave the channel
+inert while everything else looks healthy. Netlify injects variables at deploy time,
+so a site that is already deployed does not see a new variable until it is redeployed -
+and "Trigger deploy" rebuilds production only, so pilot's latest deploy has to be
+retried separately. Prove the channel through the path the device uses, an event
+opened via event-board on that deploy, not through whichever copy answers a manual
+call.
 
-### Two production surfaces
+### Production surfaces
 
-Pilot serves the Tab5; main serves the screens. The Tab5's Netlify endpoints are
-hard-coded to the pilot deploy in `tab5/cloud.py`, so pilot is production for the
-device even though its name suggests otherwise. It talks to RTDB directly using a
-login issued by pilot's device-sync. Both deploys share one Firestore, one RTDB and
-identical settings.
+The Tab5's Netlify endpoints are hard-coded in `tab5/cloud.py`. Until Tab5 M6.45 is
+installed they name the pilot branch deploy (pilot--well-pump-control.netlify.app),
+so pilot is production for the device and main for the screens. M6.45 moves all five
+(ingest-power, ingest-record, event-board, device-sync, and package delivery through
+rules-engine-release) to main's production deploy, well-pump-control.netlify.app, not
+the custom domain. From that install main is production for the device and the
+screens: it issues the device's RTDB login, sends the notifications and runs the
+silent-device alert. Pilot becomes a test deploy that still writes live data.
+
+Install M6.45 only after main is fast-forwarded to pilot, so main carries the
+device-facing functions the device needs, af8d8e2 included. Keep pilot's device
+functions working until the freeze as the rollback for the old device files. Both
+deploys share one Firestore, one RTDB and identical settings.
 
 Main may lag pilot but never lead it. It advances only by fast-forwarding to a pilot
-commit, and only for a screen change. Three categories:
+commit. Three categories:
 
 - **Screen change** - `web/` plus the browser-called functions: current-observation,
   observation-series, record-browser, rules-admin, rules-engine, operator-control,
   health, firebase-status. Goes to pilot, then main follows.
-- **Tab5-only function change** - ingest-power, ingest-record, event-board,
-  device-sync. Pilot only. It must not change anything the screens read or write.
+- **Tab5 function change** - ingest-power, ingest-record, event-board, device-sync.
+  It must not change anything the screens read or write. Before M6.45 it goes to
+  pilot only. From M6.45 the device calls main's copies, so it reaches the device only
+  when main follows pilot; test it on pilot first, remembering pilot writes live data.
 - **Rules-package pipeline** - `rules-engine`, `rules-admin`, the `rules-engine-v3-*`
   libs, `rules-engine-release`, and the pointer and package schemas. Must go to main
   and pilot together, usually with a matching Tab5 change: main compiles and writes
-  the RTDB pointer, pilot re-verifies and serves the package.
+  the RTDB pointer, and the deploy the Tab5 posts to re-verifies and serves the
+  package (pilot before M6.45, main from it).
 
 Cloud-to-Tab5 inputs: rules packages come from both deploys; operator commands from
-main and the installed Tab5 only; the device-sync login from pilot only.
+main and the installed Tab5 only; the device-sync login from the deploy the Tab5 posts
+to.
 `control/globalEnable` has no application writer and RTDB `.write` is false.
 Everything else flows up from the Tab5.
 
@@ -134,12 +148,12 @@ a push.
 
 Settings traps. Pilot branch deploys must stay enabled: do not rename or delete the
 pilot branch, and do not password-protect non-production deploys. The Tab5's function
-logs appear under the pilot branch deploy. A password change must update both deploys
+logs appear under the deploy it posts to. A password change must update both deploys
 and the Tab5.
 
-Changing the public hostname does not automatically update the Tab5's configured
-Netlify endpoint. Keep its proven endpoint until a separate authorized device change
-is useful. Relative function/download paths already support a new browser origin.
+Changing the public hostname does not update the Tab5's configured Netlify endpoint.
+From M6.45 the device uses main's Netlify host rather than the custom domain, so a DNS
+change cannot cut it off. Relative function/download paths already support a new browser origin.
 Verify the public home/records, rejection of missing/wrong passwords, legitimate
 owner access, and absence of exposed credentials. Actual restart tests require the
 owner present; do not reboot a device just to test the domain.
