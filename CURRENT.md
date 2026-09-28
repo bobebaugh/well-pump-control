@@ -116,6 +116,7 @@ when pilot is advanced.
 | 68de8ec | Silent-device alert: scheduled every 15 minutes on production; one message after 30 minutes without a durable record, one when records resume | scheduled function (new) |
 | 1d0ce79 | Home page's events panel judges the board by the live reading's freshness, not the board's age | screen (home) |
 | d31c6c4, 70a96f2 | Records page Show options renamed: All records, All changes, All state changes, All events (d31c6c4's added option removed) | screen (records) |
+| (this commit) | 1-day Tank water line drawn at each 1 gal change at the readings' own times, so a fill shows its rise and peak; week and month unchanged | screen (home) + observation-series |
 
 7573678 is rules-package pipeline, so main and pilot both carry it before a package
 uses the new readings. 968af5f changes nothing visible until Tab5 M6.45 is installed: older records carry no

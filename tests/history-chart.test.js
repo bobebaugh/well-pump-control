@@ -213,3 +213,46 @@ test("the trend views draw runs where they happened, and say when there are none
   const zoomed = chart.svgFor(data, "fill", "1d", 640, [T0 + 4 * HOUR, T0 + 6 * HOUR]);
   assert.equal(zoomed.series.length, 1);
 });
+
+// The day's Tank water line from the reading-time trace.
+
+const MIN = 60000;
+const TRACE = [
+  { timeMs: T0 + 10 * MIN, gallons: 9.7 },
+  { timeMs: T0 + 60 * MIN, gallons: 0.06 },
+  { timeMs: T0 + 61 * MIN, gallons: null },
+  { timeMs: T0 + 100 * MIN, gallons: 7.3 },
+  { timeMs: T0 + 100.5 * MIN, gallons: 14.7 },
+  { timeMs: T0 + 101 * MIN, gallons: 24.2 },
+  { timeMs: T0 + 104 * MIN, gallons: 22.3 }
+];
+
+test("a kept reading holds until the next, and a null ends the segment at its own time", () => {
+  const segments = chart.traceSteps(TRACE, [T0, T0 + DAY]);
+  assert.equal(segments.length, 2);
+  assert.deepEqual(segments[0], [
+    [T0 + 10 * MIN, 9.7], [T0 + 60 * MIN, 9.7], [T0 + 60 * MIN, 0.06], [T0 + 61 * MIN, 0.06]
+  ], "the level holds at 9.7 until the drain, not a slope across the hour");
+  assert.deepEqual(segments[1].at(-1), [T0 + 104 * MIN, 22.3], "the line ends on the latest reading");
+});
+
+test("a zoom starting inside a hold draws the held level from the range's edge", () => {
+  const segments = chart.traceSteps(TRACE, [T0 + 30 * MIN, T0 + 90 * MIN]);
+  assert.deepEqual(segments, [[
+    [T0 + 30 * MIN, 9.7], [T0 + 60 * MIN, 9.7], [T0 + 60 * MIN, 0.06], [T0 + 61 * MIN, 0.06]
+  ]]);
+  const flat = chart.traceSteps(TRACE, [T0 + 20 * MIN, T0 + 40 * MIN]);
+  assert.deepEqual(flat, [[[T0 + 20 * MIN, 9.7], [T0 + 40 * MIN, 9.7]]], "a steady level still draws across the zoom");
+});
+
+test("the day's Tank water line uses the trace, and week and month keep their buckets", () => {
+  const buckets = bucketsOf(288, () => ({ gallons: 5, used: 0, starts: 0 }));
+  const data = { startMs: T0, endMs: T0 + DAY, buckets, levelTrace: TRACE };
+  const day = chart.svgFor(data, "gallons", "1d", 640);
+  assert.equal(day.empty, false);
+  assert.deepEqual(day.series.map(mark => mark.value), [9.7, 0.06, 7.3, 14.7, 24.2, 22.3]);
+  assert.match(day.markup, />24\.2</, "the fill's peak is labelled");
+  assert.equal(chart.svgFor(data, "gallons", "7d", 640).series.length, 288, "the week stays bucketed");
+  assert.match(chart.caption({ totals: {}, levelTrace: [] }, "gallons"), /each 1 gal change/);
+  assert.doesNotMatch(chart.caption({ totals: {} }, "gallons"), /each 1 gal change/);
+});

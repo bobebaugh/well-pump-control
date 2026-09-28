@@ -176,7 +176,11 @@ it; the rules engine owns what one means. The tank shows the device's net flow e
 TankFlowQuality is not VALID or the magnitude is under a provisional noise floor,
 and a dash only when the record carries no flow calculation.
 
-History charts a day, a week or 30 days, zoomed by a two-handle rail. Water used and
+History charts a day, a week or 30 days, zoomed by a two-handle rail. The day's Tank
+water line is drawn at the readings' own times, keeping a reading each time the level
+has moved 1 gal from the last one kept (and the latest), held in steps and broken at
+an unavailable level or a 20-minute silence; the week and month lines and the other
+bucket views show the last reading of each bucket. Water used and
 a run's delivered gallons rest on one delivery estimate in every view: the second
 fastest clean 48-58 psi fill of the trailing week sets the level of the measured
 August pump curve (its slope kept), or that whole curve when the week has fewer than

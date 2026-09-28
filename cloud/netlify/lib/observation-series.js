@@ -34,6 +34,11 @@ const PUMP_RUNNING_WATTS = 500;
 // flat line carried forward from before the silence.
 const LEVEL_CARRY_LIMIT_MS = 20 * 60 * 1000;
 
+// The day's tank trace keeps a reading when the level has moved this far from the
+// last one kept. A 5-minute bucket shows one reading per bucket, which folds a
+// whole 2-3 minute fill into a single point; the trace keeps the fill's rise.
+const LEVEL_TRACE_STEP_GALLONS = 1;
+
 // The pump curve measured on the 2026-08-26 uninterrupted fill:
 // GPM = 28.477 - 0.3001 x psi, RMS residual 0.372 GPM over 81 points.
 //
@@ -628,10 +633,46 @@ function buildSeries(samples, { startMs, endMs, bucketMs, curve = REFERENCE_DELI
   };
 }
 
+// Tank level at its own reading times rather than per bucket: a reading is kept
+// when it is LEVEL_TRACE_STEP_GALLONS or more from the last one kept, and the
+// window's latest reading is always kept. A kept reading holds until the next,
+// so the trace is drawn in steps. { gallons: null } ends the line: at an
+// unavailable reading, or LEVEL_CARRY_LIMIT_MS after the last reading when
+// reporting went silent, the same limit the buckets carry a level to.
+function levelTrace(samples, { startMs, endMs, stepGallons = LEVEL_TRACE_STEP_GALLONS } = {}) {
+  const trace = [];
+  let kept = null;
+  let latest = null;
+  const keep = sample => { kept = sample; trace.push(sample); };
+  // The last reading before a break or the window's end is kept whatever its
+  // step, so the line stops at the level the records last showed.
+  const keepLatest = () => { if (kept && latest && latest !== kept && latest.gallons !== null) keep(latest); };
+  const end = timeMs => {
+    keepLatest();
+    if (trace.length && trace.at(-1).gallons !== null) trace.push({ timeMs, gallons: null });
+    kept = null;
+  };
+  for (const sample of samples || []) {
+    if (!(sample.timeMs >= startMs && sample.timeMs <= endMs)) continue;
+    if (latest && sample.timeMs - latest.timeMs > LEVEL_CARRY_LIMIT_MS) end(latest.timeMs + LEVEL_CARRY_LIMIT_MS);
+    if (sample.gallons === null) {
+      end(sample.timeMs);
+    } else if (kept === null || Math.abs(sample.gallons - kept.gallons) >= stepGallons) {
+      keep(sample);
+    }
+    latest = sample;
+  }
+  keepLatest();
+  return trace.map(point => ({
+    timeMs: point.timeMs,
+    gallons: point.gallons === null ? null : Number(point.gallons.toFixed(2))
+  }));
+}
+
 module.exports = {
-  LEVEL_CARRY_LIMIT_MS, MAX_SERIES_ROWS, PRECHARGE_BELOW_CUT_IN_PSI, PUMP_RUNNING_WATTS,
+  LEVEL_CARRY_LIMIT_MS, LEVEL_TRACE_STEP_GALLONS, MAX_SERIES_ROWS, PRECHARGE_BELOW_CUT_IN_PSI, PUMP_RUNNING_WATTS,
   REFERENCE_DELIVERY, WINDOWS,
   DELIVERY_LOOKBACK_MS, FILL_HIGH_PSI, FILL_LOW_PSI,
-  buildSeries, deliveryFromFills, pumpCycles, pumpDeliveryGpm, quietStretches, recordField, recordTimeMs,
+  buildSeries, deliveryFromFills, levelTrace, pumpCycles, pumpDeliveryGpm, quietStretches, recordField, recordTimeMs,
   samplesFromRecords, switchSummary, tankModelFromDraft, tankWaterGallons
 };

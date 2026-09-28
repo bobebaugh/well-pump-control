@@ -10,7 +10,7 @@
 const { Timestamp } = require("firebase-admin/firestore");
 const { ConfigurationError, getPilotFirestore } = require("../lib/firebase");
 const {
-  DELIVERY_LOOKBACK_MS, MAX_SERIES_ROWS, WINDOWS, buildSeries, deliveryFromFills, pumpCycles,
+  DELIVERY_LOOKBACK_MS, MAX_SERIES_ROWS, WINDOWS, buildSeries, deliveryFromFills, levelTrace, pumpCycles,
   quietStretches, recordTimeMs, samplesFromRecords, tankModelFromDraft
 } = require("../lib/observation-series");
 
@@ -157,6 +157,9 @@ function createHandler(dependencies = {}) {
       // time, and the quiet stretches leak-down is read from.
       cycles: allCycles.filter(cycle => cycle.startMs >= startMs),
       quiet: quietStretches(samples),
+      // The day's Tank water line at the readings' own times, one point per
+      // gallon of change. Week and month stay bucketed.
+      ...(window === "1d" ? { levelTrace: levelTrace(samples, { startMs, endMs }) } : {}),
       // Energy is the rise in the meter's ShellyEnergyWh total; false when no
       // record in the window carried it.
       energyAvailable: inWindow.some(record => record?.fields?.ShellyEnergyWh?.state === "available"),

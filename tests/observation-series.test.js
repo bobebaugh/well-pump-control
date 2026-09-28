@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { Timestamp } = require("firebase-admin/firestore");
 const {
-  LEVEL_CARRY_LIMIT_MS, REFERENCE_DELIVERY, WINDOWS, buildSeries, deliveryFromFills,
+  LEVEL_CARRY_LIMIT_MS, REFERENCE_DELIVERY, WINDOWS, buildSeries, deliveryFromFills, levelTrace,
   pumpCycles, pumpDeliveryGpm, quietStretches, recordField, samplesFromRecords, switchSummary,
   tankModelFromDraft, tankWaterGallons
 } = require("../cloud/netlify/lib/observation-series");
@@ -168,6 +168,53 @@ test("a level is carried into silent buckets, but only as far as reporting vouch
   assert.equal(result.buckets.at(-1).gallons, null);
 });
 
+test("the day trace keeps a fill's rise a gallon at a time, where a bucket keeps one reading", () => {
+  // The 28 September 4:37-4:43 pm refill: 11.65 to 24.87 gal in about a minute
+  // and a half, then settling. All of it falls in one 5-minute bucket.
+  const at = seconds => T0 + seconds * 1000;
+  const samples = [
+    [0, 11.65], [6, 12.78], [10, 13.57], [16, 14.67], [22, 15.76], [28, 16.85], [34, 17.86],
+    [40, 18.92], [46, 20.04], [53, 21.05], [59, 22.12], [65, 23.15], [71, 24.18], [75, 24.87],
+    [77, 24.47], [81, 24.31], [112, 23.29], [249, 22.28]
+  ].map(([seconds, gallons]) => ({ timeMs: at(seconds), gallons }));
+  const trace = levelTrace(samples, { startMs: T0, endMs: at(300) });
+  assert.deepEqual(trace.map(point => point.gallons),
+    [11.65, 12.78, 14.67, 15.76, 16.85, 17.86, 18.92, 20.04, 21.05, 22.12, 23.15, 24.18, 22.28]);
+  assert.ok(trace.every((point, index) => !index || Math.abs(point.gallons - trace[index - 1].gallons) >= 1));
+  assert.equal(trace[4].timeMs, at(28), "a kept reading keeps its own time");
+  const bucketed = buildSeries(samples, { startMs: T0, endMs: at(300), bucketMs: 300000 });
+  assert.equal(bucketed.buckets[0].gallons, 22.28);
+});
+
+test("the day trace ends its line at an unavailable reading and at a reporting silence", () => {
+  const trace = levelTrace([
+    { timeMs: T0, gallons: 9.72 },
+    { timeMs: T0 + 60000, gallons: 9.7 },
+    { timeMs: T0 + 90000, gallons: 0.06 },
+    { timeMs: T0 + 120000, gallons: 0.05 },
+    { timeMs: T0 + 150000, gallons: null },
+    { timeMs: T0 + 600000, gallons: 21 },
+    { timeMs: T0 + 600000 + LEVEL_CARRY_LIMIT_MS + 60000, gallons: 21.5 }
+  ], { startMs: T0, endMs: T0 + 2 * 3600000 });
+  assert.deepEqual(trace, [
+    { timeMs: T0, gallons: 9.72 },
+    { timeMs: T0 + 90000, gallons: 0.06 },
+    // The last reading before the break is kept whatever its step.
+    { timeMs: T0 + 120000, gallons: 0.05 },
+    { timeMs: T0 + 150000, gallons: null },
+    { timeMs: T0 + 600000, gallons: 21 },
+    { timeMs: T0 + 600000 + LEVEL_CARRY_LIMIT_MS, gallons: null },
+    { timeMs: T0 + 600000 + LEVEL_CARRY_LIMIT_MS + 60000, gallons: 21.5 }
+  ]);
+});
+
+test("the day trace always ends on the window's latest reading", () => {
+  const trace = levelTrace([
+    { timeMs: T0, gallons: 21 }, { timeMs: T0 + 60000, gallons: 20.6 }, { timeMs: T0 + 120000, gallons: 20.4 }
+  ], { startMs: T0, endMs: T0 + 3600000 });
+  assert.deepEqual(trace.map(point => point.gallons), [21, 20.4]);
+});
+
 test("an empty window yields empty buckets rather than zeroes on the level", () => {
   const result = series([]);
   assert.equal(result.buckets.length, 10);
@@ -231,6 +278,18 @@ test("the week window is served at its own bucket size", async () => {
   const reply = await call({}, { window: "7d" });
   assert.equal(reply.buckets.length, 168);
   assert.equal(reply.status, "empty");
+  assert.equal(reply.levelTrace, undefined, "only the day carries the reading-time trace");
+});
+
+test("the day carries the tank trace at the readings' own times", async () => {
+  const reply = await call({ records: [
+    v2(T0 - 120000, { TankWaterGallons: 12, PumpWatts: 2900 }),
+    v2(T0 - 114000, { TankWaterGallons: 13.2, PumpWatts: 2900 }),
+    v2(T0 - 110000, { TankWaterGallons: 13.5, PumpWatts: 2900 })
+  ] });
+  assert.deepEqual(reply.levelTrace, [
+    { timeMs: T0 - 120000, gallons: 12 }, { timeMs: T0 - 114000, gallons: 13.2 }, { timeMs: T0 - 110000, gallons: 13.5 }
+  ]);
 });
 
 test("an unknown window is rejected rather than silently served as a day", async () => {

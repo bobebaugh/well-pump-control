@@ -155,6 +155,34 @@ const HistoryChart = (function () {
   }
 
 
+  // The day's tank trace as steps, cut to the zoomed range: each kept reading
+  // holds until the next one, and { gallons: null } ends a segment at its time.
+  // Returns segments of [timeMs, gallons] corners. A level held from before the
+  // range starts the first segment at the range's edge.
+  function traceSteps(trace, [fromMs, toMs]) {
+    const segments = [];
+    let current = [];
+    let before = null;
+    const close = atMs => {
+      if (current.length) {
+        current.push([Math.min(atMs, toMs), current.at(-1)[1]]);
+        segments.push(current);
+      }
+      current = [];
+    };
+    for (const point of trace || []) {
+      if (point.timeMs <= fromMs) { before = point.gallons === null ? null : point; continue; }
+      if (!current.length && before) current.push([fromMs, before.gallons]);
+      before = null;
+      if (point.timeMs >= toMs) { close(toMs); return segments; }
+      if (point.gallons === null) { close(point.timeMs); continue; }
+      if (current.length) current.push([point.timeMs, current.at(-1)[1]]);
+      current.push([point.timeMs, point.gallons]);
+    }
+    if (current.length) segments.push(current);
+    return segments;
+  }
+
   // The zoom rail's two handles: each stays inside the window and at least the
   // minimum span from the other.
   function clampZoom(handle, timeMs, [fromMs, toMs], [startMs, endMs], minSpanMs) {
@@ -238,7 +266,8 @@ const HistoryChart = (function () {
   }
 
   return { DAY_MS, GROUPING, HEIGHT, HOUR_MS, PAD, VIEWS, ZOOM_MIN_MS, areaPath, axis, barPath, bars, clampZoom,
-           dailyBest, dailyLeak, groupBuckets, joinDaily, linePath, localDay, niceCeiling, niceStep, plot, timeTicks };
+           dailyBest, dailyLeak, groupBuckets, joinDaily, linePath, localDay, niceCeiling, niceStep, plot, timeTicks,
+           traceSteps };
 })();
 
 if (typeof module === "object" && module.exports) module.exports = HistoryChart;
@@ -250,7 +279,7 @@ if (typeof module === "object" && module.exports) module.exports = HistoryChart;
 
 Object.assign(HistoryChart, (function () {
   const { GROUPING, HEIGHT, PAD, VIEWS, areaPath, axis, barPath, bars, dailyBest, dailyLeak, groupBuckets,
-          joinDaily, linePath, plot, timeTicks } = HistoryChart;
+          joinDaily, linePath, plot, timeTicks, traceSteps } = HistoryChart;
 
   function escape(value) {
     return String(value ?? "").replace(/[&<>"]/g, character =>
@@ -333,6 +362,53 @@ Object.assign(HistoryChart, (function () {
     return { parts, marks, area, empty: series.every(point => !point.value) };
   }
 
+  // The day's Tank water line from the reading-time trace, placed by time rather
+  // than by bucket index, so a fill shows its rise where it happened.
+  function traceSvg(data, view, width, range) {
+    const spec = VIEWS[view];
+    const [fromMs, toMs] = range;
+    const area = plot(width);
+    const segments = traceSteps(data.levelTrace, range);
+    const corners = segments.flat().map(([timeMs, value]) => ({ timeMs, value }));
+    const scale = axis(corners);
+    const x = ms => area.x + ((ms - fromMs) / Math.max(1, toMs - fromMs)) * area.width;
+    const level = value => area.y + area.height - ((value - scale.min) / (scale.max - scale.min)) * area.height;
+    const parts = [];
+
+    for (const tick of scale.ticks) {
+      const y = level(tick).toFixed(1);
+      parts.push(`<line class="hc-grid" x1="${area.x}" y1="${y}" x2="${area.x + area.width}" y2="${y}"/>`);
+      parts.push(`<text class="hc-axis" x="${area.x - 8}" y="${y}" dy="0.32em" text-anchor="end">${
+        Number(tick.toFixed(Math.max(1, spec.decimals)))}</text>`);
+    }
+
+    const paths = segments.map(segment => segment
+      .map(([timeMs, value], index) => `${index ? "L" : "M"}${x(timeMs).toFixed(1)} ${level(value).toFixed(1)}`).join(" "));
+    for (const path of areaPath(paths, area)) parts.push(`<path class="hc-area hc-${view}" d="${path}"/>`);
+    for (const path of paths) parts.push(`<path class="hc-line hc-${view}" d="${path}"/>`);
+
+    // The kept readings are the hover marks; the step corners only draw the hold.
+    const marks = (data.levelTrace || [])
+      .filter(point => point.gallons !== null && point.timeMs > fromMs && point.timeMs < toMs)
+      .map(point => ({ startMs: point.timeMs, value: point.gallons, x: x(point.timeMs) }));
+    if (segments.length && segments[0][0][0] === fromMs) {
+      marks.unshift({ startMs: fromMs, value: segments[0][0][1], x: x(fromMs) });
+    }
+
+    const peak = marks.reduce((best, mark) => (!best || mark.value > best.value ? mark : best), null);
+    if (peak && peak.value > 0) {
+      const y = level(peak.value);
+      const labelY = y - 9 >= PAD.top + 8 ? y - 9 : y + 14;
+      parts.push(`<text class="hc-peak" x="${Math.min(area.x + area.width - 14, Math.max(area.x + 14, peak.x)).toFixed(1)}" y="${
+        labelY.toFixed(1)}" text-anchor="middle">${peak.value.toFixed(spec.decimals)}</text>`);
+    }
+
+    for (const tick of timeTicks(fromMs, toMs)) {
+      parts.push(`<text class="hc-axis" x="${x(tick.ms).toFixed(1)}" y="${HEIGHT - 8}" text-anchor="middle">${escape(tick.text)}</text>`);
+    }
+    return { parts, marks, area, empty: !corners.some(corner => corner.value) };
+  }
+
   // What each trend view plots: lanes stacked in one chart, each on its own
   // zoomed axis, with dots per run (or per day) and an optional daily line.
   function lanesFor(data, view) {
@@ -400,7 +476,9 @@ Object.assign(HistoryChart, (function () {
 
   function svgFor(data, view, windowKey, width, range = fullRange(data)) {
     const spec = VIEWS[view];
-    const drawn = spec.mark === "scatter" ? scatterSvg(data, view, width, range) : bucketSvg(data, view, windowKey, width, range);
+    const drawn = spec.mark === "scatter" ? scatterSvg(data, view, width, range)
+      : view === "gallons" && windowKey === "1d" && Array.isArray(data.levelTrace) ? traceSvg(data, view, width, range)
+      : bucketSvg(data, view, windowKey, width, range);
     const { area } = drawn;
     drawn.parts.push(`<line class="hc-cross" x1="0" y1="${area.y}" x2="0" y2="${area.y + area.height}" style="display:none"/>`);
     drawn.parts.push(`<rect class="hc-hit" x="${area.x}" y="${area.y}" width="${area.width}" height="${area.height}" fill="transparent"/>`);
@@ -567,6 +645,7 @@ Object.assign(HistoryChart, (function () {
       parts.push(observed?.cycles
         ? `Usable range measured at ${observed.cutInPsi}–${observed.settledPsi} psi over ${observed.cycles} cycle${observed.cycles === 1 ? "" : "s"}`
         : "Usable range not yet observed");
+      if (Array.isArray(data.levelTrace)) parts.push("drawn at each 1 gal change");
     } else if (view === "used") {
       parts.push(`${totals.usedGallons ?? 0} gal estimated`);
       // Never presented as a meter reading: there is no flow meter on either leg.
