@@ -115,6 +115,7 @@ when pilot is advanced.
 | 7573678 | Rules catalog offers Tab5 M6.45 heap and loop-fault readings; the editor suggests each driver's objects and fills their contract; simulator values and injections | rules-package pipeline + editor screen |
 | 68de8ec | Silent-device alert: scheduled every 15 minutes on production; one message after 30 minutes without a durable record, one when records resume | scheduled function (new) |
 | 1d0ce79 | Home page's events panel judges the board by the live reading's freshness, not the board's age | screen (home) |
+| d31c6c4 | Records page Show filter gains "Changes, deltas & events" | screen (records) |
 
 7573678 is rules-package pipeline, so main and pilot both carry it before a package
 uses the new readings. 968af5f changes nothing visible until Tab5 M6.45 is installed: older records carry no
@@ -145,9 +146,8 @@ Device work, one install from tab5-working:
    in alone. A week of causes would decide whether to raise RTDB_TIMEOUT_S from 1 to 2 s,
    but that would cost a second install, and a flag that recovers in 3-9 s is not a
    freeze risk.
-2. Built, not installed: heap stat (device 95e5545 on tab5-working; editor 7573678). Declare
-   it on a separate Tab5 device; see DESIGN, since device records are atomic. Checked
-   read-only 27 Sep: the saved draft plus a "Tab5 health" device validates and compiles,
+2. Built, not installed: heap stat (device 95e5545 on tab5-working; editor 7573678). Checked
+   read-only 27 Sep: the saved draft with the new readings added validates and compiles,
    and M6.45 accepts the result and the live v46. Spec: Free heap after gc.collect() about every 10 minutes, plus the
    lowest free seen, as new tab5-runtime bindings. pilot.py already measures both for
    its screen. The bindings need an entry in rules-engine-defaults.js and simulator
@@ -197,12 +197,21 @@ Cloud work on pilot-working:
    board's age. While the reading is fresh the board is current, since changes are sent
    at once; when it is stale, say the open events are as of the Tab5's last report.
    Today it calls a board stale after 120 s, which a 30-minute re-send would trip.
+10. Built, not installed (0c385f7 on tab5-working): the Tab5's own readings are accepted
+   one at a time. tab5-main was all-or-nothing, so a cloud flag with no value yet (a boot
+   with the internet down never gets one) or a battery with no reading threw out
+   pressure and every pressure rule. A missing reading is now left out and reads as
+   unknown; Shelly devices stay all-or-nothing, and pressure still needs its guards.
+   Tested on the published v46: a boot with no network and no battery has pressure from
+   the first cycle and opens W07 on the second.
+11. Built (d31c6c4): the records page's Show filter gains "Changes, deltas & events"
+   beside "Changes & events only", which is unchanged.
 
 Sequence. Pilot is a branch deploy and costs no Netlify credits; each main production
 deploy costs 15, so main moves once.
 
 - A. Owner: CPU A containment approved 27 September (item 3).
-- B. Build items 2-9 on the working branches.
+- B. Build items 2-11 on the working branches.
 - C. Promote pilot-working to pilot, then fast-forward main to pilot: the single main
   deploy. Main (69601cc) is 27 commits behind pilot, including the device-facing
   event-board and notifier change af8d8e2 and the dashboard changes f0acaa4-46d19ca.
@@ -232,11 +241,7 @@ Owner tasks, no code:
   contactor on with idle watts for 5 s or more means Hand or centre 0, or a contactor,
   box or motor fault. Detection rules have given trouble, so run it in the simulator
   before publishing.
-- Battery: first move BatteryPercent off the tab5-main device, where PressureADCCounts
-  lives, onto the separate Tab5 health device (item 2). Device records are atomic: if
-  the Tab5 reads no battery, a BatteryPercent on tab5-main makes pressure unavailable
-  every cycle, and with it every pressure rule. What M5.Power reports with no battery is
-  unknown. M5Stack says a battery below 6 V enters protection mode, which needs manual
+- Battery: M5Stack says a battery below 6 V enters protection mode, which needs manual
   recovery. Proposal: remove it for the freeze, after confirming in step E that the Tab5
   restarts unattended with the battery out (cut power 10 s, restore). No rule uses the
   battery.

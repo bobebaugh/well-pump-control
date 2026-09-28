@@ -53,8 +53,7 @@ const DRIVER_BINDINGS = {
     "values.battery_percent": { type: "number", unit: "%", access: "read" },
     "status.buffer_used_pct": { type: "number", unit: "%", access: "read" },
     "status.records_lost": { type: "integer", unit: "count", access: "read" },
-    // Long-run health from Tab5 M6.45. A tab5-runtime device record is accepted
-    // atomically, so declare these (and battery) on their own Tab5 device.
+    // Long-run health from Tab5 M6.45.
     "status.heap_free_after_gc_bytes": { type: "integer", unit: "B", access: "read" },
     "status.heap_lowest_free_bytes": { type: "integer", unit: "B", access: "read" },
     "status.cpu_a_faults": { type: "integer", unit: "count", access: "read" },
