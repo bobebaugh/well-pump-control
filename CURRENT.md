@@ -73,9 +73,9 @@ resync, endpoints moved to main, and an unchanged event board re-sent every 30 m
 instead of 30 s. They ride one install with M6.44's change, both files stamped M6.45.
 Built: heap stat (95e5545), loop-fault containment (2b273d8), daily SNTP resync
 (f16e01a), main endpoints (f4a357f), 30-minute board re-send (b25bc21). Do not install
-this build before main is fast-forwarded to pilot: from M6.45 the device posts to main. Declare it, and BatteryPercent, on a separate Tab5
-device: records are atomic per device, so a missing battery reading on tab5-main would
-make pressure unavailable (DESIGN).
+this build before main is fast-forwarded to pilot: from M6.45 the device posts to main.
+The Tab5's own readings are now accepted one at a time (0c385f7), so a boot with no
+battery and no cloud keeps pressure and every pressure rule from the first cycle.
 
 ## On tab5-working, not yet on Tab5
 
@@ -89,6 +89,7 @@ Keep this list current on every tab5-working change; clear it when Tab5 advances
 | f16e01a | M6.45: SNTP resync every 24 h; a failed resync keeps sync and retries hourly | cloud.py |
 | f4a357f | M6.45: all five device endpoints move to main's production deploy | cloud.py |
 | b25bc21 | M6.45: unchanged event board re-sent every 30 minutes instead of 30 s | pilot.py |
+| 0c385f7 | M6.45: tab5-runtime readings accepted one at a time; Shelly devices stay all-or-nothing | pilot.py |
 | ca0595b | Cloud-session start hook | session support |
 | 08415b4, 9ae039e, 348aaad, ccbcd5d | Mirrored shared docs, Firestore peek, M6.44 and pre-freeze notes | docs |
 
