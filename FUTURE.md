@@ -112,8 +112,9 @@ Source: the owner's well-head flow test (details kept outside the repo). Softwar
 - **Logging for tests:** PressurePSI rides along only; below the precharge (tank empty)
   pressure changes write no records. A temporary 0.5 psi delta is a package change + restart.
 - **Rules:** P013's name says six minutes but opens at 3,600 s; W09 is at a 3,600 W test
-  setting (intended 2,600 W); E007 (266 V at the EM) is above the motor's 253 V terminal
-  limit, and the EM reads 6-8 V above the motor under load; define pump load against the
+  setting (intended 2,600 W); E007 stays at 266 V at the EM by the owner's decision (28
+  Sep): the supply reaches 253 V almost daily and the motor sees 6-8 V less under load;
+  define pump load against the
   13.2 A service-factor amps. Owner decisions in the rules editor.
 - **Hand mode reading:** in Hand the contactor signal reads on without the pump running;
   watts is the running indicator. The screens should not label Hand-idle as running.
