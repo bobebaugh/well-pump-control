@@ -249,7 +249,9 @@ Owner tasks, no code:
   a battery-out run waits until the package has moved BatteryPercent (see Battery), or
   pressure and its rules go blank. Repeat briefly in step E if the visit allows. On 27
   Sep at 18:45 EDT the owner unplugged the Tab5 with the battery in, to see how long it
-  runs and whether it restarts alone when power returns after running flat.
+  runs and whether it restarts alone when power returns after running flat. It ran on
+  the battery until 02:40 on 28 Sep, about 8 hours, and shut itself off cleanly, well
+  above the battery's protection threshold (owner's report).
 - Caretaker card. No water: power-cycle the Tab5. Still none: selector to Hand. The Tab5
   hold has no time limit, so a Tab5 that stops while holding keeps holding (#4).
 - Network, the owner's largest freeze risk: the UniFi system as a whole, not its DHCP.
