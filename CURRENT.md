@@ -115,7 +115,7 @@ when pilot is advanced.
 | 7573678 | Rules catalog offers Tab5 M6.45 heap and loop-fault readings; the editor suggests each driver's objects and fills their contract; simulator values and injections | rules-package pipeline + editor screen |
 | 68de8ec | Silent-device alert: scheduled every 15 minutes on production; one message after 30 minutes without a durable record, one when records resume | scheduled function (new) |
 | 1d0ce79 | Home page's events panel judges the board by the live reading's freshness, not the board's age | screen (home) |
-| d31c6c4 | Records page Show filter gains "Changes, deltas & events" | screen (records) |
+| d31c6c4, 70a96f2 | Records page Show options renamed: All records, All changes, All state changes, All events (d31c6c4's added option removed) | screen (records) |
 
 7573678 is rules-package pipeline, so main and pilot both carry it before a package
 uses the new readings. 968af5f changes nothing visible until Tab5 M6.45 is installed: older records carry no
@@ -204,8 +204,11 @@ Cloud work on pilot-working:
    unknown; Shelly devices stay all-or-nothing, and pressure still needs its guards.
    Tested on the published v46: a boot with no network and no battery has pressure from
    the first cycle and opens W07 on the second.
-11. Built (d31c6c4): the records page's Show filter gains "Changes, deltas & events"
-   beside "Changes & events only", which is unchanged.
+11. Built (70a96f2): the records page's Show options are named for what they show: All
+   records, All changes (value steps, state flips, events, restarts; was "Hide health
+   records"), All state changes (no value steps; was "Changes & events only") and All
+   events. The "Changes, deltas & events" option added in d31c6c4 duplicated All
+   changes and is removed. Ids are unchanged, so saved choices and exports still work.
 12. Built, not installed (0e40cfc on tab5-working): battery charging stops at 90%, not
    80%. The voltage-based level reads 5-6 points high while charging, wider than the
    75/80 band, so charging toggled on and off and each toggle wrote a BatteryPercent
