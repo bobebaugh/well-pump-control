@@ -88,6 +88,12 @@ clear it when main is fast-forwarded to pilot. Docs-only commits change no behav
 | e478c6c | SW0/RLY0 tiles and the Shelly 1 health row also show unknown on a stale record or a failed read; the row no longer shows a missing value as OFF | screen (home) |
 | 5e497ca | Owner controls moved below the events, at the bottom of the home page | screen (home) |
 | 46d19ca | History on its own full-width row with a two-handle zoom rail and a 30-day range; Pump load replaced by Fill time (48-58 psi), Switch (cut-in/cut-out per run) and Leak-down views; water used and a run's delivered gallons use one delivery estimate from the trailing week's clean fills, so day and week agree | screen (home) + observation-series |
+| 968af5f | Records page row detail shows the cause a Tab5 M6.44 record carries when CloudAvailable goes false; durable-observation-v2 documents the optional cause | screen (records) + interface doc |
+| 7573678 | Rules catalog offers Tab5 M6.45 heap and loop-fault readings; the editor suggests each driver's objects and fills their contract; simulator values and injections | rules-package pipeline + editor screen |
+| 68de8ec | Silent-device alert: scheduled every 15 minutes on production; one message after 30 minutes without a durable record, one when records resume | scheduled function (new) |
+| 1d0ce79 | Home page's events panel judges the board by the live reading's freshness, not the board's age | screen (home) |
+| d31c6c4, 70a96f2 | Records page Show options renamed: All records, All changes, All state changes, All events (d31c6c4's added option removed) | screen (records) |
+| ca2079b | 1-day Tank water line drawn at each 1 gal change at the readings' own times, so a fill shows its rise and peak; week and month unchanged | screen (home) + observation-series |
 
 5923abf was promoted to pilot on 25 September for the owner to test before main; pilot
 was 53c0028 before it. d8d65e4 followed on the owner's direction (pilot was da860d2), then f0baf41-0902a8f
@@ -101,28 +107,20 @@ code fed the owner's 18-27 September export. 46d19ca makes the day view read the
 week (about 2,600 records) so its delivery matches the week's; 30 days reads about 11,000
 and is re-read at most every 30 minutes. Main should follow in the owner's next grouped main deploy.
 
+968af5f-ca2079b followed on the owner's direction on 28 September (pilot was 8ef1032),
+fast-forwarded with the pre-freeze docs. Web tests: 415 pass. None of the functions the
+Tab5 posts to changed. The silent-device alert is scheduled only on production, so it
+stays idle until main follows. 7573678 is rules-package pipeline: until main follows,
+author packages that use the new Tab5 readings on the pilot deploy, and publish them only
+after M6.45 is installed; an older device rejects them and keeps its staged package.
+
 Main's rules editor still accepts non-ASCII display names and still says notification
 settings are authoring only; publish rules from the pilot deploy until main follows.
 
 ## On pilot-working, not yet on pilot
 
 Keep this list current on every pilot-working change and move rows to the table above
-when pilot is advanced.
-
-| pilot-working commit | Change | Kind |
-|---|---|---|
-| 968af5f | Records page row detail shows the cause a Tab5 M6.44 record carries when CloudAvailable goes false; durable-observation-v2 documents the optional cause | screen (records) + interface doc |
-| 7573678 | Rules catalog offers Tab5 M6.45 heap and loop-fault readings; the editor suggests each driver's objects and fills their contract; simulator values and injections | rules-package pipeline + editor screen |
-| 68de8ec | Silent-device alert: scheduled every 15 minutes on production; one message after 30 minutes without a durable record, one when records resume | scheduled function (new) |
-| 1d0ce79 | Home page's events panel judges the board by the live reading's freshness, not the board's age | screen (home) |
-| d31c6c4, 70a96f2 | Records page Show options renamed: All records, All changes, All state changes, All events (d31c6c4's added option removed) | screen (records) |
-| ca2079b | 1-day Tank water line drawn at each 1 gal change at the readings' own times, so a fill shows its rise and peak; week and month unchanged | screen (home) + observation-series |
-
-7573678 is rules-package pipeline, so main and pilot both carry it before a package
-uses the new readings. 968af5f changes nothing visible until Tab5 M6.45 is installed: older records carry no
-cause and read as before. Ingest already accepted extra reason keys.
-Docs-only commits also waiting: c04e069, 800b56f, 7a86605 and the approved pre-freeze
-plan that follows them.
+when pilot is advanced. Empty: pilot was fast-forwarded to pilot-working on 28 September.
 
 ## Maintenance baseline
 
@@ -241,9 +239,13 @@ deploy costs 15, so main moves once.
 
 Owner tasks, no code:
 
-- 28 Sep, with the next bucket test: connect the Shelly 1 relay into the 0 V leg. The
-  technical record says it was disconnected for testing, so until then a Tab5 hold has
-  no physical effect. Then confirm that a Tab5 hold stops a demand in Auto.
+- Done 28 Sep (owner's report): Shelly 1 relay connected. With it in circuit the Tab5
+  cut a pump run for running too long at 40 minutes, the first physical proof that a
+  Tab5 hold stops the pump in Auto. Bucket fill 21 s (recorded in the technical record).
+  The old timer relay's maximum run was 6 minutes and is now somewhere between 40 and
+  60 minutes, not measured: the owner made the Tab5's 40-minute limit the primary
+  long-run protection while at home, and will lower the timer before leaving for the
+  winter, when flush cycles are off. Until then the timer is a backup above the Tab5.
 - Before step E, review the rules package. Reverse the test setting still in it (W09 at
   3,600 W, intended 2,600 W). Settle P013's name against its 3,600 s condition, and E007
   at 266 V against the motor's 253 V terminal limit. Add or check Hand-mode detection:
