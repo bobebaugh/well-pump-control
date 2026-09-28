@@ -124,7 +124,12 @@ Source: the owner's well-head flow test (details kept outside the repo). Softwar
   telling Hand from a contactor, box or motor fault by pressure staying in band and the
   condition outliving the timer's maximum run (technical record, Appendix B section 7).
   The owner kept the simple event for the freeze; not a protection gap, since Hand is
-  unprotected by definition.
+  unprotected by definition. The root cause is where the contactor is sensed: after the
+  Shelly, so it reports what the coil actually sees. The true demand signal is the +24 V
+  side of the coil, and in Auto there is no ground to switch until +24 V is already
+  there. Sensing it (see the demand-leg idea under parked ideas) would replace these
+  rules; the owner has a possible design with another relay or two and the control box
+  rewired.
 - **Shelly EM vs clamp:** the EM-derived current read about 6 % above a clamp meter at the
   Franklin box; both within rating. Note before treating EM watts as motor input.
 - **Idle watts step, unexplained:** idle watts include the wellhead network gear (on its own
@@ -182,7 +187,8 @@ default reduce how often the password is typed.
   cleanup after checking consumers. They are not the current device platform.
 - A sense point on the +24 VDC demand leg would make the start delay, a latched timer
   and Hand mode directly observable (technical record, Appendix B section 7). New
-  hardware; not a freeze item.
+  hardware (another relay or two and control-box rewiring, owner's outline, 28 Sep);
+  not a freeze item.
 - File-wide formatting, architecture rewrites, additional hardware/control authority,
   new accounts/MFA and workflow complexity are not beta prerequisites.
 
