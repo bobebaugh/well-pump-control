@@ -244,8 +244,13 @@ PI4IOE1_EXT_5V_ENABLE_BIT = 0x04
 # with USB unplugged the pack still discharges under system load regardless of
 # charge_enable's state. That's expected, not a leak: charge_enable only ever answers
 # "is the charger allowed to push current in", never "is anything pulling current out".
+# The level is estimated from voltage and reads 5-6 points high while charging, so
+# the gap must be wider than that or charging toggles on and off. At 75/80 it did
+# (28 Sep): on at 75, read 82 at once, off within a minute, drift back, repeat. With
+# 90 the pack settles near 84-85 and, on USB, barely moves: the charger carries the
+# system load, so a top-up is rare. M6.45.
 BATTERY_LOW_PCT = 75     # charging turns back on at or below this level
-BATTERY_HIGH_PCT = 80    # charging turns off at or above this level
+BATTERY_HIGH_PCT = 90    # charging turns off at or above this level
 BATTERY_DIAGNOSTIC_PERIOD_MS = 1000
 BATTERY_POLICY_PERIOD_MS = 60000
 

@@ -86,7 +86,7 @@ class Tab5DiagnosticsTests(unittest.TestCase):
 
         self.logic["set_charge_enable"] = fail
         policy = self.logic["battery_charge_policy"]
-        self.assertEqual(policy(81, True), (None, False, False))
+        self.assertEqual(policy(91, True), (None, False, False))
         self.assertEqual(policy(78, None, False), (None, False, False))
         self.assertEqual(calls, [False, False])
 
@@ -104,15 +104,24 @@ class Tab5DiagnosticsTests(unittest.TestCase):
         self.assertEqual(self.logic["read_battery"](),
                          (None, None, None, None))
 
-    def test_thresholds_retain_75_80_hysteresis(self):
+    def test_thresholds_are_75_90_hysteresis(self):
         calls = []
         self.logic["set_charge_enable"] = lambda target: calls.append(target) or True
         policy = self.logic["battery_charge_policy"]
         self.assertEqual(policy(76, False), (False, None, None))
         self.assertEqual(policy(75, False), (True, None, True))
-        self.assertEqual(policy(79, True), (True, None, None))
-        self.assertEqual(policy(80, True), (False, None, False))
+        self.assertEqual(policy(89, True), (True, None, None))
+        self.assertEqual(policy(90, True), (False, None, False))
         self.assertEqual(calls, [True, False])
+
+    def test_band_is_wider_than_the_charging_reading_offset(self):
+        # M6.45: the voltage-based level reads 5-6 points high while charging. A
+        # band no wider than that toggles charging (75/80 did, 28 Sep).
+        self.assertGreaterEqual(
+            self.logic["BATTERY_HIGH_PCT"] - self.logic["BATTERY_LOW_PCT"], 10)
+        # The 82 read while charging at 75/80 no longer ends the charge.
+        self.logic["set_charge_enable"] = lambda target: True
+        self.assertEqual(self.logic["battery_charge_policy"](82, True), (True, None, None))
 
     def test_read_failure_hides_stale_measurements_and_reports_last_good_age(self):
         observation = {
