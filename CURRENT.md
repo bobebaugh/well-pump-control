@@ -138,6 +138,27 @@ cannot. The owner reviewed and approved this plan on 27 September. The longest T
 session on record is 1.85 days, so nothing that only appears after weeks of uptime has
 been seen yet. Mark an item done only with a commit, a check or the owner's report.
 
+Special unit: the M6.45 rules package. This is the one package change the freeze
+depends on. The owner prepares it with a session, sharing screenshots, and saves it
+without publishing. It is published right after the Tab5 starts M6.45.
+
+- Prepare in the pilot deploy's rules editor, which offers the new readings; main's
+  does not until step C. Add to tab5-main: heap free after collection, lowest heap
+  free, CPU A faults and CPU B faults, logging "always" so they ride the health
+  record. Per-reading acceptance (0c385f7) means no separate health device is needed.
+- In the same draft, the rules review: W09 back to 2,600 W if it is still at its
+  3,600 W test setting; P013's name against its condition (now the 40-minute limit);
+  E007 at 266 V against the motor's 253 V terminal limit; Hand-mode detection
+  (contactor on with idle watts for 5 s or more: Hand or centre 0, or a contactor, box
+  or motor fault). Run the detection and the heap-low and loop-fault injections in the
+  simulator.
+- Save only. The saved draft is shared by both deploys: publish nothing else until
+  M6.45 is installed, since any publish would carry these readings and today's Tab5
+  would reject it and keep v49.
+- After M6.45 starts: Validate, Publish, restart the Tab5 from the web. Confirm the
+  home page shows the new release running and the next health record carries the
+  heap values.
+
 Device work, one install from tab5-working:
 
 1. Done, not installed: M6.44 records why CloudAvailable went false (06d0598, f89ec9b).
@@ -249,12 +270,7 @@ Owner tasks, no code:
   Running package since 28 Sep: v49 (release 20260928175025-event-v3-v49), read from
   the event board at 22:59 UTC, no open events. The M6.45 package checks used v46;
   repeat them read-only against v49 before the install.
-- Before step E, review the rules package. Reverse the test setting still in it (W09 at
-  3,600 W, intended 2,600 W). Settle P013's name against its 3,600 s condition, and E007
-  at 266 V against the motor's 253 V terminal limit. Add or check Hand-mode detection:
-  contactor on with idle watts for 5 s or more means Hand or centre 0, or a contactor,
-  box or motor fault. Detection rules have given trouble, so run it in the simulator
-  before publishing.
+- Rules package review: now part of the special unit at the top of this section.
 - Battery: M5Stack says a battery below 6 V enters protection mode, which needs manual
   recovery. Proposal: remove it for the freeze, after confirming in step E that the Tab5
   restarts unattended with the battery out (cut power 10 s, restore). No rule uses the
