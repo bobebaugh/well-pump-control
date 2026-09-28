@@ -246,6 +246,9 @@ Owner tasks, no code:
   60 minutes, not measured: the owner made the Tab5's 40-minute limit the primary
   long-run protection while at home, and will lower the timer before leaving for the
   winter, when flush cycles are off. Until then the timer is a backup above the Tab5.
+  Running package since 28 Sep: v49 (release 20260928175025-event-v3-v49), read from
+  the event board at 22:59 UTC, no open events. The M6.45 package checks used v46;
+  repeat them read-only against v49 before the install.
 - Before step E, review the rules package. Reverse the test setting still in it (W09 at
   3,600 W, intended 2,600 W). Settle P013's name against its 3,600 s condition, and E007
   at 266 V against the motor's 253 V terminal limit. Add or check Hand-mode detection:
