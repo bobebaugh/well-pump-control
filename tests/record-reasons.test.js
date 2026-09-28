@@ -52,3 +52,17 @@ test("the Show filter keeps what each choice names", () => {
   assert.equal(reasons.matches([cloudLost], "events"), false);
   assert.equal(reasons.matches([health], "all"), true);
 });
+
+test("Changes, deltas & events adds delta records and still leaves out health", () => {
+  const battery = { kind: "delta", field: "BatteryPercent", from: 60, to: 65, threshold: 5 };
+  for (const delta of [battery, tank, watts]) {
+    assert.equal(reasons.matches([delta], "changes-deltas"), true);
+    assert.equal(reasons.matches([delta], "changes"), false, "the existing option is unchanged");
+  }
+  assert.equal(reasons.matches([cloudLost], "changes-deltas"), true);
+  assert.equal(reasons.matches([pumpOpen], "changes-deltas"), true);
+  assert.equal(reasons.matches([health], "changes-deltas"), false);
+  assert.equal(reasons.matches([{ kind: "session-start" }], "changes-deltas"), false);
+  assert.deepEqual(reasons.filters.map(([id]) => id), ["all", "hide-health", "changes", "changes-deltas", "events"]);
+  assert.equal(reasons.filters.find(([id]) => id === "changes-deltas")[1], "Changes, deltas & events");
+});

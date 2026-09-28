@@ -65,12 +65,14 @@
     ["all", "All records"],
     ["hide-health", "Hide health records"],
     ["changes", "Changes & events only"],
+    ["changes-deltas", "Changes, deltas & events"],
     ["events", "Events only"]
   ];
   function matches(reasons, filter) {
     const kinds = (reasons || []).map(reason => reason?.kind);
     if (filter === "hide-health") return kinds.some(kind => kind !== "maximum-interval");
     if (filter === "changes") return kinds.some(kind => kind === "change" || kind === "event-boundary");
+    if (filter === "changes-deltas") return kinds.some(kind => kind === "change" || kind === "delta" || kind === "event-boundary");
     if (filter === "events") return kinds.includes("event-boundary");
     return true;
   }
