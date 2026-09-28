@@ -53,16 +53,17 @@ test("the Show filter keeps what each choice names", () => {
   assert.equal(reasons.matches([health], "all"), true);
 });
 
-test("Changes, deltas & events adds delta records and still leaves out health", () => {
+test("the Show options say what they show: all changes, all state changes, all events", () => {
   const battery = { kind: "delta", field: "BatteryPercent", from: 60, to: 65, threshold: 5 };
-  for (const delta of [battery, tank, watts]) {
-    assert.equal(reasons.matches([delta], "changes-deltas"), true);
-    assert.equal(reasons.matches([delta], "changes"), false, "the existing option is unchanged");
-  }
-  assert.equal(reasons.matches([cloudLost], "changes-deltas"), true);
-  assert.equal(reasons.matches([pumpOpen], "changes-deltas"), true);
-  assert.equal(reasons.matches([health], "changes-deltas"), false);
-  assert.equal(reasons.matches([{ kind: "session-start" }], "changes-deltas"), false);
-  assert.deepEqual(reasons.filters.map(([id]) => id), ["all", "hide-health", "changes", "changes-deltas", "events"]);
-  assert.equal(reasons.filters.find(([id]) => id === "changes-deltas")[1], "Changes, deltas & events");
+  const restart = { kind: "session-start" };
+  assert.deepEqual(reasons.filters, [["all", "All records"], ["hide-health", "All changes"],
+    ["changes", "All state changes"], ["events", "All events"]]);
+  // All changes: value steps, state flips, events and restarts; never a bare health record.
+  for (const reason of [battery, tank, watts, cloudLost, pumpOpen, restart]) assert.equal(reasons.matches([reason], "hide-health"), true);
+  assert.equal(reasons.matches([health], "hide-health"), false);
+  // All state changes: flips and events, no value steps.
+  for (const reason of [battery, tank, watts]) assert.equal(reasons.matches([reason], "changes"), false);
+  for (const reason of [cloudLost, pumpOpen]) assert.equal(reasons.matches([reason], "changes"), true);
+  // A record shows under every option any one of its reasons matches.
+  assert.equal(reasons.matches([watts, pumpOpen], "changes"), true);
 });

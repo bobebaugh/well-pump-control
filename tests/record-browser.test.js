@@ -95,13 +95,13 @@ test("export takes a range of up to 32 days and refuses a longer or reversed one
   assert.match(week.body, /,Health,/);
   const changesOnly = await call({ start: "2026-09-18T04:00:00.000Z", end: "2026-09-25T04:00:00.000Z", filter: "changes" });
   assert.equal(changesOnly.headers["X-Export-Record-Count"], "0");
-  // A delta record: dropped by "changes", kept by "changes-deltas", which the server accepts.
+  // A delta record: dropped by "changes" (All state changes), kept by "hide-health" (All changes).
   seed[`${root}/observations/b`] = { schemaVersion: 2, recordId: "b", deviceId: "tab5-well-main", sessionId: "s", cycleSequence: 2, time: { observedAt: timestamp("2026-09-21T12:00:00.000Z") }, receivedAt: timestamp("2026-09-21T12:00:01.000Z"), triggerReasons: [{ kind: "delta", field: "PumpWatts", from: 12, to: 2972, threshold: 10 }], fields: { PumpWatts: { state: "available", value: 2972 } } };
   const deltas = _createHandler({ getPilotFirestore: () => ({ db: browserFirestore(seed), projectId: "well-pump-control", databaseId: "(default)" }) });
   const range = { view: "export", start: "2026-09-18T04:00:00.000Z", end: "2026-09-25T04:00:00.000Z" };
   const count = async filter => (await deltas({ httpMethod: "GET", queryStringParameters: { ...range, filter } })).headers["X-Export-Record-Count"];
   assert.equal(await count("changes"), "0");
-  assert.equal(await count("changes-deltas"), "1");
+  assert.equal(await count("hide-health"), "1");
   assert.equal(await count("all"), "2");
   const long = await call({ start: "2026-08-01T00:00:00.000Z", end: "2026-09-25T00:00:00.000Z" });
   assert.equal(long.statusCode, 400);
