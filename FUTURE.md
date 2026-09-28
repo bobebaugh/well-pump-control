@@ -38,7 +38,7 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   host at the next authorized Tab5 install. Not urgent and not free: it moves the
   device's dependency from a branch deploy to production, so the change categories in
   BETA move with it.
-- **Battery and diagnostics:** retain 75/80 charge policy pending a deliberate change;
+- **Battery and diagnostics:** retain the 75/90 charge policy (Tab5 M6.45) pending a deliberate change;
   investigate percentage/current interpretation, brief pending-record cloud-yellow
   indication, and Wi-Fi/reconnect behavior only if observed. [#1](https://github.com/bobebaugh/well-pump-control/issues/1).
 

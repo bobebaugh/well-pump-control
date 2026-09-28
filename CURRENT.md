@@ -206,12 +206,17 @@ Cloud work on pilot-working:
    the first cycle and opens W07 on the second.
 11. Built (d31c6c4): the records page's Show filter gains "Changes, deltas & events"
    beside "Changes & events only", which is unchanged.
+12. Built, not installed (0e40cfc on tab5-working): battery charging stops at 90%, not
+   80%. The voltage-based level reads 5-6 points high while charging, wider than the
+   75/80 band, so charging toggled on and off and each toggle wrote a BatteryPercent
+   record (28 Sep). At 75/90 the pack settles near 84-85% and, on USB, barely moves.
+   Ride-through from there is about 6 h (the run-down passed 85% with 6.1 h left).
 
 Sequence. Pilot is a branch deploy and costs no Netlify credits; each main production
 deploy costs 15, so main moves once.
 
 - A. Owner: CPU A containment approved 27 September (item 3).
-- B. Build items 2-11 on the working branches.
+- B. Build items 2-12 on the working branches.
 - C. Promote pilot-working to pilot, then fast-forward main to pilot: the single main
   deploy. Main (69601cc) is 27 commits behind pilot, including the device-facing
   event-board and notifier change af8d8e2 and the dashboard changes f0acaa4-46d19ca.
