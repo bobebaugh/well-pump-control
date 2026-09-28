@@ -40,7 +40,7 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   before reopening the issue. Do not assume older deployment-failure notes remain true.
 - **Network migration:** keep current Shelly DHCP reservations until package addresses
   actually drive acquisition. Preserve bootstrap polling without an adopted package.
-- **Battery and diagnostics:** retain 75/80 charge policy pending a deliberate change;
+- **Battery and diagnostics:** retain the 75/90 charge policy (M6.45) pending a deliberate change;
   investigate percentage/current interpretation, brief pending-record cloud-yellow
   indication, and Wi-Fi/reconnect behavior only if observed. [#1](https://github.com/bobebaugh/well-pump-control/issues/1).
 

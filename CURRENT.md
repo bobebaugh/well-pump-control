@@ -90,6 +90,7 @@ Keep this list current on every tab5-working change; clear it when Tab5 advances
 | f4a357f | M6.45: all five device endpoints move to main's production deploy | cloud.py |
 | b25bc21 | M6.45: unchanged event board re-sent every 30 minutes instead of 30 s | pilot.py |
 | 0c385f7 | M6.45: tab5-runtime readings accepted one at a time; Shelly devices stay all-or-nothing | pilot.py |
+| 0e40cfc | M6.45: battery charging stops at 90%, not 80%, ending the charge on/off loop | pilot.py |
 | ca0595b | Cloud-session start hook | session support |
 | 08415b4, 9ae039e, 348aaad, ccbcd5d | Mirrored shared docs, Firestore peek, M6.44 and pre-freeze notes | docs |
 
