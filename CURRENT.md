@@ -148,10 +148,11 @@ without publishing. It is published right after the Tab5 starts M6.45.
   record. Per-reading acceptance (0c385f7) means no separate health device is needed.
 - In the same draft, the rules review: W09 back to 2,600 W if it is still at its
   3,600 W test setting; P013's name against its condition (now the 40-minute limit);
-  Hand-mode detection
-  (contactor on with idle watts for 5 s or more: Hand or centre 0, or a contactor, box
-  or motor fault). Run the detection and the heap-low and loop-fault injections in the
-  simulator. E007 stays at 266 V (owner, 28 Sep): the supply reaches 253 V at the
+  keep the Hand-mode event as it is ("Motor running with the Shelly Rly Open - HAND or
+  a bypass", Yellow). It opened as intended in the 26 Sep test and fires the first time
+  the pump runs in Hand while the Shelly relay is open; Hand is unprotected by
+  definition, so this is notice, not protection. Fuller detection is in FUTURE. Run the
+  heap-low and loop-fault injections in the simulator. E007 stays at 266 V (owner, 28 Sep): the supply reaches 253 V at the
   house almost daily, the motor sees 6-8 V less under load, and the supply voltage is
   the power company's, not something the pump can act on.
 - Save only. The saved draft is shared by both deploys: publish nothing else until

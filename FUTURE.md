@@ -118,6 +118,13 @@ Source: the owner's well-head flow test (details kept outside the repo). Softwar
   13.2 A service-factor amps. Owner decisions in the rules editor.
 - **Hand mode reading:** in Hand the contactor signal reads on without the pump running;
   watts is the running indicator. The screens should not label Hand-idle as running.
+- **Fuller Hand-mode detection:** the package's Hand event fires only when the pump runs
+  with the Shelly relay open (it opened as intended on 26 Sep). Detecting Hand with the
+  relay closed needs harder rules: contactor on with idle watts for 5 s or more, then
+  telling Hand from a contactor, box or motor fault by pressure staying in band and the
+  condition outliving the timer's maximum run (technical record, Appendix B section 7).
+  The owner kept the simple event for the freeze; not a protection gap, since Hand is
+  unprotected by definition.
 - **Shelly EM vs clamp:** the EM-derived current read about 6 % above a clamp meter at the
   Franklin box; both within rating. Note before treating EM watts as motor input.
 - **Idle watts step, unexplained:** idle watts include the wellhead network gear (on its own
