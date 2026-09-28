@@ -1,4 +1,4 @@
-# Release: 2026-09-27 M6.45 — pre-freeze: heap and loop-fault health; cloud-loss cause.
+# Release: 2026-09-28 M6.45 — pre-freeze: local readings one at a time; health; faults.
 # DIAGNOSTIC BUILD: M6.45 keeps the edge-triggered PRINTs (tagged DIAG).
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
@@ -203,8 +203,7 @@ RUNTIME_DIRECT_BINDINGS = {
         'values.battery_percent': ('number', '%', 'read'),
         'status.buffer_used_pct': ('number', '%', 'read'),
         'status.records_lost': ('integer', 'count', 'read'),
-        # Long-run health, M6.45. Always integers, so declaring them can never
-        # reject the device record they sit in; see add_runtime_health.
+        # Long-run health, M6.45. Always integers; see add_runtime_health.
         'status.heap_free_after_gc_bytes': ('integer', 'B', 'read'),
         'status.heap_lowest_free_bytes': ('integer', 'B', 'read'),
         'status.cpu_a_faults': ('integer', 'count', 'read'),
@@ -424,9 +423,7 @@ def add_runtime_health(observation, free_after_gc, lowest_free, cpu_a_faults,
                        transport_status):
     """Expose heap and loop-fault counts for tab5-runtime bindings.
 
-    A tab5-runtime device record is accepted atomically, so a declared field that
-    is not an integer would make every field of that device unavailable. Counts
-    default to 0 (nothing counted). A heap value is written only once measured:
+    Counts default to 0 (nothing counted). A heap value is written only once measured:
     the first cycle collects, so both exist from then on. The lowest free seen
     includes the post-collection reading, so it is never above it.
     """
@@ -3480,12 +3477,22 @@ def resolve_rules_v3_package(package):
 
 
 def accept_rules_v3_device_record(resolved, device_id, record):
-    """Accept all declared fields from one device atomically, or reject all."""
+    """Accept one device's declared fields from this cycle's record.
+
+    A Shelly answers in one response, so its fields are accepted atomically or
+    not at all. A tab5-runtime device's fields are separate local readings (ADC,
+    battery, cloud and Wi-Fi status), so from M6.45 each valid one is accepted on
+    its own and a missing or invalid one is left out. Nothing is invented for it:
+    left out reads as unknown, exactly like a field of a device that did not
+    answer. A battery with no reading, or a cloud flag with no value yet, can no
+    longer make pressure unavailable. None when nothing was accepted.
+    """
     if not isinstance(resolved, dict) or not isinstance(record, dict):
         return None
     device = resolved.get('devices', {}).get(device_id)
     if not isinstance(device, dict) or device.get('enabled') is not True:
         return None
+    per_reading = device.get('driver') == 'tab5-runtime'
     accepted = {}
     for field in device.get('fields', []):
         object_name = field['object']
@@ -3494,13 +3501,19 @@ def accept_rules_v3_device_record(resolved, device_id, record):
             value = record[object_name]
         elif system_name in record:
             value = record[system_name]
+        elif per_reading:
+            continue
         else:
             return None
         if not _v3_typed_value(value, field['type'], field.get('enumValues')):
+            if per_reading:
+                continue
             return None
         if object_name == '$availability' and value is not True:
             return None
         accepted[system_name] = value
+    if per_reading and not accepted:
+        return None
     return accepted
 
 
@@ -3523,7 +3536,10 @@ def freeze_rules_v3_snapshot(resolved, device_records, system_values=None):
 
 
 def collect_rules_v3_device_records(resolved, observation):
-    """Atomically accept each enabled device from this cycle's observation only."""
+    """Accept each enabled device from this cycle's observation only.
+
+    Shelly devices all-or-nothing; tab5-runtime devices reading by reading.
+    """
     accepted = {}
     unavailable = []
     for device_id, device in resolved.get('devices', {}).items():

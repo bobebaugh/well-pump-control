@@ -493,22 +493,28 @@ class V3IntegratedApplicationTests(unittest.TestCase):
             lambda _url: (_ for _ in ()).throw(TimeoutError())))
         self.assertEqual(self.logic["read_shelly"](lambda _url: self.em())["voltage"], 240.0)
 
-    def test_tab5_record_missing_wrong_and_recovery_are_atomic(self):
+    def test_tab5_missing_or_wrong_reading_is_left_out_alone(self):
+        # M6.45: Tab5 readings are accepted one at a time. A missing clock flag
+        # no longer takes pressure with it; a wrong ADC still yields no pressure.
         with tempfile.TemporaryDirectory() as directory:
             runtime, _path = self.start(directory)
-            for mutation in ("missing", "wrong"):
-                observation = self.observation()
-                if mutation == "missing":
-                    observation["status"].pop("clock_synced")
-                else:
-                    observation["values"]["adc_raw"] = "14307"
-                result = self.logic["run_rules_v3_cycle"](runtime, observation, 0)
-                self.assertIn("tab5-main", result["unavailableDeviceIds"])
-                for field in ("ADCRaw", "ADCValid", "ClockSynchronized",
-                              "PressurePSI"):
-                    self.assertNotIn(field, result["snapshot"])
-                self.assertEqual(result["snapshot"]["TankFlowQuality"],
-                                 "PRESSURE_INVALID")
+            observation = self.observation()
+            observation["status"].pop("clock_synced")
+            result = self.logic["run_rules_v3_cycle"](runtime, observation, 0)
+            self.assertIn("tab5-main", result["acceptedDeviceIds"])
+            self.assertNotIn("ClockValid", result["snapshot"])
+            for field in ("PressureADCCounts", "ADCValid", "PressurePSI"):
+                self.assertIn(field, result["snapshot"])
+            observation = self.observation()
+            observation["values"]["adc_raw"] = "14307"
+            result = self.logic["run_rules_v3_cycle"](runtime, observation, 0)
+            self.assertIn("tab5-main", result["acceptedDeviceIds"])
+            for field in ("PressureADCCounts", "PressurePSI"):
+                self.assertNotIn(field, result["snapshot"])
+            for field in ("ADCValid", "ClockValid"):
+                self.assertIn(field, result["snapshot"])
+            self.assertEqual(result["snapshot"]["TankFlowQuality"],
+                             "PRESSURE_INVALID")
             recovered = self.logic["run_rules_v3_cycle"](
                 runtime, self.observation(), 1000)
             self.assertIn("tab5-main", recovered["acceptedDeviceIds"])
@@ -605,7 +611,7 @@ class V3IntegratedApplicationTests(unittest.TestCase):
             broken = self.observation()
             broken["values"]["adc_raw"] = None
             result = self.logic["run_rules_v3_cycle"](runtime, broken, 11000)
-            self.assertIn("tab5-main", result["unavailableDeviceIds"])
+            self.assertNotIn("PressureADCCounts", result["snapshot"])
             self.assertNotIn("PressurePSI", result["snapshot"])
             self.assertEqual(result["snapshot"]["TankFlowQuality"], "PRESSURE_INVALID")
 
@@ -998,7 +1004,7 @@ class V3IntegratedApplicationTests(unittest.TestCase):
                 observation = self.observation()
                 observation["values"]["adc_raw"] = value
                 result = self.logic["run_rules_v3_cycle"](runtime, observation, 0)
-                self.assertIn("tab5-main", result["unavailableDeviceIds"])
+                self.assertNotIn("PressureADCCounts", result["snapshot"])
                 self.assertNotIn("PressurePSI", result["snapshot"])
 
             invalid_package = json.loads(self.raw_a)

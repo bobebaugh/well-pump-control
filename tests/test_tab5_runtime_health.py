@@ -93,9 +93,8 @@ class RuntimeHealthTests(unittest.TestCase):
                 HEALTH.items())]}], "calculations": []}
         self.assertTrue(self.logic["_rules_v3_runtime_supported"](package))
 
-    def test_a_separate_tab5_device_keeps_a_missing_value_from_blanking_pressure(self):
-        """Device records are atomic. A second tab5-runtime device isolates health
-        and battery readings, so a missing one cannot make pressure unavailable."""
+    def test_a_missing_tab5_value_never_blanks_pressure(self):
+        """Tab5 readings are accepted one at a time, in one device or several."""
         def field(name, path, kind):
             return {"systemName": name, "object": path, "type": kind}
         resolved = {"devices": {
@@ -109,13 +108,15 @@ class RuntimeHealthTests(unittest.TestCase):
                        "status": {"cpu_a_faults": 0}}
         accepted, unavailable = self.logic["collect_rules_v3_device_records"](
             resolved, observation)
-        self.assertEqual(accepted, {"tab5-main": {"PressureADCCounts": 14389}})
-        self.assertEqual(unavailable, ["tab5-health"])
-        # The same two fields in one device lose pressure with the battery.
+        self.assertEqual(accepted["tab5-main"], {"PressureADCCounts": 14389})
+        self.assertEqual(accepted["tab5-health"], {"CpuAFaults": 0})
+        self.assertEqual(unavailable, [])
+        # From M6.45 Tab5 readings are accepted one at a time, so the same
+        # fields in one device keep pressure when the battery has no reading.
         resolved["devices"]["tab5-main"]["fields"].append(
             field("BatteryPercent", "values.battery_percent", "number"))
         accepted, _ = self.logic["collect_rules_v3_device_records"](resolved, observation)
-        self.assertNotIn("tab5-main", accepted)
+        self.assertEqual(accepted["tab5-main"], {"PressureADCCounts": 14389})
 
     def test_the_loop_collects_only_through_the_periodic_helper(self):
         source = PILOT_PATH.read_text(encoding="utf-8")
