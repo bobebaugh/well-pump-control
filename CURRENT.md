@@ -215,8 +215,11 @@ deploy costs 15, so main moves once.
 - B. Build items 2-12 on the working branches.
 - C. Done 29 Sep: pilot-working to pilot, then main fast-forwarded to pilot (was
   69601cc), the single main deploy. Main served the new code from 12:08 UTC, and the
-  silent-device alert's first scheduled run wrote sites/well-main/alerts/device-silence
-  at 12:09:44 UTC: status ok, newest record 12:03:54, so no message. Whether it can
+  silent-device alert's first run, forced by the owner with Run now, wrote
+  sites/well-main/alerts/device-silence at 12:09:44 UTC: status ok, newest record
+  12:03:54, so no message (0.9 s, 159 MB; the logged ERROR is a punycode deprecation
+  warning from a dependency). That document changes only on the first run and at a
+  transition, so scheduled runs show only in the Netlify function log (next 12:15 UTC). Whether it can
   actually send (NOTIFY_DRY_RUN not "1" on production) is proven only by the internet
   outage test in step F. The owner considered keeping the
   device on pilot for free deploys and kept the move: the Tab5's functions freeze with
