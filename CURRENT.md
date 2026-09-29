@@ -349,16 +349,19 @@ that lets a web restart arrive within its 45-second lifetime, and the 30-second 
 
    Pilot's deploy is currently behind on diagnostic logging only. The missing code
    writes function-log detail and changes no behaviour; it rides the next pilot push.
-6. The notification transport is proven. On 22 September a live batch send from
-   resend.ebaugh.net delivered both legs to the owner: the email, and the text through
-   the Verizon gateway a few seconds behind it. A sending domain with no history was
-   therefore not filtered, and the path is far faster than the owner's earlier
-   Gmail-to-gateway route at about three minutes. The application's own send is covered
-   by tests but has not yet made a live call - the transport was exercised directly
-   against the same endpoint and envelope - so the first T010 after deployment closes
-   that last gap. Only the short T010 message has been sent: the display names carry an
-   em-dash, which is outside the GSM-7 alphabet and forces UCS-2 at seventy characters
-   per segment, so watch how a full-length name such as W07 arrives during the soak.
+6. Email is the notification channel; the SMS leg is best-effort and degrading. Over
+   22-28 September the application sent 184 messages and Resend delivered 184, with no
+   bounce, failure or suppression, and every event record's notification field reads
+   sent. Email arrives in seconds. The Verizon gateway does not: on 28 September three
+   messages handed over at 16:31:49, 16:37:47 and 16:40:30 EDT all arrived at about
+   21:17, a hold of roughly four hours forty minutes, and they arrived close before
+   open - held and released out of order, not merely late. Resend reports the SMTP
+   handoff, so "delivered" is not evidence a text arrived, and nothing on this side can
+   observe the difference. Verizon is retiring email-to-text: intermittent silent
+   failures through 2026, full shutdown 31 March 2027. The dual send was chosen in #21
+   as the mitigation for exactly this, and it is now load-bearing rather than spare.
+   The owner's position is to rely on email. Before departure, confirm the phone raises
+   a Gmail alert on the MF-Well subject, since that is now the only timely path.
 
 7. Review the dashboard changes now on pilot (f0acaa4-46d19ca). They reach main in the
    single main deploy, step C of the pre-freeze round. Cloud sessions can now read records directly with

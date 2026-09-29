@@ -23,6 +23,14 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   consider a 20-second window retaining eight samples, followed by normal publication,
   staging/restart and verification. Pressure is commissioned in M6.42; do not repeat
   the old instruction to enable its constant. This is package work, not a new estimator.
+- **Timestamp the SMS leg:** the notification message carries no time because #24 set it
+  when delivery was assumed prompt. The Verizon gateway now holds messages for hours and
+  releases them out of order, so a text no longer dates itself and a close can arrive
+  before its open. Prefixing HH:MM to the SMS body only would make each text
+  self-dating; the email leg needs nothing, since its Date header already survives. A
+  notifier change, not a package republish - the two legs are composed separately. Worth
+  doing only if the SMS leg is still wanted; the owner's current position is email.
+
 - **Authoring warnings/simulator:** derive inhibition targets by binding rather than
   PumpEnable, and distinguish unsupported internal occurrences/Clear Events from the
   operator occurrences already connected. [#10](https://github.com/bobebaugh/well-pump-control/issues/10).
