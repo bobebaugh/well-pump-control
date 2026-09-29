@@ -31,6 +31,14 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   notifier change, not a package republish - the two legs are composed separately. Worth
   doing only if the SMS leg is still wanted; the owner's current position is email.
 
+- **Loop time as a reading:** pilot.py already measures cycle work and interval time and
+  shows them only on the Tab5's System page, in print small enough to need a photo. As
+  tab5-runtime readings they would be the best remote indicator of network health. Most
+  useful form: the longest cycle interval since boot (only rises, like lowest heap free)
+  plus the last cycle's work time. Owner, 29 Sep: too late for M6.45. A photo of the
+  System page at the PC, with M6.45 on package v49, read work 1,578 ms of a 2,002 ms
+  interval; the Shelly 1 read alone took 854 ms (EM 380, ADC 187, rules 42), so a slow
+  Shelly link is what would push a cycle past its 2 s budget.
 - **Simulator as a test:** the owner's concept, worth keeping, but not yet something to
   rely on (29 Sep). Known oddities: E002, P001, P013 and W09 open in a normal run, and
   P013 opens at cycle 2 for reasons nobody has examined. Qualify it against recorded
