@@ -352,16 +352,20 @@ that lets a web restart arrive within its 45-second lifetime, and the 30-second 
 6. Email is the notification channel; the SMS leg is best-effort and degrading. Over
    22-28 September the application sent 184 messages and Resend delivered 184, with no
    bounce, failure or suppression, and every event record's notification field reads
-   sent. Email arrives in seconds. The Verizon gateway does not: on 28 September three
-   messages handed over at 16:31:49, 16:37:47 and 16:40:30 EDT all arrived at about
-   21:17, a hold of roughly four hours forty minutes, and they arrived close before
-   open - held and released out of order, not merely late. Resend reports the SMTP
-   handoff, so "delivered" is not evidence a text arrived, and nothing on this side can
-   observe the difference. Verizon is retiring email-to-text: intermittent silent
-   failures through 2026, full shutdown 31 March 2027. The dual send was chosen in #21
-   as the mitigation for exactly this, and it is now load-bearing rather than spare.
-   The owner's position is to rely on email. Before departure, confirm the phone raises
-   a Gmail alert on the MF-Well subject, since that is now the only timely path.
+   sent. Email arrives in seconds. The Verizon gateway is throttled by daily volume, not
+   failing: on 27 September four texts handed over at 03:50:31 to 03:52:31 EDT arrived
+   at 03:50 and 03:52, in order and with their two-minute spacing intact, while on 28
+   September, a 29-text day, three handed over at 16:31:49, 16:37:47 and 16:40:30
+   arrived together about 21:17 and in the wrong order - close before open. Same sender
+   and recipient one day apart, so volume is the variable. Muting P001 at departure
+   returns the daily count to roughly the four that deliver instantly, which should make
+   the SMS leg usable for the one case that matters; that is inference from two days and
+   is not yet proven. Resend reports the SMTP handoff, so "delivered" is never evidence
+   a text arrived, and nothing on this side can observe the difference. Verizon is
+   retiring email-to-text regardless: degrading through 2026, full shutdown 31 March
+   2027. Email is the channel the owner relies on. Before departure, confirm the phone
+   raises a Gmail alert on the MF-Well subject, since that is the only path that does
+   not depend on a carrier's tolerance.
 
 7. Review the dashboard changes now on pilot (f0acaa4-46d19ca). They reach main in the
    single main deploy, step C of the pre-freeze round. Cloud sessions can now read records directly with
