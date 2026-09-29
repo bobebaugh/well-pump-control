@@ -249,8 +249,11 @@ Owner tasks, no code:
   long-run protection while at home, and will lower the timer before leaving for the
   winter, when flush cycles are off. Until then the timer is a backup above the Tab5.
   Running package since 28 Sep: v49 (release 20260928175025-event-v3-v49), read from
-  the event board at 22:59 UTC, no open events. The M6.45 package checks used v46;
-  repeat them read-only against v49 before the install.
+  the event board at 22:59 UTC, no open events. Checked 29 Sep against v49's exact
+  runtime bytes (read-only, sha256 matching the release): M6.45 (tab5-working 462a4f3)
+  accepts it at staging; a boot with no network and no battery has PressurePSI from
+  cycle 1 and opens W07 at 72 psi on cycle 2; with the LAN up it requests the Tab5
+  hold. Main's and pilot's four device POST endpoints answer 401 without the password.
 - Rules package review: now part of the special unit at the top of this section.
 - Battery: M5Stack says a battery below 6 V enters protection mode, which needs manual
   recovery. Proposal: remove it for the freeze, after confirming in step E that the Tab5
