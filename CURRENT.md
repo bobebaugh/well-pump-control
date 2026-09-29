@@ -128,7 +128,12 @@ without publishing. It is published right after the Tab5 starts M6.45.
 - Save only. The saved draft is shared by both deploys: publish nothing else until
   M6.45 is installed, since any publish would carry these readings and today's Tab5
   would reject it and keep v49.
-- After M6.45 starts: Validate, Publish, restart the Tab5 from the web. Confirm the
+- Done 29 Sep: v50 (20260929124355-event-v3-v50) published; the Tab5 staged it
+  (hash 153dee66bc19) and adopted it at a web restart, session boot_7ae787c634c4 from
+  about 12:46 UTC, at the owner's PC. First records: heap free after collection
+  23,323,328 B, lowest free drifting down between collections as expected, CPU A and
+  CPU B faults 0.
+- Was: after M6.45 starts: Validate, Publish, restart the Tab5 from the web. Confirm the
   home page shows the new release running and the next health record carries the
   heap values.
 
