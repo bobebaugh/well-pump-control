@@ -155,6 +155,15 @@ without publishing. It is published right after the Tab5 starts M6.45.
   heap-low and loop-fault injections in the simulator. E007 stays at 266 V (owner, 28 Sep): the supply reaches 253 V at the
   house almost daily, the motor sees 6-8 V less under load, and the supply voltage is
   the power company's, not something the pump can act on.
+- Prepared 29 September 2026: the draft is saved and ready, not published (latest
+  release still v49, 20260928175025-event-v3-v49). Compared read-only with v49, the
+  only differences are the four tab5-main readings (HeapFreeAfterGc, HeapLowestFree,
+  CpuAFaults, CpuBFaults; integer, B/B/count/count, logging always) and P013's name and
+  open/close messages, which no longer say "six minutes" (condition unchanged, 2,400 s).
+  W09 was already 2,600 W; E007 (266 V) and the Hand-mode event W06 are unchanged.
+  Editor Validate passed (37,144-byte V3 package). The simulator's heap-low and
+  loop-fault cases change nothing: the same four events (E002, P001, P013, W09) open with
+  and without them, and they open on v49 too.
 - Save only. The saved draft is shared by both deploys: publish nothing else until
   M6.45 is installed, since any publish would carry these readings and today's Tab5
   would reject it and keep v49.
