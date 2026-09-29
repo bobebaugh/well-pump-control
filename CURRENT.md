@@ -239,6 +239,10 @@ deploy costs 15, so main moves once.
 - E. All restarts in one visit, because each resets uptime. Publish the reviewed rules
   package and restart to adopt it; request a Shelly reboot (accepted, then confirmed);
   restart the Tab5 from the web; last, the battery test and the whole-house power cut.
+  29 Sep, owner's report and records: v50 published and adopted at a web restart; a
+  Shelly reboot requested from the web tested; the battery restart tested twice; the
+  battery is in and charging to 90% under M6.45's 75/90 limits. Left: the whole-house
+  power cut, with the Tab5 back at the tank. The soak's 13 days start after it.
 - F. Soak at least 13 days with no restart. The tick counter wraps at 12.4 days, and
   those days give the heap stat its baseline. Outage tests during the soak: internet
   only for 30-60 minutes (both alert messages should arrive), and router off for 10
