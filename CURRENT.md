@@ -163,7 +163,10 @@ without publishing. It is published right after the Tab5 starts M6.45.
   W09 was already 2,600 W; E007 (266 V) and the Hand-mode event W06 are unchanged.
   Editor Validate passed (37,144-byte V3 package). The simulator's heap-low and
   loop-fault cases change nothing: the same four events (E002, P001, P013, W09) open with
-  and without them, and they open on v49 too.
+  and without them, and they open on v49 too. The simulator is not a reliable test
+  (owner, 29 Sep): a worthwhile concept that needs more work before anything rests on
+  it, so these runs are no evidence either way. Package checks rest on Validate, the
+  draft-against-release comparison and the Tab5's own check at staging.
 - Save only. The saved draft is shared by both deploys: publish nothing else until
   M6.45 is installed, since any publish would carry these readings and today's Tab5
   would reject it and keep v49.

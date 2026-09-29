@@ -31,6 +31,12 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   notifier change, not a package republish - the two legs are composed separately. Worth
   doing only if the SMS leg is still wanted; the owner's current position is email.
 
+- **Simulator as a test:** the owner's concept, worth keeping, but not yet something to
+  rely on (29 Sep). Known oddities: E002, P001, P013 and W09 open in a normal run, and
+  P013 opens at cycle 2 for reasons nobody has examined. Qualify it against recorded
+  real days before trusting it for a package change.
+- **firestore-peek depth:** it truncates nested rules partway down, so full clauses
+  need a separate read-only .get() script. Deepen its output when next needed.
 - **Authoring warnings/simulator:** derive inhibition targets by binding rather than
   PumpEnable, and distinguish unsupported internal occurrences/Clear Events from the
   operator occurrences already connected. [#10](https://github.com/bobebaugh/well-pump-control/issues/10).
