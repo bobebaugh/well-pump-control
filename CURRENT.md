@@ -68,54 +68,12 @@ the Tab5 but make a text message use the shorter UCS-2 segment.
 
 ## On pilot, not yet on main
 
-Main last matched pilot at 69601cc. Keep this list current on every pilot promotion and
-clear it when main is fast-forwarded to pilot. Docs-only commits change no behavior.
-
-| Pilot commit | Change | Kind |
-|---|---|---|
-| 0a1f097 | Record production activation and where the Tab5 posts | docs |
-| 6ff3d7e | Catch the docs up with production | docs |
-| 948e5fd | Record that pilot is production for the device | docs |
-| 6e5b9c8 | Record the notification channel as live | docs |
-| af8d8e2 | Reject non-ASCII event display names and enum choices at Validate/Publish; notify from each event's own settings in its release | cloud + rules editor screen |
-| 5923abf | Durable records: plain-language reasons, row detail, Show filter, narrower columns; export by local From/To (up to 32 days) with local-time columns and reasonSummary | screen (records page + record-browser) |
-| d8d65e4 | Durable records: one range (From/To, Last 8 h/Today/24 h/7 days or an Event list) sets both rows and export; server-side Show filter fills 50-row pages (2,000-read cap); current choice highlighted | screen (records page + record-browser) |
-| f0baf41 | Protection line (Shelly lockout, Tab5 inhibit flag, mode) on the home page; operator status readable without the password, actions disabled until sign-in; "Release Tab5 hold (until restart)" wording | screen (home + operator-control, current-observation) |
-| 0b6170d | Last pump run at the top of the home page, from the day's durable records | screen (home + observation-series) |
-| cb39d23 | Energy and Pump load history views from ShellyEnergyWh and LoadRatioPercent | screen (home + observation-series) |
-| 0902a8f | Rules Engine opens on the published package read-only; V3 reads open, writes and seeding GETs keyed | rules-engine read access + editor screen; compile, publish and delivery unchanged |
-| f0acaa4 | Home SW0/RLY0 tiles show unknown when a fresh record reports Shelly 1 unreachable | screen (home) |
-| e478c6c | SW0/RLY0 tiles and the Shelly 1 health row also show unknown on a stale record or a failed read; the row no longer shows a missing value as OFF | screen (home) |
-| 5e497ca | Owner controls moved below the events, at the bottom of the home page | screen (home) |
-| 46d19ca | History on its own full-width row with a two-handle zoom rail and a 30-day range; Pump load replaced by Fill time (48-58 psi), Switch (cut-in/cut-out per run) and Leak-down views; water used and a run's delivered gallons use one delivery estimate from the trailing week's clean fills, so day and week agree | screen (home) + observation-series |
-| 968af5f | Records page row detail shows the cause a Tab5 M6.44 record carries when CloudAvailable goes false; durable-observation-v2 documents the optional cause | screen (records) + interface doc |
-| 7573678 | Rules catalog offers Tab5 M6.45 heap and loop-fault readings; the editor suggests each driver's objects and fills their contract; simulator values and injections | rules-package pipeline + editor screen |
-| 68de8ec | Silent-device alert: scheduled every 15 minutes on production; one message after 30 minutes without a durable record, one when records resume | scheduled function (new) |
-| 1d0ce79 | Home page's events panel judges the board by the live reading's freshness, not the board's age | screen (home) |
-| d31c6c4, 70a96f2 | Records page Show options renamed: All records, All changes, All state changes, All events (d31c6c4's added option removed) | screen (records) |
-| ca2079b | 1-day Tank water line drawn at each 1 gal change at the readings' own times, so a fill shows its rise and peak; week and month unchanged | screen (home) + observation-series |
-
-5923abf was promoted to pilot on 25 September for the owner to test before main; pilot
-was 53c0028 before it. d8d65e4 followed on the owner's direction (pilot was da860d2), then f0baf41-0902a8f
-(pilot was 6766003). BETA lists rules-engine under the package pipeline that moves
-to main and pilot together; 0902a8f changes only who may read it, so a lagging main
-still asks for the password to view and publishes identically. f0acaa4-46d19ca followed on
-the owner's direction on 27 September (pilot was fa63caf), fast-forwarded with the docs to
-b0af6de; they change only the home page and observation-series, which the device never calls.
-Verified by the web tests (394 pass) and a browser run of the page against the real series
-code fed the owner's 18-27 September export. 46d19ca makes the day view read the trailing
-week (about 2,600 records) so its delivery matches the week's; 30 days reads about 11,000
-and is re-read at most every 30 minutes. Main should follow in the owner's next grouped main deploy.
-
-968af5f-ca2079b followed on the owner's direction on 28 September (pilot was 8ef1032),
-fast-forwarded with the pre-freeze docs. Web tests: 415 pass. None of the functions the
-Tab5 posts to changed. The silent-device alert is scheduled only on production, so it
-stays idle until main follows. 7573678 is rules-package pipeline: until main follows,
-author packages that use the new Tab5 readings on the pilot deploy, and publish them only
-after M6.45 is installed; an older device rejects them and keeps its staged package.
-
-Main's rules editor still accepts non-ASCII display names and still says notification
-settings are authoring only; publish rules from the pilot deploy until main follows.
+Keep this list current on every pilot promotion and clear it when main is fast-forwarded
+to pilot. Docs-only commits change no behavior. Empty: on 29 September, on the owner's
+direction, pilot was fast-forwarded to pilot-working and main to pilot (main was
+69601cc), the single main deploy of step C. Main now carries everything listed before,
+from af8d8e2 through ca2079b, including the silent-device alert, which runs only on
+production. Web tests: 415 pass. The Tab5 still posts to pilot until M6.45 is installed.
 
 ## On pilot-working, not yet on pilot
 
@@ -255,9 +213,11 @@ deploy costs 15, so main moves once.
 
 - A. Owner: CPU A containment approved 27 September (item 3).
 - B. Build items 2-12 on the working branches.
-- C. Promote pilot-working to pilot, then fast-forward main to pilot: the single main
-  deploy. Main (69601cc) is 27 commits behind pilot, including the device-facing
-  event-board and notifier change af8d8e2 and the dashboard changes f0acaa4-46d19ca.
+- C. Done 29 Sep: pilot-working to pilot, then main fast-forwarded to pilot (was
+  69601cc), the single main deploy. Check that the silent-device alert runs: its first
+  run writes sites/well-main/alerts/device-silence. The owner considered keeping the
+  device on pilot for free deploys and kept the move: the Tab5's functions freeze with
+  it, so only screen changes would deploy, and those need main either way.
 - D. Install the final Tab5 build and record its file set and stamps. Confirm records
   and notifications arrive through main, and nothing from the device reaches pilot.
 - E. All restarts in one visit, because each resets uptime. Publish the reviewed rules
