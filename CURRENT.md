@@ -224,7 +224,12 @@ deploy costs 15, so main moves once.
   outage test in step F. The owner considered keeping the
   device on pilot for free deploys and kept the move: the Tab5's functions freeze with
   it, so only screen changes would deploy, and those need main either way.
-- D. Install the final Tab5 build and record its file set and stamps. Confirm records
+- D. Done 29 Sep (owner's report, records): M6.45 from tab5-working 462a4f3 installed,
+  new session boot_616c029844fa from about 12:35 UTC on package v49; notifications work.
+  The Tab5 was at the owner's PC for programming from 12:16 UTC, so pressure read -17.5
+  psi (sensor unplugged, ADC near zero) and W04 "Pressure readings suspect" opened as
+  it should. Not a fault. Record the file set once it is back at the tank.
+- D (plan). Install the final Tab5 build and record its file set and stamps. Confirm records
   and notifications arrive through main, and nothing from the device reaches pilot.
 - E. All restarts in one visit, because each resets uptime. Publish the reviewed rules
   package and restart to adopt it; request a Shelly reboot (accepted, then confirmed);
