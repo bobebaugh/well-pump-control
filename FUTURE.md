@@ -38,7 +38,9 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   plus the last cycle's work time. Owner, 29 Sep: too late for M6.45. A photo of the
   System page at the PC, with M6.45 on package v49, read work 1,578 ms of a 2,002 ms
   interval; the Shelly 1 read alone took 854 ms (EM 380, ADC 187, rules 42), so a slow
-  Shelly link is what would push a cycle past its 2 s budget.
+  Shelly link is what would push a cycle past its 2 s budget. The Tab5's Wi-Fi is better
+  at the PC than at the tank, and the weak link is the wellhead end, the Shelly 1's
+  network (owner), so that 854 ms is the wellhead link, not the Tab5's.
 - **Simulator as a test:** the owner's concept, worth keeping, but not yet something to
   rely on (29 Sep). Known oddities: E002, P001, P013 and W09 open in a normal run, and
   P013 opens at cycle 2 for reasons nobody has examined. Qualify it against recorded
