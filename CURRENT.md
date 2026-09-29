@@ -214,8 +214,11 @@ deploy costs 15, so main moves once.
 - A. Owner: CPU A containment approved 27 September (item 3).
 - B. Build items 2-12 on the working branches.
 - C. Done 29 Sep: pilot-working to pilot, then main fast-forwarded to pilot (was
-  69601cc), the single main deploy. Check that the silent-device alert runs: its first
-  run writes sites/well-main/alerts/device-silence. The owner considered keeping the
+  69601cc), the single main deploy. Main served the new code from 12:08 UTC, and the
+  silent-device alert's first scheduled run wrote sites/well-main/alerts/device-silence
+  at 12:09:44 UTC: status ok, newest record 12:03:54, so no message. Whether it can
+  actually send (NOTIFY_DRY_RUN not "1" on production) is proven only by the internet
+  outage test in step F. The owner considered keeping the
   device on pilot for free deploys and kept the move: the Tab5's functions freeze with
   it, so only screen changes would deploy, and those need main either way.
 - D. Install the final Tab5 build and record its file set and stamps. Confirm records
