@@ -244,9 +244,16 @@ deploy costs 15, so main moves once.
   battery is in and charging to 90% under M6.45's 75/90 limits. Left: the whole-house
   power cut, with the Tab5 back at the tank. The soak's 13 days start after it.
 - F. Soak running: one session, boot_329b20039f43, since 29 Sep 13:21 UTC on v50; 13
-  days end 12 Oct 13:21 UTC and the tick counter wraps about 11 Oct 23:15 UTC. The
-  whole-house power cut was not done before it; do it after the soak, since it is a
-  restart. Checked 5 Oct 23:15 UTC, read-only, 3,244 records: no restart, no receipt
+  days end 12 Oct 13:21 UTC and the tick counter wraps about 11 Oct 23:15 UTC.
+  Whole-house power cut, done 29 Sep (owner, battery in, UniFi about 5 minutes to
+  restart): no records between 13:09:08 and 13:21:27 UTC, then a new session at
+  13:21:27, the one the soak counts from. Records queued in RAM during the cut were lost
+  with that restart. The cause is not recorded; Wi-Fi joined 20 s after boot, so the
+  network was already back, which points to a restart by hand rather than a reset when
+  power returned. Recovery passed: pressure from the first cycle, Wi-Fi in 20 s, both
+  Shellys and the cloud within about 25 s, the boot queue delivered in seconds. Repeat a
+  short cut after the soak, watching the Tab5 screen, to settle whether it rides
+  through on battery. Checked 5 Oct 23:15 UTC, read-only, 3,244 records: no restart, no receipt
   gap over 15 minutes, receipt lag steady near 2 s every day (the daily resync is
   holding the clock), heap free after collection flat at 22.45 MB with lowest free
   22.43 MB unchanged since 2 Oct, CPU A and B faults 0, records lost 0, buffer at most
