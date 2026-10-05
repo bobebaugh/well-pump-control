@@ -267,7 +267,12 @@ deploy costs 15, so main moves once.
   drops about once or twice an hour, briefly; a burst of 14 at 20:35 UTC on 5 Oct
   opened H001 "Electrical source invalid" (Red, monitor, no notification) for 3 min,
   then for 36 s at 20:54 and 7 s at 23:11. While H001 is open the Tab5 is in Monitor:
-  its holds are released and other events frozen. Owner to say what happened then.
+  its holds are released and other events frozen. The owner found no external cause and
+  the UniFi logs are clear. Planned for after the soak (owner, 5 Oct): lengthen H001's
+  trigger, for example minimum seconds 60 instead of 5 readings (about 10 s), so only
+  real EM outages put the Tab5 in Monitor; consider notifying on it. Publish it with
+  the repeat power cut so one restart covers both. No Silent or Resumed email has been
+  sent, correctly: no silence since the main deploy has lasted 30 minutes.
   The silent alert's state is unchanged since its forced first run, as expected with
   no silence; its scheduled runs show only in the Netlify log.
 - F (plan). Soak at least 13 days with no restart. The tick counter wraps at 12.4 days, and
