@@ -80,21 +80,11 @@ battery and no cloud keeps pressure and every pressure rule from the first cycle
 ## On tab5-working, not yet on Tab5
 
 Keep this list current on every tab5-working change; clear it when Tab5 advances.
-
-| tab5-working commit | Change | Kind |
-|---|---|---|
-| 06d0598, f89ec9b | M6.44: durable reason carries the cause when CloudAvailable goes false; CPU B startup log names its release | cloud.py + pilot.py |
-| 95e5545 | M6.45: heap and loop-fault health as tab5-runtime bindings; periodic gc.collect() every 10 minutes | cloud.py + pilot.py |
-| 2b273d8 | M6.45: each loop pass contained and counted on CPU A and CPU B; ten faults in a row stop that CPU cleanly | cloud.py + pilot.py |
-| f16e01a | M6.45: SNTP resync every 24 h; a failed resync keeps sync and retries hourly | cloud.py |
-| f4a357f | M6.45: all five device endpoints move to main's production deploy | cloud.py |
-| b25bc21 | M6.45: unchanged event board re-sent every 30 minutes instead of 30 s | pilot.py |
-| 0c385f7 | M6.45: tab5-runtime readings accepted one at a time; Shelly devices stay all-or-nothing | pilot.py |
-| 0e40cfc | M6.45: battery charging stops at 90%, not 80%, ending the charge on/off loop | pilot.py |
-| ca0595b | Cloud-session start hook | session support |
-| 08415b4, 9ae039e, 348aaad, ccbcd5d | Mirrored shared docs, Firestore peek, M6.44 and pre-freeze notes | docs |
-
-The approved-plan update that follows them is docs-only too.
+Empty: on 5 October, on the owner's direction, Tab5 was fast-forwarded to tab5-working
+(was 9e1accb, M6.43). Tab5 now holds M6.45 as installed on 29 September from
+tab5-working 462a4f3: pilot.py and cloud.py M6.45, main.py M6.41. Evidence: the owner's
+install, the M6.45 stamp on the System page and the records since; the device files
+were not byte-compared with the branch.
 
 M6.43 needs device evidence for two things: one Shelly reboot reporting accepted
 then confirmed-completed, and the script liveness field reading true in normal
