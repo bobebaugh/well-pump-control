@@ -29,7 +29,7 @@ hardware. Exact installed files/package identity still need a release receipt.
 The owner replaced main with pilot through the GitHub web interface (default branch
 switched, main deleted and recreated from pilot). main = pilot = 69601cc. The old main
 was 3a8b2f3: a README and a netlify.toml whose ignore command cancelled every production
-build. It was not archived under a tag; this session could not push one. Netlify built
+build. It is archived: tag archive/beta-2026-09-16/main points at 3a8b2f3. Netlify built
 production from the new main within seconds.
 
 Checked from the cloud the same day: the netlify.app home, records, health,
@@ -243,7 +243,24 @@ deploy costs 15, so main moves once.
   Shelly reboot requested from the web tested; the battery restart tested twice; the
   battery is in and charging to 90% under M6.45's 75/90 limits. Left: the whole-house
   power cut, with the Tab5 back at the tank. The soak's 13 days start after it.
-- F. Soak at least 13 days with no restart. The tick counter wraps at 12.4 days, and
+- F. Soak running: one session, boot_329b20039f43, since 29 Sep 13:21 UTC on v50; 13
+  days end 12 Oct 13:21 UTC and the tick counter wraps about 11 Oct 23:15 UTC. The
+  whole-house power cut was not done before it; do it after the soak, since it is a
+  restart. Checked 5 Oct 23:15 UTC, read-only, 3,244 records: no restart, no receipt
+  gap over 15 minutes, receipt lag steady near 2 s every day (the daily resync is
+  holding the clock), heap free after collection flat at 22.45 MB with lowest free
+  22.43 MB unchanged since 2 Oct, CPU A and B faults 0, records lost 0, buffer at most
+  13%, battery 76-90%, no open events. 125 cloud-flag drops, nearly all RTDB calls
+  timing out at the 1 s limit (see FUTURE). Records per day rose from about 290 to
+  450-640 from 1 Oct, from tank level and flow deltas while pump starts stayed 2-6 a
+  day; at that rate the 100-record queue lasts about 4 hours in an outage. Shelly EM
+  drops about once or twice an hour, briefly; a burst of 14 at 20:35 UTC on 5 Oct
+  opened H001 "Electrical source invalid" (Red, monitor, no notification) for 3 min,
+  then for 36 s at 20:54 and 7 s at 23:11. While H001 is open the Tab5 is in Monitor:
+  its holds are released and other events frozen. Owner to say what happened then.
+  The silent alert's state is unchanged since its forced first run, as expected with
+  no silence; its scheduled runs show only in the Netlify log.
+- F (plan). Soak at least 13 days with no restart. The tick counter wraps at 12.4 days, and
   those days give the heap stat its baseline. Outage tests during the soak: internet
   only for 30-60 minutes (both alert messages should arrive), and router off for 10
   minutes. The 100-record queue lasts about 12 hours when quiet and about 4 hours on a

@@ -41,6 +41,12 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   Shelly link is what would push a cycle past its 2 s budget. The Tab5's Wi-Fi is better
   at the PC than at the tank, and the weak link is the wellhead end, the Shelly 1's
   network (owner), so that 854 ms is the wellhead link, not the Tab5's.
+- **RTDB timeout:** the evidence M6.44 was built to collect is in. Over 29 Sep-5 Oct
+  CloudAvailable went false 125 times, nearly all RTDB calls timing out (errno 116) at
+  RTDB_TIMEOUT_S = 1 s, across current-observation, rules-metadata, global-enable,
+  operator-command, presence and sync-state; telemetry posts almost never. Raising it to
+  2 s is the candidate, a device change for after the freeze. Harmless meanwhile: each
+  drop recovers within seconds and nothing protective depends on the cloud.
 - **Simulator as a test:** the owner's concept, worth keeping, but not yet something to
   rely on (29 Sep). Known oddities: E002, P001, P013 and W09 open in a normal run, and
   P013 opens at cycle 2 for reasons nobody has examined. Qualify it against recorded
