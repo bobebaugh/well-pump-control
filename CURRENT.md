@@ -275,6 +275,16 @@ deploy costs 15, so main moves once.
   sent, correctly: no silence since the main deploy has lasted 30 minutes.
   The silent alert's state is unchanged since its forced first run, as expected with
   no silence; its scheduled runs show only in the Netlify log.
+- F result, checked 12 Oct 13:06 UTC, read-only, 7,208 records: passed. One session for
+  13 days with no restart. The tick counter wrapped about 11 Oct 23:37 UTC with no
+  effect: no gap, cycle sequence and reported uptime continuous, the 10-minute health
+  record on time. No receipt gap over 15 minutes; receipt lag steady near 2 s every day,
+  so the daily resync held the clock. Heap free after collection 22.45 MB every day and
+  lowest free 22.43 MB unchanged since 2 Oct: no leak. CPU A and B faults 0, records lost
+  0, buffer at most 13%, battery 74-90%. Events: only P001 (63 pump cycles) and H001
+  (5 brief EM outages); no protection event opened. Cloud-flag drops rose from 10-34 a
+  day to 50-106 a day from 6 Oct, all RTDB calls timing out at the 1 s limit; harmless,
+  and more reason for the 2 s change in FUTURE.
 - F (plan). Soak at least 13 days with no restart. The tick counter wraps at 12.4 days, and
   those days give the heap stat its baseline. Outage tests during the soak: internet
   only for 30-60 minutes (both alert messages should arrive), and router off for 10
