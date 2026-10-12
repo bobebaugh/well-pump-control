@@ -1,5 +1,5 @@
-# Release: 2026-09-28 M6.45 — pre-freeze: local readings one at a time; health; faults.
-# DIAGNOSTIC BUILD: M6.45 keeps the edge-triggered PRINTs (tagged DIAG).
+# Release: 2026-10-12 M6.46 — running cost: cloud-flag windows match the 10-minute heartbeat.
+# DIAGNOSTIC BUILD: M6.46 keeps the edge-triggered PRINTs (tagged DIAG).
 # main.py - Tab5 well-pump observational pilot (interpreted port of
 # well-pump-control/firmware/tab5/main/app_main.cpp)
 #
@@ -69,9 +69,11 @@ STALE_AFTER_MS = SAMPLE_PERIOD_MS * 3
 # margin, so one late cycle is tolerated and a real stall is still caught. This
 # was a bare 2500 while the cadence was 1000ms; the arithmetic preserves it.
 SAMPLE_GAP_LIMIT_MS = SAMPLE_PERIOD_MS * 2 + 500
-CLOUD_TELEMETRY_FRESH_MS = 90000
+# ingest-power's heartbeat is 10 minutes (cloud.py); 12 minutes allows one late
+# heartbeat. CloudAvailable keeps its meaning; only this window changed in M6.46.
+CLOUD_TELEMETRY_FRESH_MS = 720000
 CLOUD_RTDB_FRESH_MS = 45000
-CLOUD_FAILED_RED_MS = 180000
+CLOUD_FAILED_RED_MS = 1500000
 # Free heap straight after a collection is the leak indicator; mem_free() on its
 # own mostly measures garbage awaiting the next automatic collection. Collect on
 # this period, never per cycle.
@@ -92,7 +94,7 @@ PUMP_RUNNING_THRESHOLD_W = 1000.0
 # guards, so while it was False PressurePSI was never produced at all and
 # TankFlowQuality read PRESSURE_INVALID rather than a real quality.
 PRESSURE_SENSOR_COMMISSIONED = True
-SOFTWARE_RELEASE = 'M6.45'
+SOFTWARE_RELEASE = 'M6.46'
 OPERATOR_COMMAND_LIFETIME_MS = 45000
 OPERATOR_CONFIRM_WINDOW_MS = 8000
 SHELLY_RESTART_CONFIRM_MS = 60000
@@ -5030,7 +5032,7 @@ def service_navigation():
 
 internal_antenna_ready = confirm_internal_antenna()
 log('CPU A device loop initialized; CPU B owns Wi-Fi recovery and Netlify')
-log('CPU A release M6.45: DIAG build; pre-freeze health, faults and cloud-loss cause')
+log('CPU A release M6.46: DIAG build; cloud-flag windows for the 10-minute heartbeat')
 
 # The last validated staged V3 file becomes running only across this restart
 # boundary. A later download can replace the staged file, never this object.

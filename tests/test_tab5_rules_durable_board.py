@@ -12,7 +12,7 @@ FUNCTIONS = {
     "admitted_durable_baselines", "build_durable_observation_v2",
     "_event_opening_kind", "build_current_event_board", "event_board_signature",
     "_is_number", "sample_age_ms", "transport_age_ms", "cloud_unavailable_cause",
-    "annotate_cloud_cause",
+    "annotate_cloud_cause", "add_transport_evidence",
 }
 CONSTANTS = {"SITE_ID", "DEVICE_ID", "CLOUD_TELEMETRY_FRESH_MS", "CLOUD_RTDB_FRESH_MS",
              "CLOUD_CAUSE_MAX_CHARS"}
@@ -206,6 +206,36 @@ class CloudCauseTests(unittest.TestCase):
         stale = self.logic["cloud_unavailable_cause"](self.status(
             rtdbLastAttemptOk=True, rtdbLastFailure=None, rtdbLastSuccessTicksMs=40000), 100000)
         self.assertEqual(stale, "rtdb no success for 60 s")
+
+    def test_m646_cloud_flag_window_follows_the_ten_minute_heartbeat(self):
+        # M6.46: ingest-power sends a heartbeat every 10 minutes, so the telemetry
+        # half of CloudAvailable is fresh for 12 minutes. RTDB stays at 45 s.
+        self.assertEqual(self.logic["CLOUD_TELEMETRY_FRESH_MS"], 720000)
+        self.assertEqual(self.logic["CLOUD_RTDB_FRESH_MS"], 45000)
+        add = self.logic["add_transport_evidence"]
+
+        def available(telemetry_age_ms, rtdb_age_ms=1000):
+            now = 10000000
+            observation = add({"status": {}}, {
+                "telemetryLastAttemptOk": True,
+                "telemetryLastSuccessTicksMs": now - telemetry_age_ms,
+                "rtdbLastAttemptOk": True,
+                "rtdbLastSuccessTicksMs": now - rtdb_age_ms,
+            }, now)
+            return observation["status"]["cloud_available"]
+
+        self.assertIs(available(600000), True)
+        self.assertIs(available(720000), True)
+        self.assertIs(available(720001), False)
+        self.assertIs(available(60000, rtdb_age_ms=45001), False)
+        cause = self.logic["cloud_unavailable_cause"](self.status(
+            rtdbLastAttemptOk=True, rtdbLastFailure=None,
+            rtdbLastSuccessTicksMs=990000, telemetryLastSuccessTicksMs=220000), 1000000)
+        self.assertEqual(cause, "telemetry no success for 780 s")
+        fresh = self.logic["cloud_unavailable_cause"](self.status(
+            rtdbLastAttemptOk=True, rtdbLastFailure=None,
+            rtdbLastSuccessTicksMs=990000, telemetryLastSuccessTicksMs=340000), 1000000)
+        self.assertIsNone(fresh)
 
     def test_other_reasons_and_recovery_are_left_unchanged(self):
         reasons = [

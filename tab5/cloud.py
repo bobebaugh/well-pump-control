@@ -1,4 +1,4 @@
-# Release: 2026-09-27 M6.45 — pre-freeze: failure cause, loop-fault count.
+# Release: 2026-10-12 M6.46 — running cost: 10-minute heartbeat, 10 s live reading, 20 s V3 pointer.
 """CPU B communications worker for the interpreted Tab5 pilot.
 
 This module is the sole owner of Wi-Fi activation, association, recovery,
@@ -39,7 +39,8 @@ NTP_RESYNC_MS = 86400000
 NTP_RESYNC_RETRY_MS = 3600000
 NTP_HOSTS = ('pool.ntp.org', 'time.google.com', 'time.cloudflare.com')
 PUBLISH_RETRY_MS = 60000
-HEARTBEAT_PERIOD_MS = 60000
+# Keeps only the cloud flag fresh; the Dashboard reads RTDB, never ingest-power.
+HEARTBEAT_PERIOD_MS = 600000
 MONITOR_PUBLISH_PERIOD_MS = 1000
 POWER_CHANGE_W = 50.0
 VOLTAGE_CHANGE_V = 2.0
@@ -68,8 +69,13 @@ DEVICE_SYNC_URL = 'https://well-pump-control.netlify.app/.netlify/functions/devi
 DEVICE_SYNC_TIMEOUT_S = 3
 RTDB_TIMEOUT_S = 1
 RTDB_COORDINATION_PERIOD_MS = 10000
-RULES_V3_POLL_PERIOD_MS = 10000
+# Each pointer read also refreshes the rules-state report, which the Dashboard
+# trusts for 45 s, so this must stay well under 45 s.
+RULES_V3_POLL_PERIOD_MS = 20000
 RTDB_PRESENCE_PERIOD_MS = 30000
+# The disposable live reading is written at most this often, always the latest
+# sample. The page calls a reading fresh up to 30 s old.
+CURRENT_OBSERVATION_MIN_INTERVAL_MS = 10000
 RTDB_RETRY_BASE_MS = 5000
 RTDB_RETRY_MAX_MS = 60000
 RTDB_MIN_OPERATION_GAP_MS = 100
@@ -1478,6 +1484,7 @@ def _new_rtdb_schedule(now):
         'failureCount': 0,
         'nextOperationAt': now,
         'lastCurrentSequence': None,
+        'nextCurrentAt': now,
         'nextPresenceAt': now,
         'nextCoordinationAt': now,
         'coordinationStage': None,
@@ -1576,7 +1583,9 @@ def _next_rtdb_action(schedule, now, current_sequence=None):
         return schedule['coordinationStage']
     if time.ticks_diff(now, schedule['nextPresenceAt']) >= 0:
         return 'presence'
-    if current_sequence is not None and current_sequence != schedule['lastCurrentSequence']:
+    if (current_sequence is not None and
+            current_sequence != schedule['lastCurrentSequence'] and
+            time.ticks_diff(now, schedule['nextCurrentAt']) >= 0):
         return 'current-observation'
     return None
 
@@ -1688,6 +1697,9 @@ def _run_rtdb_step(schedule, latest_observation):
         elif action == 'operator-command':
             schedule['nextCoordinationAt'] = time.ticks_add(
                 completed_at, RTDB_COORDINATION_PERIOD_MS)
+        elif action == 'current-observation':
+            schedule['nextCurrentAt'] = time.ticks_add(
+                completed_at, CURRENT_OBSERVATION_MIN_INTERVAL_MS)
         _complete_rtdb_action(schedule, action, completed_at, True)
         _record_transport_result('rtdb', True, completed_at)
         return action
@@ -2004,7 +2016,7 @@ def start():
         if _started:
             return False
         _started = True
-        log('CPU B release M6.45: failure cause; loop-fault count')
+        log('CPU B release M6.46: 10-minute heartbeat; 10 s live reading; 20 s V3 pointer')
         _thread.start_new_thread(_worker, ())
         return True
     finally:

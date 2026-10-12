@@ -80,7 +80,12 @@ battery and no cloud keeps pressure and every pressure rule from the first cycle
 ## On tab5-working, not yet on Tab5
 
 Keep this list current on every tab5-working change; clear it when Tab5 advances.
-Empty: on 5 October, on the owner's direction, Tab5 was fast-forwarded to tab5-working
+
+| Change | Files |
+| --- | --- |
+| M6.46 running cost (pilot-working CURRENT, decision 8): ingest-power heartbeat 60 s to 10 minutes; cloud-flag telemetry freshness 90 s to 12 minutes and screen red 180 s to 25 minutes; RTDB live reading at most every 10 s, latest value, first after boot at once; V3 pointer 10 s to 20 s. Not installed. | cloud.py, pilot.py |
+
+Before M6.46: on 5 October, on the owner's direction, Tab5 was fast-forwarded to tab5-working
 (was 9e1accb, M6.43). Tab5 now holds M6.45 as installed on 29 September from
 tab5-working 462a4f3: pilot.py and cloud.py M6.45, main.py M6.41. Evidence: the owner's
 install, the M6.45 stamp on the System page and the records since; the device files

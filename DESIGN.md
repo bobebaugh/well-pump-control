@@ -119,6 +119,13 @@ RTDB holds replaceable current observations, device presence, operator coordinat
 package pointers and device package state. Firestore holds selected observations,
 authoring, immutable releases and derived event history. Both are the existing
 well-pump-control project; web clients go through Netlify functions.
+From M6.46 CPU B writes the RTDB current observation at most every 10 s, always the
+latest sample and the first one after boot at once, behind coordination (10 s),
+presence (30 s) and durable records; the Dashboard reads it, so it updates within about
+10 s. The V3 package pointer is read every 20 s; each read also refreshes the
+rules-state report the Dashboard trusts for 45 s. ingest-power receives a 10-minute
+heartbeat plus the 50 W / 2 V change sends; it keeps only the cloud flag fresh.
+Rules, sampling, records, event boards and protection stay on the 2-second cycle.
 
 Durable observation v2 includes every logging-enabled field, explicit unavailable
 reasons and coalesced selection reasons. Change/Delta compare against the last
@@ -126,6 +133,12 @@ available value admitted to the RAM queue. Include does not trigger by itself.
 From Tab5 M6.44, a change to false of the field bound to status.cloud_available
 carries cause: CPU B's own text for the failed telemetry or RTDB call, or which
 channel's last success is stale. It is diagnostic text only.
+From M6.46 the telemetry half of the flag is fresh for 12 minutes (90 s before),
+matching the 10-minute heartbeat; RTDB stays at 45 s, and the screen turns red after 25
+minutes without a telemetry success (3 minutes before). The flag keeps its meaning; only
+its sensitivity changes: a Netlify-only gap under 12 minutes no longer clears it, so
+cloud-drop counts before and after M6.46 (including M6.44's history) do not compare
+directly.
 Session start, event boundaries and the ten-minute maximum interval also select
 records. Transport is an oldest-first 100-record/384-KiB RAM FIFO with discard
 accounting, not a flash outbox. A reset or long outage can lose records.

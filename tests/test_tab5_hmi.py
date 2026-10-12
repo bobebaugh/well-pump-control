@@ -281,6 +281,21 @@ class HmiFoundationTests(unittest.TestCase):
         failed = transport(telemetry_success=None, telemetry_ok=False)
         self.assertEqual(state(failed, 10000, True, True), "red")
 
+    def test_m646_cloud_color_windows_match_the_ten_minute_heartbeat(self):
+        state = self.logic["cloud_indicator_state"]
+        self.assertEqual(self.logic["CLOUD_FAILED_RED_MS"], 1500000)
+        now = 3000000
+
+        def color(telemetry_age_ms):
+            return state(transport(telemetry_success=now - telemetry_age_ms,
+                                   rtdb_success=now - 1000), now, True, True)
+
+        self.assertEqual(color(600000), "green")
+        self.assertEqual(color(720000), "green")
+        self.assertEqual(color(780000), "yellow")
+        self.assertEqual(color(1500000), "yellow")
+        self.assertEqual(color(1500001), "red")
+
     def test_direct_page_target_recovers_a_missed_release(self):
         allowed = self.logic["navigation_selection_allowed"]
         now = self.logic["HMI_PAGE_NOW"]

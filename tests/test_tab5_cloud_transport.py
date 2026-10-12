@@ -847,6 +847,112 @@ class CloudTransportTests(unittest.TestCase):
             self.cloud.time.ticks_ms = original_ticks
             self.cloud._rtdb_put = original_put
 
+    def test_m646_timing_constants(self):
+        self.assertEqual(self.cloud.HEARTBEAT_PERIOD_MS, 600000)
+        self.assertEqual(self.cloud.POWER_CHANGE_W, 50.0)
+        self.assertEqual(self.cloud.VOLTAGE_CHANGE_V, 2.0)
+        self.assertEqual(self.cloud.CURRENT_OBSERVATION_MIN_INTERVAL_MS, 10000)
+        self.assertEqual(self.cloud.RULES_V3_POLL_PERIOD_MS, 20000)
+        # The Dashboard trusts the rules-state report, refreshed by each pointer
+        # read, for 45 s (operator-control-contract PRESENCE_FRESH_MS).
+        self.assertLess(self.cloud.RULES_V3_POLL_PERIOD_MS, 45000)
+        self.assertEqual(self.cloud.RTDB_COORDINATION_PERIOD_MS, 10000)
+        self.assertEqual(self.cloud.RTDB_PRESENCE_PERIOD_MS, 30000)
+
+    def test_live_reading_first_at_once_then_at_most_every_10_s_latest_value(self):
+        schedule = self.cloud._new_rtdb_schedule(1000)
+        schedule["phase"] = "ready"
+        schedule["auth"] = {
+            "idToken": "EXAMPLE_ONLY_ID_TOKEN",
+            "rtdbUrl": "https://well-pump-control-default-rtdb.firebaseio.com",
+            "expiresAtTicks": 10000000,
+        }
+        schedule["exchangeId"] = (
+            "20260824200000-sync-boot_12345678-0000000001")
+        schedule["nextPresenceAt"] = 9999999
+        schedule["nextCoordinationAt"] = 9999999
+        written = []
+        clock = [1000]
+        original_ticks = self.cloud.time.ticks_ms
+        original_put = self.cloud._rtdb_put
+        try:
+            self.cloud.time.ticks_ms = lambda: clock[0]
+            self.cloud._rtdb_put = lambda _auth, path, value: written.append(
+                (clock[0], path, value["sequence"]))
+            # A 2-second sample cadence for 31 s.
+            for sequence in range(1, 17):
+                clock[0] = 1000 + (sequence - 1) * 2000
+                self.cloud._run_rtdb_step(
+                    schedule, {"schemaVersion": 1, "sequence": sequence})
+        finally:
+            self.cloud.time.ticks_ms = original_ticks
+            self.cloud._rtdb_put = original_put
+
+        self.assertTrue(all(path.endswith("/currentObservation")
+                            for _, path, _ in written))
+        # First sample after boot goes at once; later writes are 10 s apart and
+        # carry the newest sample, not the one that was waiting.
+        self.assertEqual([(at, seq) for at, _, seq in written],
+                         [(1000, 1), (11000, 6), (21000, 11), (31000, 16)])
+
+    def test_live_reading_limit_never_delays_presence_or_coordination(self):
+        schedule = self.cloud._new_rtdb_schedule(0)
+        schedule["phase"] = "ready"
+        schedule["auth"] = {"expiresAtTicks": 10000000}
+        schedule["lastCurrentSequence"] = 1
+        schedule["nextCurrentAt"] = 50000
+        schedule["nextPresenceAt"] = 0
+        self.assertEqual(self.cloud._next_rtdb_action(schedule, 0, 2), "global-enable")
+        schedule["coordinationStage"] = None
+        schedule["nextCoordinationAt"] = 10000
+        self.assertEqual(self.cloud._next_rtdb_action(schedule, 0, 2), "presence")
+        schedule["nextPresenceAt"] = 30000
+        self.assertIsNone(self.cloud._next_rtdb_action(schedule, 1000, 2))
+        self.assertEqual(self.cloud._next_rtdb_action(schedule, 50000, 2),
+                         "global-enable")
+
+    def test_failed_live_reading_retries_after_backoff_not_after_10_s(self):
+        schedule = self.cloud._new_rtdb_schedule(0)
+        schedule["phase"] = "ready"
+        schedule["auth"] = {"expiresAtTicks": 10000000}
+        schedule["nextPresenceAt"] = 9999999
+        schedule["nextCoordinationAt"] = 9999999
+        self.assertEqual(self.cloud._next_rtdb_action(schedule, 0, 1),
+                         "current-observation")
+        self.cloud._complete_rtdb_action(
+            schedule, "current-observation", 1000, False, None)
+        self.assertEqual(schedule["nextCurrentAt"], 0)
+        retry_at = schedule["nextOperationAt"]
+        self.assertLess(retry_at, 10000)
+        self.assertEqual(self.cloud._next_rtdb_action(schedule, retry_at, 1),
+                         "current-observation")
+
+    def test_v3_pointer_is_read_every_20_s(self):
+        schedule = self.cloud._new_rtdb_schedule(0)
+        schedule["auth"] = {
+            "idToken": "EXAMPLE_ONLY_ID_TOKEN",
+            "rtdbUrl": "https://well-pump-control-default-rtdb.firebaseio.com",
+            "expiresAtTicks": 10000000,
+        }
+        reads = []
+        clock = [0]
+        original_ticks = self.cloud.time.ticks_ms
+        original_get = self.cloud._rtdb_get
+        original_take = self.cloud._take_rules_v3_state
+        try:
+            self.cloud.time.ticks_ms = lambda: clock[0]
+            self.cloud._take_rules_v3_state = lambda: None
+            self.cloud._rtdb_get = lambda _auth, path: reads.append((clock[0], path))
+            for at in range(0, 45000, 1000):
+                clock[0] = at
+                self.cloud._run_rules_v3_staging_step(schedule, None)
+        finally:
+            self.cloud.time.ticks_ms = original_ticks
+            self.cloud._rtdb_get = original_get
+            self.cloud._take_rules_v3_state = original_take
+        self.assertEqual([at for at, _ in reads], [0, 20000, 40000])
+        self.assertTrue(all(path.endswith("rules/v3/current") for _, path in reads))
+
     def test_slow_fresh_current_cannot_starve_presence_or_coordination(self):
         schedule = self.cloud._new_rtdb_schedule(0)
         schedule["phase"] = "ready"
@@ -883,7 +989,10 @@ class CloudTransportTests(unittest.TestCase):
                     schedule, {"schemaVersion": 1, "sequence": sequence})
                 order.append(action)
                 actions.append(action)
-                clock[0] = schedule["nextOperationAt"]
+                # An idle step (M6.46: the live reading waiting out its 10 s
+                # limit) still lets time pass, as the worker loop does.
+                clock[0] = (schedule["nextOperationAt"] if action is not None
+                            else clock[0] + 1000)
         finally:
             self.cloud.time.ticks_ms = original_ticks
             self.cloud._rtdb_put = original_put
