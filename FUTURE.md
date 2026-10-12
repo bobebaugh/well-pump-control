@@ -243,6 +243,48 @@ unprotected smart plug both miss. Separate hardware; no change to the pump's con
   send its records to the Tab5, so blips reach the durable records with everything
   else. That would be a new Tab5 input, a device change after the freeze.
 
+## Web-Tab5 coordination store (next summer)
+
+Owner discussion, 12 October. The need is two small overwrite-latest mailboxes, a few
+KB together: an outbox the Tab5 writes (live reading, presence, rules state, command
+result) and an inbox the web writes (global enable, rules pointers, operator command).
+Append-only history stays in Firestore through ingest-record. RTDB was not the wrong
+store; the cost is the pattern: about nine separate paths, each its own request, and a
+new TLS session per request (see Running cost).
+
+- **Target: a Cloudflare Durable Object** on the owner's existing Cloudflare account and
+  domain. One object holds both mailboxes in its SQLite storage. The Tab5 keeps one
+  outbound WebSocket: readings go up, commands are pushed down, and presence is the
+  socket itself. The page opens its own socket and is pushed readings, so no polling;
+  the object asks the Tab5 for fast readings only while a page is connected (capped at
+  15 minutes). Workers Free limits per day: 100K requests (incoming WebSocket messages
+  count 20:1, outgoing free), 100K SQLite row writes, 13,000 GB-s; no bandwidth
+  charge. Even 2-second readings all day use a few percent. Over a limit, requests
+  fail until 00:00 UTC rather than bill. Workers KV does not fit: 1,000 writes a day.
+- **First test:** a Tab5 WebSocket client (TLS, UIFlow MicroPython) soaked through Wi-Fi
+  drops and router restarts on CPU B without starving protection. Also needed: a device
+  credential the object can verify (Netlify-minted token or device key) and the beta
+  password covering the page's socket (Netlify-minted short-lived pass). Code is
+  JavaScript like the Netlify functions; Firestore and the Netlify site stay.
+- **Fallback if the Tab5 cannot hold a socket: two mailboxes in RTDB.** One multi-path
+  PATCH writes the whole outbox, one GET reads the inbox parent every 10 s; presence
+  folds into the outbox timestamp. About 1.4K writes and 8.6K reads a day, about 2 GB a
+  month, inside the free 10 GB. Each inbox writer updates only its own child. Items keep
+  their own observation time, units and validity. Optional later step: RTDB streaming
+  (Accept: text/event-stream) for the inbox, which pushes commands but still needs
+  separate write requests, presence writes and a hand-written MicroPython client
+  (keep-alive watchdog, hourly auth_revoked reconnect, redirects).
+- **Other options weighed:** MQTT (HiveMQ or EMQX free tiers) fits technically but adds
+  a vendor and changes the web side. Firebase Storage files bill per operation (about
+  $0.30 a month at mailbox rates; needs no-cache headers, still polls). Cloudflare R2 is
+  free at mailbox rates but needs new credentials.
+- **Rejected:** a firewall port forward to the Tab5 (exposes the protection device and
+  WebREPL to internet scanners; dynamic address and CGNAT risk; a new control path).
+  Code on the UniFi gateway (unsupported; community on-boot tools break on firmware
+  upgrades; makes the firewall a server). A home hub (another always-on box to keep).
+  Google Drive or OneDrive (broad account credential on the device, rate limits,
+  revision churn, still polls).
+
 ## Technical record consistency (owner's document, not the app)
 
 Found reading revision 3 of the owner's technical record (linked from AGENTS) on 27

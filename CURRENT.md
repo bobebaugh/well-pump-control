@@ -86,6 +86,7 @@ when pilot is advanced. Pilot was fast-forwarded to pilot-working on 28 Septembe
 | Change | Kind |
 | --- | --- |
 | Live-reading cadence corrected and 12 Oct running-cost analysis (CURRENT, FUTURE) | Docs only |
+| Next-summer coordination store options recorded (FUTURE) | Docs only |
 
 ## Maintenance baseline
 
