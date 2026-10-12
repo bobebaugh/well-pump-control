@@ -449,6 +449,12 @@ Reduction options are in FUTURE, Running cost.
    retiring ingest-power, one coordination read instead of several, per-device
    overrides, a new platform.
 
+   Installed 12 Oct (owner's report): M6.46 from tab5-working 78733ab, session
+   boot_fe722e651806 from 19:21 UTC, still on package v50, no open events, faults 0. The
+   longer H001 trigger and the repeat power cut are still to do. The heartbeat cadence
+   can be read from sites/well-main/current/well-power (publishReason heartbeat about
+   every 10 minutes once the soak is under way).
+
    One visit, one restart: install M6.46, publish the longer H001 trigger, repeat the
    short power cut watching whether the Tab5 reboots when power returns. Then a 3-5 day
    soak, enough since only timing changes: expect RTDB about 260 MB a day (from 534),
