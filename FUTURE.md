@@ -175,6 +175,30 @@ Source: the owner's well-head flow test (details kept outside the repo). Softwar
   power-cycle only the adapter and watch idle watts. An idle step may be network-side, not
   pump-side.
 
+## Utility power-blip logger (next summer)
+
+The owner's specification (12 October, held by the owner) for a standalone logger of
+utility sags and brief outages, which the Shelly EM's averaged readings and an
+unprotected smart plug both miss. Separate hardware; no change to the pump's control.
+
+- A relay with a 120 V AC coil on an unprotected outlet acts as the comparator: its
+  contact opens within 10-18 ms when the line drops below about 80% (about 95 V).
+- A Shelly Plus 1 or Shelly 1 Gen3 on a UPS-backed outlet reads that contact on its SW
+  input (input type Switch, mode Detached), so it never browns out and keeps Wi-Fi and
+  SNTP time. The unprotected circuit connects only to the relay coil; the relay
+  contact is the barrier between the two circuits.
+- A startup script records each drop and restore time and the duration as a key in
+  the Shelly's own KVS flash, readable at /rpc/KVS.List with no cloud or server.
+- Before building: check how many KVS keys the device holds, since the script adds one
+  per event and never prunes. A drop the Shelly sees while its own UPS power is also
+  lost is not recorded. Give the Shelly a DHCP reservation like the others.
+- Ring lights: after most of these failures some Ring lights come on and stay on. The
+  process also needs a way to turn them off after each event. Ring has no local
+  control interface, so the method is open: a Ring setting for power-restore
+  behaviour, an automation through Ring's own service, or switching their power.
+- Possible link to this app: compare logged blips with the Shelly EM dropouts and
+  H001 openings in the durable records.
+
 ## Technical record consistency (owner's document, not the app)
 
 Found reading revision 3 of the owner's technical record (linked from AGENTS) on 27
