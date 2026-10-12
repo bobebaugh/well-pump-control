@@ -128,9 +128,10 @@ Options, largest benefit first:
 - **One coordination read instead of three or four:** read a common parent (or move
   the pointers under one node) every 10 s. Cuts about 20-25K GETs a day without
   lengthening command delivery. Device and RTDB layout.
-- **Retire the ingest-power heartbeat:** base the device's cloud_available on RTDB
-  presence success, then stop ingest-power and its unread Firestore write. Roughly
-  halves device Netlify calls. Device change.
+- **Retire the ingest-power heartbeat:** base the device's cloud_available on the last
+  successful ingest-record or event-board send plus RTDB, then stop ingest-power and its
+  unread Firestore write. About two-thirds of device Netlify use. Proposed for now in
+  CURRENT, decision 8.
 - **TLS session reuse:** would remove most RTDB bytes on every path, if UIFlow
   MicroPython can keep a connection or resume a session. Research only.
 - `print=silent` on Tab5 PUTs saves little: payload is 2% of RTDB bytes.
