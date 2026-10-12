@@ -451,7 +451,14 @@ Reduction options are in FUTURE, Running cost.
 
    Installed 12 Oct (owner's report): M6.46 from tab5-working 78733ab, session
    boot_fe722e651806 from 19:21 UTC, still on package v50, no open events, faults 0. The
-   longer H001 trigger and the repeat power cut are still to do. The heartbeat cadence
+   longer H001 trigger and the repeat power cut are still to do. v51
+   (20261012193722-event-v3-v51) published 19:37 UTC and adopted at a web restart,
+   session boot_879df76c799b from about 19:39 UTC. Checked in the release: H001 opens
+   after the EM is unavailable for 60 s (1 observation, 60 s; was 5 observations),
+   closes after 3 available readings as before, no notification; P001 notifies on
+   opening only. During the soak the Verizon texts arrived well despite the volume,
+   spread out rather than in bursts (owner); the 28 Sep hold may have been a bad day.
+   Left: the repeat power cut. The heartbeat cadence
    can be read from sites/well-main/current/well-power (publishReason heartbeat about
    every 10 minutes once the soak is under way).
 
