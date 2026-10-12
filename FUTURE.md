@@ -197,7 +197,9 @@ unprotected smart plug both miss. Separate hardware; no change to the pump's con
   control interface, so the method is open: a Ring setting for power-restore
   behaviour, an automation through Ring's own service, or switching their power.
 - Possible link to this app: compare logged blips with the Shelly EM dropouts and
-  H001 openings in the durable records.
+  H001 openings in the durable records. The owner's thought: the logger's Shelly could
+  send its records to the Tab5, so blips reach the durable records with everything
+  else. That would be a new Tab5 input, a device change after the freeze.
 
 ## Technical record consistency (owner's document, not the app)
 
