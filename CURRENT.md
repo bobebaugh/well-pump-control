@@ -458,7 +458,10 @@ Reduction options are in FUTURE, Running cost.
    closes after 3 available readings as before, no notification; P001 notifies on
    opening only. During the soak the Verizon texts arrived well despite the volume,
    spread out rather than in bursts (owner); the 28 Sep hold may have been a bad day.
-   Left: the repeat power cut. The heartbeat cadence
+   The repeat power cut is skipped (owner, 12 Oct): it would only show whether the Tab5
+   reboots when power returns, which affects queued records, not protection, and M6.46
+   changes nothing about power. Soak counts from v51's session, about 19:39 UTC on 12
+   Oct, and ends 15-17 Oct. The heartbeat cadence
    can be read from sites/well-main/current/well-power (publishReason heartbeat about
    every 10 minutes once the soak is under way).
 
