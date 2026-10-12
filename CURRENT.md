@@ -83,7 +83,7 @@ Keep this list current on every tab5-working change; clear it when Tab5 advances
 
 | Change | Files |
 | --- | --- |
-| 78733ab: M6.46 running cost (pilot-working CURRENT, decision 8): ingest-power heartbeat 60 s to 10 minutes; cloud-flag telemetry freshness 90 s to 12 minutes and screen red 180 s to 25 minutes; RTDB live reading at most every 10 s, latest value, first after boot at once; V3 pointer 10 s to 20 s. Not installed. | cloud.py, pilot.py |
+| 78733ab: M6.46 running cost (pilot-working CURRENT, decision 8): ingest-power heartbeat 60 s to 10 minutes; cloud-flag telemetry freshness 90 s to 12 minutes and screen red 180 s to 25 minutes; RTDB live reading at most every 10 s, latest value, first after boot at once; V3 pointer 10 s to 20 s. Installed 12 Oct, session boot_fe722e651806; Tab5 promotion awaits the owner. | cloud.py, pilot.py |
 
 Before M6.46: on 5 October, on the owner's direction, Tab5 was fast-forwarded to tab5-working
 (was 9e1accb, M6.43). Tab5 now holds M6.45 as installed on 29 September from
