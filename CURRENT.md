@@ -88,6 +88,7 @@ when pilot is advanced. Pilot was fast-forwarded to pilot-working on 28 Septembe
 | cf5a1f8: Live-reading cadence corrected and 12 Oct running-cost analysis (CURRENT, FUTURE) | Docs only |
 | 21e6502: Next-summer coordination store options recorded (FUTURE) | Docs only |
 | 7ed07bb, then the approved rewrite: running-cost change (CURRENT decision 8) | Docs only |
+| Running-cost web half (decision 8): home page polls the live reading every 5 s; after 15 minutes without interaction it pauses the live and operator polls with a Resume control, and paused tiles, health rows and events say paused. Pairs with M6.46 on tab5-working, but neither depends on the other. | Web |
 
 ## Maintenance baseline
 
@@ -358,7 +359,7 @@ Owner tasks, no code:
   1 September, so it does not depend on anyone viewing. Firestore, 20-27 Sep: 458K
   reads (peak 160K a day during dashboard work), 39K writes, 13K deletes; pennies.
 
-Live readings need no change for the freeze. The Tab5 posts to ingest-power on a
+Live readings before M6.46 (M6.45, installed). The Tab5 posts to ingest-power on a
 50 W or 2 V change or a 60-second heartbeat; the 1 Hz path is dormant since
 monitor-session (and its 15-minute limit) was retired. Separately it writes RTDB
 currentObservation after every 2-second sample whether or not anyone watches, and the
@@ -423,8 +424,11 @@ Reduction options are in FUTURE, Running cost.
 8. Running-cost change, approved by the owner on 12 October: reopen the freeze once,
    for a problem the soak found. Netlify's 300 free credits are shared with the owner's
    other sites and pause all of them at zero; Google bills this project alone and is
-   predictable. Measured basis: "Live readings" above and FUTURE, Running cost. Not yet
-   built.
+   predictable. Measured basis: "Live readings" above and FUTURE, Running cost.
+   Built 12 October, not installed or promoted: M6.46 on tab5-working, the web half on
+   pilot-working (see both promotion lists). Tab5 host tests: 300 run, only the four
+   known Wi-Fi power-save errors; web: npm test 421 pass. Paused-view rendering was
+   also checked in Chromium against stubbed functions.
 
    M6.46, timing constants and one condition only (cloud.py and pilot.py):
 

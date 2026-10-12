@@ -23,6 +23,10 @@
   </header>
 
   <main>
+    <div class="live-paused" id="live-paused" role="status" hidden>
+      <span>Live view paused after 15 minutes without interaction. Readings and control status are not being checked.</span>
+      <button type="button" id="live-resume" class="secondary-button compact-button">Resume</button>
+    </div>
     <section class="status-strip" aria-label="Current pump status">
       <div class="pump-state unknown" id="pump-state">
         <span class="state-dot"></span>

@@ -572,3 +572,12 @@ input:focus, select:focus, textarea:focus { outline: 2px solid rgba(67,168,255,.
 .control-button:disabled { opacity: .45; cursor: not-allowed; }
 @media (max-width: 700px) { .protection-strip { grid-template-columns: 1fr; } .protection-item { border-right: 0; border-bottom: 1px solid var(--line); } .protection-item:last-child { border-bottom: 0; } }
 .engine-editor input:disabled, .engine-editor select:disabled, .engine-editor textarea:disabled { opacity: .7; cursor: not-allowed; }
+
+/* Paused live view (M6.46 web): its own state, never unknown, stale or unavailable. */
+.live-paused { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 10px 16px; border: 1px solid rgba(120,160,220,.35); border-radius: var(--radius); background: rgba(120,160,220,.10); color: #b9cbe6; }
+.live-paused[hidden] { display: none; }
+.tag.paused { border-color: rgba(120,160,220,.35); color: #b9cbe6; }
+.health-dot.paused { background: #7d9cc8; }
+.binary-value.paused { color: #b9cbe6; }
+.protection-item .paused { color: #b9cbe6; }
+.pump-state.paused .state-dot { background: #7d9cc8; }

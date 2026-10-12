@@ -120,6 +120,12 @@ available value admitted to the RAM queue. Include does not trigger by itself.
 From Tab5 M6.44, a change to false of the field bound to status.cloud_available
 carries cause: CPU B's own text for the failed telemetry or RTDB call, or which
 channel's last success is stale. It is diagnostic text only.
+From M6.46 the telemetry half of the flag is fresh for 12 minutes (90 s before),
+matching ingest-power's 10-minute heartbeat; RTDB stays at 45 s, and the Tab5 screen
+turns red after 25 minutes without a telemetry success (3 minutes before). The flag keeps
+its meaning; only its sensitivity changes: a Netlify-only gap under 12 minutes no longer
+clears it, so cloud-drop counts before and after M6.46 (including M6.44's history) do
+not compare directly.
 Session start, event boundaries and the ten-minute maximum interval also select
 records. Transport is an oldest-first 100-record/384-KiB RAM FIFO with discard
 accounting, not a flash outbox. A reset or long outage can lose records.
@@ -162,7 +168,14 @@ reporting only: a send failure is recorded on the event record and never changes
 response to the device, and no inhibition is gated on it. Nothing polls or is scheduled,
 so an unreachable function is not detectable from the cloud.
 
-The web home displays live RTDB observations and event state. Every live reading,
+The web home displays live RTDB observations and event state. From M6.46 the Tab5
+writes the RTDB current observation at most every 10 s, always the latest sample, and
+the page reads it every 5 s, so the Dashboard, pump starts included, updates within
+about 10 s (worst age about 17 s against the 30 s fresh rule). After 15 minutes without
+a pointer, key or touch the page stops the live and operator polls and says so: every
+live tile, health row and the events panel read paused, never unknown, stale or
+unavailable. Any interaction, the Resume control or showing the tab again resumes at
+once; a hidden tab keeps the existing visibility guards. Every live reading,
 the pump badge and the Tab5/meter/Shelly 1 health rows come from one observation
 record, so the state and the numbers beside it are the same instant. The badge
 reads SW(0) directly and falls back to meter watts only when Shelly 1 is
@@ -206,6 +219,10 @@ observation cannot present itself as fresh.
 
 ingest-power still accepts device telemetry and writes the Firestore current
 document, which no longer has a reader; it remains only until the device's
-cloud_available formula stops depending on its result. current-power and
+cloud_available formula stops depending on its result. From M6.46 it receives a
+10-minute heartbeat plus the 50 W / 2 V change sends and keeps only the cloud flag
+fresh; the Dashboard never reads it. The V3 package pointer is read every 20 s; each
+read refreshes the rules-state report the Dashboard trusts for 45 s, so the staged
+message still holds. current-power and
 monitor-session are retired, and with them the 1 Hz live view. User Monitor is a
 separate RTDB operator control and is unaffected.

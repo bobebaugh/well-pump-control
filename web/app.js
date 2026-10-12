@@ -40,13 +40,22 @@ const protShellyDetail = document.querySelector("#prot-shelly-detail");
 const protTab5 = document.querySelector("#prot-tab5");
 const protMode = document.querySelector("#prot-mode");
 const protModeDetail = document.querySelector("#prot-mode-detail");
+const livePausedBanner = document.querySelector("#live-paused");
+const liveResume = document.querySelector("#live-resume");
 // Status is open to read; the actions unlock only once a password is accepted.
 let operatorSignedIn = false;
 
-// Tab5 mirrors its whole observation to RTDB about every two seconds, so the
-// live readings follow that rather than the 60s Firestore cadence. Polling
-// faster than the device writes only burns requests for the same record.
-const OBSERVATION_REFRESH_MS = 2000;
+// The Tab5 mirrors its whole observation to RTDB at most every 10 s (M6.46), so
+// the live readings follow that rather than a Firestore cadence. Polling faster
+// than the device writes only burns requests for the same record.
+const OBSERVATION_REFRESH_MS = 5000;
+// A visible tab nobody touches would otherwise poll forever against the shared
+// Netlify credits. After this long without a pointer, key or touch the live and
+// operator polls stop until the next interaction; the retired 1 Hz live-view session
+// carried the same 15-minute cap.
+const LIVE_IDLE_PAUSE_MS = 15 * 60 * 1000;
+let lastInteractionAt = Date.now();
+let livePaused = false;
 const HISTORY_REFRESH_MS = 300000;
 // A month is about 11,000 reads, and a run or two a day barely moves it, so it
 // is re-read at the endpoint's own cache age rather than every five minutes.
@@ -231,8 +240,13 @@ async function checkOperatorStatus({ promptForKey = false } = {}) {
     operatorTimer = setTimeout(checkOperatorStatus, 5000);
     return;
   }
+  if (!promptForKey && (livePaused || liveIdleExpired(Date.now()))) {
+    pauseLive();
+    return;
+  }
   try {
     const body = await fetchStatus("/.netlify/functions/operator-control", key ? { headers: { "X-Pilot-Key": key } } : {});
+    if (livePaused && !promptForKey) return;
     setSignedIn(body.signedIn === true);
     renderOperatorStatus(body.control);
     operatorTimer = setTimeout(checkOperatorStatus, operatorSignedIn ? 5000 : 15000);
@@ -416,8 +430,9 @@ function renderProtection(data, fresh) {
 function renderObservation(data) {
   const values = data.values || {};
   const shelly1 = data.shelly1 || {};
-  // Two seconds of cadence plus a little slack. Past that the number on screen
-  // is a memory, and saying so matters more than showing a stale digit.
+  // The Tab5 writes at most every 10 s and the page reads every 5 s, so a healthy
+  // reading is under about 17 s old. Past 30 s the number on screen is a memory,
+  // and saying so matters more than showing a stale digit.
   const fresh = data.ageSeconds !== null && data.ageSeconds <= 30;
   liveReading = { fresh, ageSeconds: data.ageSeconds, at: Date.now() };
   renderEventStatus();
@@ -678,9 +693,17 @@ async function checkObservation() {
     observationTimer = setTimeout(checkObservation, OBSERVATION_REFRESH_MS);
     return;
   }
+  if (livePaused || liveIdleExpired(Date.now())) {
+    pauseLive();
+    return;
+  }
   try {
-    renderObservation(await fetchStatus("/.netlify/functions/current-observation"));
+    const data = await fetchStatus("/.netlify/functions/current-observation");
+    // A reply that lands after the page paused must not overwrite the paused view.
+    if (livePaused) return;
+    renderObservation(data);
   } catch (error) {
+    if (livePaused) return;
     liveReading = { fresh: false, ageSeconds: null, at: Date.now() };
     renderEventStatus();
     if (error.body?.code === "telemetry_missing") clearObservation();
@@ -712,6 +735,7 @@ function compactAge(seconds) { return seconds < 120 ? `${seconds}s` : `${Math.ro
 function eventBoardStatus(board, live, nowMs) {
   if (!board) return "No successful event board is stored yet.";
   const last = board.lastReportAt ? formatTime(new Date(board.lastReportAt)) : "an unknown time";
+  if (live?.paused) return `Live view paused, so these open events are as of the last board, ${last}. Resume to check them live.`;
   const known = Boolean(live) && nowMs - live.at <= LIVE_STATUS_MAX_AGE_MS;
   if (known && live.fresh) return `Current: the Tab5 is reporting live and sends any change in open events at once. Last board ${last}.`;
   const age = known && Number.isFinite(live.ageSeconds) ? `${compactAge(live.ageSeconds)} old` : "unavailable";
@@ -768,6 +792,57 @@ async function checkServices() {
   checkTime.textContent = `Services checked ${formatTime(checkedAt)}`;
 }
 
+function liveIdleExpired(nowMs) { return nowMs - lastInteractionAt >= LIVE_IDLE_PAUSE_MS; }
+
+// Paused is its own state: every live tile says so rather than reading as unknown,
+// stale or unavailable, because nothing has failed -- the page simply stopped asking.
+function renderPaused() {
+  const text = "Paused";
+  pumpState.className = "pump-state paused";
+  pumpState.querySelector("strong").textContent = "Live view paused";
+  for (const element of [pressureValue, powerValue, voltageValue, pfValue]) element.textContent = text;
+  for (const element of [sw0Value, rly0Value]) { element.textContent = text; element.className = "binary-value paused"; }
+  tankPressure.textContent = text;
+  tankGallons.textContent = text;
+  tankFlow.textContent = text;
+  tankWater.style.height = "";
+  tankWater.classList.remove("live");
+  pressureTag.textContent = "Live view paused";
+  pressureTag.className = "tag paused";
+  for (const row of [tab5Row, shellyRow, pressureRow, shelly1Row]) setHealth(row, "paused", "Live view paused");
+  for (const element of [protShelly, protTab5, protMode]) setProtection(element, text, "paused");
+  protShellyDetail.textContent = "";
+  protModeDetail.textContent = "";
+  operatorSummary.textContent = "Live view paused; control status is not being checked.";
+  liveReading = { paused: true, fresh: false, ageSeconds: null, at: Date.now() };
+  renderEventStatus();
+}
+
+function pauseLive() {
+  clearTimeout(observationTimer);
+  clearTimeout(operatorTimer);
+  if (livePaused) return;
+  livePaused = true;
+  livePausedBanner.hidden = false;
+  renderPaused();
+}
+
+function resumeLive() {
+  lastInteractionAt = Date.now();
+  if (!livePaused) return;
+  livePaused = false;
+  livePausedBanner.hidden = true;
+  liveReading = null;
+  clearObservation();
+  checkObservation();
+  checkOperatorStatus();
+}
+
+for (const type of ["pointerdown", "pointermove", "wheel", "keydown", "touchstart"]) {
+  document.addEventListener(type, resumeLive, { passive: true });
+}
+liveResume.addEventListener("click", resumeLive);
+
 operatorUnlock.addEventListener("click", toggleSignIn);
 operatorButtons.forEach(button => button.addEventListener("click", () => issueOperatorAction(button.id)));
 
@@ -776,9 +851,14 @@ operatorButtons.forEach(button => button.addEventListener("click", () => issueOp
 // whatever was on screen when it was hidden.
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
-    checkObservation();
+    // Showing the tab is a deliberate look, so it counts as interaction.
+    if (livePaused) resumeLive();
+    else {
+      lastInteractionAt = Date.now();
+      checkObservation();
+      checkOperatorStatus();
+    }
     checkHistory();
-    checkOperatorStatus();
     // These two skip their interval tick while hidden rather than rescheduling,
     // so without this they would show whatever was on screen at the last tick
     // until the interval came round again -- up to five minutes for services.
