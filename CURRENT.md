@@ -76,7 +76,7 @@ to pilot. Docs-only commits change no behavior. Empty: on 29 September, on the o
 direction, pilot was fast-forwarded to pilot-working and main to pilot (main was
 69601cc), the single main deploy of step C. Main now carries everything listed before,
 from af8d8e2 through ca2079b, including the silent-device alert, which runs only on
-production. Web tests: 415 pass. The Tab5 still posts to pilot until M6.45 is installed.
+production. Web tests: 415 pass. The Tab5 has posted to main since M6.45 was installed on 29 September.
 
 ## On pilot-working, not yet on pilot
 
