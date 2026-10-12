@@ -81,7 +81,11 @@ production. Web tests: 415 pass. The Tab5 still posts to pilot until M6.45 is in
 ## On pilot-working, not yet on pilot
 
 Keep this list current on every pilot-working change and move rows to the table above
-when pilot is advanced. Empty: pilot was fast-forwarded to pilot-working on 28 September.
+when pilot is advanced. Pilot was fast-forwarded to pilot-working on 28 September.
+
+| Change | Kind |
+| --- | --- |
+| Live-reading cadence corrected and 12 Oct running-cost analysis (CURRENT, FUTURE) | Docs only |
 
 ## Maintenance baseline
 
@@ -352,10 +356,16 @@ Owner tasks, no code:
   1 September, so it does not depend on anyone viewing. Firestore, 20-27 Sep: 458K
   reads (peak 160K a day during dashboard work), 39K writes, 13K deletes; pennies.
 
-Live readings need no change for the freeze. With no one watching, the Tab5 posts on a
-material power or voltage change or a 60-second heartbeat; 1 Hz runs only while a
-screen has monitoring on. The steady RTDB traffic is the 10-second coordination poll
-that lets a web restart arrive within its 45-second lifetime, and the 30-second presence.
+Live readings need no change for the freeze. The Tab5 posts to ingest-power on a
+50 W or 2 V change or a 60-second heartbeat; the 1 Hz path is dormant since
+monitor-session (and its 15-minute limit) was retired. Separately it writes RTDB
+currentObservation after every 2-second sample whether or not anyone watches, and the
+home page reads it every 2 s while visible, with no idle limit. Measured 5-11 Oct: RTDB
+sent 534 MB a day over 84K HTTPS requests (55K PUT, 29K GET); 75% of the bytes are TLS
+handshakes (99.8% of requests open a new session) and 2% are payload. By request count
+the 2-second currentObservation write is about half the traffic and the 10-second
+coordination reads (global-enable, rules, command, V3 pointer) about a third.
+Reduction options are in FUTURE, Running cost.
 
 ## Next owner decisions
 

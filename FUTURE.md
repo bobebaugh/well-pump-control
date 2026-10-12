@@ -93,6 +93,48 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   demand estimate needs a separately qualified inflow model. No weather dependency or
   automatic calibration from one cycle. [#3](https://github.com/bobebaugh/well-pump-control/issues/3).
 
+## Running cost (measured 12 October 2026)
+
+Everything that runs more often than every 10 minutes. Netlify is on the free plan:
+300 credits a month shared by all five sites, and at zero every site pauses, the device
+path and silent alert included. Firebase is on Blaze: RTDB download is free to 10 GB a
+month, then about $1/GB; Firestore stays inside its daily free quota.
+
+| Activity | Rate | Relative cost |
+| --- | --- | --- |
+| Tab5 RTDB currentObservation PUT | every 2 s, always | ~half of RTDB (~8 GB/month) |
+| Tab5 RTDB coordination GETs (global-enable, rules, command) and V3 pointer GET | every 10 s | ~a third of RTDB (~5 GB/month) |
+| Tab5 RTDB presence and other PUTs (~9K/day not yet attributed, likely rulesV3State) | 30 s and up | ~15% of RTDB |
+| Tab5 ingest-power (Netlify + Firestore current write with no reader) | 60 s heartbeat | largest device Netlify caller, ~1.4K calls/day |
+| Home page current-observation (Netlify + RTDB GET) | every 2 s while visible | ~1.8K calls per watched hour |
+| Home page operator-control (four RTDB reads) | 15 s, 5 s signed in | 240-720 calls per watched hour |
+| Home page events / services / history | 60 s / 5 min / 5 min | small; history reads Firestore (see below) |
+| Tab5 to Shelly sampling | 2 s | local only, no cost |
+
+RTDB totals about 16 GB a month (about $6). TLS handshakes are 75% of its bytes, so
+cost follows request count, not payload. A watched hour costs Netlify roughly what the
+device uses in a day; a visible tab left open around the clock could exhaust the free
+credits within a week and pause the device path.
+
+Options, largest benefit first:
+
+- **Idle limit on the home page:** stop the 2-second and operator polls after about 15
+  minutes without interaction and show a resume control. Restores the old
+  monitor-session cap. Web only; protects the shared credit allowance.
+- **Write currentObservation fast only while someone watches:** the page sets a viewer
+  lease (expiring in about 15 minutes); otherwise the Tab5 writes on a material change
+  or once a minute. Cuts about 40K requests a day and brings RTDB under the free 10 GB.
+  Device, function and page together; interface change.
+- **One coordination read instead of three or four:** read a common parent (or move
+  the pointers under one node) every 10 s. Cuts about 20-25K GETs a day without
+  lengthening command delivery. Device and RTDB layout.
+- **Retire the ingest-power heartbeat:** base the device's cloud_available on RTDB
+  presence success, then stop ingest-power and its unread Firestore write. Roughly
+  halves device Netlify calls. Device change.
+- **TLS session reuse:** would remove most RTDB bytes on every path, if UIFlow
+  MicroPython can keep a connection or resume a session. Research only.
+- `print=silent` on Tab5 PUTs saves little: payload is 2% of RTDB bytes.
+
 ## Firestore reads (next summer)
 
 Durable observations never change once written, so a copy kept by the browser never
