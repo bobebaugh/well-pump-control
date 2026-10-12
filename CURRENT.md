@@ -72,23 +72,23 @@ the Tab5 but make a text message use the shorter UCS-2 segment.
 ## On pilot, not yet on main
 
 Keep this list current on every pilot promotion and clear it when main is fast-forwarded
-to pilot. Docs-only commits change no behavior. Empty: on 29 September, on the owner's
-direction, pilot was fast-forwarded to pilot-working and main to pilot (main was
-69601cc), the single main deploy of step C. Main now carries everything listed before,
-from af8d8e2 through ca2079b, including the silent-device alert, which runs only on
-production. Web tests: 415 pass. The Tab5 has posted to main since M6.45 was installed on 29 September.
+to pilot. Docs-only commits change no behavior. Main last matched pilot at a5f205b (29
+September, step C). The Tab5 has posted to main since M6.45 was installed on 29
+September, so pilot is now a test deploy that still shares live data. On 12 October, on
+the owner's direction, pilot was fast-forwarded to pilot-working; main waits until the
+owner is sure no more web changes are coming (each main deploy costs 15 credits).
+
+| Change | Kind |
+| --- | --- |
+| 5ebbcb8: Running-cost web half (decision 8): home page polls the live reading every 5 s; after 15 minutes without interaction it pauses the live and operator polls with a Resume control, and paused tiles, health rows and events say paused (units still show beside "Paused", cosmetic) | Web |
+| 778627c-01280b6: main deploy, M6.45 install, soak and running-cost records; next-summer options; decision 8 | Docs only |
+
+5ebbcb8 needs no M6.46 and M6.46 needs no web change. Web tests: 421 pass.
 
 ## On pilot-working, not yet on pilot
 
 Keep this list current on every pilot-working change and move rows to the table above
-when pilot is advanced. Pilot was fast-forwarded to pilot-working on 28 September.
-
-| Change | Kind |
-| --- | --- |
-| cf5a1f8: Live-reading cadence corrected and 12 Oct running-cost analysis (CURRENT, FUTURE) | Docs only |
-| 21e6502: Next-summer coordination store options recorded (FUTURE) | Docs only |
-| 7ed07bb, then the approved rewrite: running-cost change (CURRENT decision 8) | Docs only |
-| Running-cost web half (decision 8): home page polls the live reading every 5 s; after 15 minutes without interaction it pauses the live and operator polls with a Resume control, and paused tiles, health rows and events say paused. Pairs with M6.46 on tab5-working, but neither depends on the other. | Web |
+when pilot is advanced. Empty: pilot was fast-forwarded to pilot-working on 12 October.
 
 ## Maintenance baseline
 
