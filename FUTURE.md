@@ -130,8 +130,9 @@ Options, largest benefit first:
   lengthening command delivery. Device and RTDB layout.
 - **Retire the ingest-power heartbeat:** base the device's cloud_available on the last
   successful ingest-record or event-board send plus RTDB, then stop ingest-power and its
-  unread Firestore write. About two-thirds of device Netlify use. Proposed for now in
-  CURRENT, decision 8.
+  unread Firestore write. About two-thirds of device Netlify use. Not chosen for M6.46,
+  which lengthens the heartbeat to 10 minutes instead and keeps CloudAvailable's meaning
+  (CURRENT, decision 8); this remains the next step if credits still demand it.
 - **TLS session reuse:** would remove most RTDB bytes on every path, if UIFlow
   MicroPython can keep a connection or resume a session. Research only.
 - `print=silent` on Tab5 PUTs saves little: payload is 2% of RTDB bytes.
@@ -245,6 +246,10 @@ unprotected smart plug both miss. Separate hardware; no change to the pump's con
   else. That would be a new Tab5 input, a device change after the freeze.
 
 ## Web-Tab5 coordination store (next summer)
+
+AGENTS treats a new platform as out of scope for the beta and asks for the smaller
+alternative first: here that is the two RTDB mailboxes below, no new vendor or device
+credential. The Durable Object is the larger option if the mailboxes are not enough.
 
 Owner discussion, 12 October. The need is two small overwrite-latest mailboxes, a few
 KB together: an outbox the Tab5 writes (live reading, presence, rules state, command

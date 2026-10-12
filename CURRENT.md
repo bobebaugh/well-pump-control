@@ -85,9 +85,9 @@ when pilot is advanced. Pilot was fast-forwarded to pilot-working on 28 Septembe
 
 | Change | Kind |
 | --- | --- |
-| Live-reading cadence corrected and 12 Oct running-cost analysis (CURRENT, FUTURE) | Docs only |
-| Next-summer coordination store options recorded (FUTURE) | Docs only |
-| Running-cost change proposed for review (CURRENT decision 8) | Docs only |
+| cf5a1f8: Live-reading cadence corrected and 12 Oct running-cost analysis (CURRENT, FUTURE) | Docs only |
+| 21e6502: Next-summer coordination store options recorded (FUTURE) | Docs only |
+| 7ed07bb, then the approved rewrite: running-cost change (CURRENT decision 8) | Docs only |
 
 ## Maintenance baseline
 
@@ -420,24 +420,37 @@ Reduction options are in FUTURE, Running cost.
    single main deploy, step C of the pre-freeze round. Cloud sessions can now read records directly with
    maintenance/firestore-peek.cjs instead of from a CSV export.
 
-8. Proposed running-cost change, 12 October, for review before building. Measured
-   basis is in "Live readings" above and FUTURE, Running cost. Nothing below is built.
+8. Running-cost change, approved by the owner on 12 October: reopen the freeze once,
+   for a problem the soak found. Netlify's 300 free credits are shared with the owner's
+   other sites and pause all of them at zero; Google bills this project alone and is
+   predictable. Measured basis: "Live readings" above and FUTURE, Running cost. Not yet
+   built.
 
-   | Change | Where | Saves | Application effect |
-   | --- | --- | --- | --- |
-   | Live reading to RTDB every 10 s, not every 2-second sample | cloud.py; optional override in device_secrets.py, bounded 2-20 s | about 34,500 RTDB requests a day | Dashboard tiles refresh every 10 s; worst age about 17 s against the page's 30 s fresh limit and the operator panel's 45 s. Rules, sampling, records and protection stay on the 2-second local cycle. |
-   | V3 package pointer check every 20 s, not 10 s | cloud.py; override bounded 10-30 s | about 8,600 RTDB requests a day (each check also triggers a rules-state report) | A publish is staged within about 20 s. The Dashboard staged message keeps working: it trusts the rules-state report for 45 s, so 60 s would make it fall back to "no different staged package". |
-   | Retire the ingest-power heartbeat and change sends; CloudAvailable from the last ingest-record or event-board send succeeding (within about 12 minutes) and RTDB within 45 s | cloud.py and pilot.py (cloud-flag formula and screen red threshold only) | about 43,000 Netlify calls, about 65 credits a month | A successful durable record proves Wi-Fi, internet, Netlify, the key and the Firestore write; the heartbeat only proves Netlify answered and writes current/well-power, which nothing reads. No rule uses CloudAvailable (v50 only logs it). A Netlify-only outage shows in up to about 12 minutes instead of 90 s; Wi-Fi or internet loss still shows within 45 s through RTDB. Records after the install carry the new meaning; DESIGN says so. ingest-power stays deployed, unused, until deleted later. |
-   | Home page polls every 5 s, set by a Netlify variable; stops after 15 minutes without interaction with a resume control | current-observation, app.js | about 1,100 calls per watched hour; prevents a forgotten tab spending about 70 credits a day | Restores the cap the retired monitor-session had. At zero credits every site pauses, the device path and silent alert included. |
+   M6.46, timing constants and one condition only (cloud.py and pilot.py):
 
-   Expected result: RTDB from about 84K to about 41K requests a day (about 7.8 GB a
-   month, inside the free 10 GB, about $6 to $0); the Tab5's Netlify use from about 90
-   to about 25 credits a month. Not changed: the 10-second command reads and 30-second
-   presence (command lifetime and presence freshness are 45 s), durable-record
-   thresholds (about 560 records a day, accepted by the owner), and interface schemas.
-   One cloud.py and pilot.py install with a restart, which adopts any staged package;
-   the web half is independent. Optional later: a Dashboard rules status that keeps
-   "staged" until a new session reports it running, which would allow a 60 s pointer.
+   | Change | Saves | Effect |
+   | --- | --- | --- |
+   | ingest-power heartbeat 60 s to 10 minutes (HEARTBEAT_PERIOD_MS) | about 1,300 Netlify calls a day | None on the Dashboard: it never reads ingest-power, whose Firestore document has no reader. The 50 W / 2 V sends stay; they only keep the cloud flag fresh between heartbeats. |
+   | Cloud-flag telemetry freshness 90 s to about 12 minutes (CLOUD_TELEMETRY_FRESH_MS); screen red after about 25 minutes (CLOUD_FAILED_RED_MS) | none | CloudAvailable keeps its meaning, the Tab5 recently reached Netlify and RTDB; only its sensitivity changes. A Netlify-only blip under about 12 minutes no longer clears it; Wi-Fi or internet loss still shows within 45 s through RTDB. Say so wherever it is compared with the M6.44 cloud-drop history. |
+   | Live reading to RTDB at most every 10 s, latest value, not every 2-second sample | about 34,500 RTDB requests a day | Dashboard tiles, pump starts included, update within about 10 s; worst age about 17 s against the page's 30 s fresh limit. Rules, sampling, records and protection stay on the 2-second local cycle. |
+   | V3 package pointer check 10 s to 20 s (RULES_V3_POLL_PERIOD_MS) | about 8,600 RTDB requests a day | A publish is staged within about 20 s; the Dashboard's staged message still holds, since it trusts the rules-state report for 45 s. |
+
+   Web, pilot-working: the home page polls every 5 s instead of 2 and pauses the
+   observation and operator polls after 15 minutes without interaction, showing that it
+   is paused and a control to resume; paused tiles say paused, not unknown or stale.
+   This alone protects the shared credits from a forgotten tab (about 70 credits a day
+   at the 2 s rate). Free on pilot; one main deploy, 15 credits.
+
+   Not now (FUTURE, Running cost): redefining CloudAvailable from durable-record sends,
+   retiring ingest-power, one coordination read instead of several, per-device
+   overrides, a new platform.
+
+   One visit, one restart: install M6.46, publish the longer H001 trigger, repeat the
+   short power cut watching whether the Tab5 reboots when power returns. Then a 3-5 day
+   soak, enough since only timing changes: expect RTDB about 260 MB a day (from 534),
+   the Tab5's Netlify use about 90 to about 35 credits a month (ingest-record's ~560
+   calls a day remain the largest part), and possibly fewer CloudAvailable drops, since
+   fewer RTDB requests mean fewer 1 s timeouts. Then call it frozen again.
 
 No DNS, Netlify settings, Firebase configuration, device upload, restart or source
 promotion was performed by this housekeeping. History is in Git; all deferred work
