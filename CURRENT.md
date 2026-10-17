@@ -473,11 +473,19 @@ Reduction options are in FUTURE, Running cost.
    only (27 pump cycles). One supply reading of 224 V at 16:29:08 EDT on 16 Oct, pump
    off, 247.7 V two seconds later, between two brief EM dropouts: a short sag or a
    meter glitch, the kind the power-blip logger in FUTURE would settle. The ingest-power
-   document read publishReason heartbeat at 19:26 UTC. Still needed from the owner's
-   consoles: Netlify credits a day and RTDB downloads a day, against the expected
-   about 35 credits a month for the Tab5 and about 260 MB a day. The heartbeat cadence
-   can be read from sites/well-main/current/well-power (publishReason heartbeat about
-   every 10 minutes once the soak is under way).
+   document read publishReason heartbeat at 19:26 UTC. Usage, checked 18 Oct, read-only: RTDB
+   downloads 534 MB a day (5-11 Oct) to 270 MB a day (13-16 Oct; 12 Oct is mixed), as
+   expected; writes about 55,500 to 21,400 a day and reads about 28,800 to 26,000 a
+   day. About 8.4 GB a month, inside the free 10 GB with about 16% headroom: about $6
+   a month to $0 from November (October about 11.5 GB, $1-2). Netlify (owner's chart,
+   whole account, five sites): a flat 2-3 credits a day since about 29 September, when
+   the event-board change took the September 8-10 a day down, and no visible step at
+   12 October, plus 15 per production deploy; about 75-90 a month steady. The expected
+   "about 90 to about 35 credits" was wrong: it used a late-September rate per call
+   inflated by the old event-board calls and deploys. The removed heartbeats are short
+   calls worth roughly 0.5-1 credit a day, below what the chart can show. Netlify does
+   not report usage per site here, so the well's share of the 2-3 a day is unknown
+   (FUTURE, Running cost).
 
    One visit, one restart: install M6.46, publish the longer H001 trigger, repeat the
    short power cut watching whether the Tab5 reboots when power returns. Then a 3-5 day

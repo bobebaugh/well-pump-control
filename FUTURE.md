@@ -136,6 +136,10 @@ Options, largest benefit first:
 - **TLS session reuse:** would remove most RTDB bytes on every path, if UIFlow
   MicroPython can keep a connection or resume a session. Research only.
 - `print=silent` on Tab5 PUTs saves little: payload is 2% of RTDB bytes.
+- **Netlify usage per site:** the owner's usage chart (18 October) shows only the
+  account total, 2-3 credits a day across five sites after M6.46. Find a way to see the
+  well's share (a per-project breakdown or function invocation counts) before judging
+  any further Netlify saving.
 
 ## Firestore reads (next summer)
 
