@@ -461,7 +461,21 @@ Reduction options are in FUTURE, Running cost.
    The repeat power cut is skipped (owner, 12 Oct): it would only show whether the Tab5
    reboots when power returns, which affects queued records, not protection, and M6.46
    changes nothing about power. Soak counts from v51's session, about 19:39 UTC on 12
-   Oct, and ends 15-17 Oct. The heartbeat cadence
+   Oct, and ends 15-17 Oct.
+
+   Soak result, checked 17 Oct 19:29 UTC, read-only, 2,937 records: passed on the device
+   side. One session (boot_879df76c799b) for 5 days, no restart, no receipt gap over 15
+   minutes, receipt lag near 2 s. Heap flat (free after collection 22.46 MB, lowest
+   22.43 MB), CPU A and B faults 0, records lost 0, buffer at most 3%. Records 553-592 a
+   day, as expected. Cloud-flag drops 45-78 a day (50-106 before), still all RTDB calls
+   timing out at 1 s; the live-reading write's share fell from about half to under a
+   fifth. H001 did not open: EM drops (3-16 a day) were all under 60 s. Events: P001
+   only (27 pump cycles). One supply reading of 224 V at 16:29:08 EDT on 16 Oct, pump
+   off, 247.7 V two seconds later, between two brief EM dropouts: a short sag or a
+   meter glitch, the kind the power-blip logger in FUTURE would settle. The ingest-power
+   document read publishReason heartbeat at 19:26 UTC. Still needed from the owner's
+   consoles: Netlify credits a day and RTDB downloads a day, against the expected
+   about 35 credits a month for the Tab5 and about 260 MB a day. The heartbeat cadence
    can be read from sites/well-main/current/well-power (publishReason heartbeat about
    every 10 minutes once the soak is under way).
 
