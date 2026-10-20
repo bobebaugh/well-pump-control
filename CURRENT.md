@@ -83,6 +83,7 @@ Keep this list current on every tab5-working change; clear it when Tab5 advances
 
 | Change | Files |
 | --- | --- |
+| Retire four host tests for the Wi-Fi modem-sleep change withdrawn on 22 September; its class-local helpers are removed with them. No device source changes; all 296 Tab5 host tests pass. | tests/test_tab5_cloud_transport.py |
 | 78733ab: M6.46 running cost (pilot-working CURRENT, decision 8): ingest-power heartbeat 60 s to 10 minutes; cloud-flag telemetry freshness 90 s to 12 minutes and screen red 180 s to 25 minutes; RTDB live reading at most every 10 s, latest value, first after boot at once; V3 pointer 10 s to 20 s. Installed 12 Oct, session boot_fe722e651806; Tab5 promotion awaits the owner. | cloud.py, pilot.py |
 
 Before M6.46: on 5 October, on the owner's direction, Tab5 was fast-forwarded to tab5-working
