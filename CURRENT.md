@@ -487,6 +487,11 @@ Reduction options are in FUTURE, Running cost.
    not report usage per site here, so the well's share of the 2-3 a day is unknown
    (FUTURE, Running cost).
 
+   Rechecked 20 Oct 22:58 UTC, read-only, 4,519 records: the same session for 8 days,
+   no restart or gap, heap flat, faults 0, records lost 0, H001 never opened, P001 the
+   only event (42 cycles). Cloud-flag drops fell again from 17 Oct, to 12-30 a day,
+   with no change on the device; the cause is outside it and unknown.
+
    One visit, one restart: install M6.46, publish the longer H001 trigger, repeat the
    short power cut watching whether the Tab5 reboots when power returns. Then a 3-5 day
    soak, enough since only timing changes: expect RTDB about 260 MB a day (from 534),
