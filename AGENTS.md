@@ -68,6 +68,21 @@ finish authorized reversible work and record remaining decisions in CURRENT.
 - Under tab5/, also read tab5/AGENTS.md. Preserve every tracked runtime/support file;
   stamp only files actually changed. UIFlow MicroPython is the supported platform.
 
+## Local Windows setup
+
+On a PC prepared with pc-setup, use well-pump-control under the saved SourceRoot as
+this app's checkout, on pilot-working. Read `%USERPROFILE%\.pc-setup\settings.json`
+before installing tools or asking for credentials. JavaHome and PythonExe record
+existing tools; the launcher supplies them for its child process. Reuse matching
+installed dependencies. PC Setup's Prepare and Verify actions use this branch.
+
+WellPumpCredential records the existing viewer key's local file path. The PC Setup
+Firestore action with project well-pump-control loads it for the repository's
+read-only maintenance/firestore-peek.cjs; a missing shell variable alone does not
+mean a key is missing. Keep key values outside Git, logs and OneDrive. Device work
+still belongs on tab5-working in a separate checkout; setup does not install or
+restart anything on the pump.
+
 ## Git recovery
 
 Prefer normal fast-forward pushes; recheck remote tips before publishing. Never

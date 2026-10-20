@@ -88,7 +88,11 @@ owner is sure no more web changes are coming (each main deploy costs 15 credits)
 ## On pilot-working, not yet on pilot
 
 Keep this list current on every pilot-working change and move rows to the table above
-when pilot is advanced. Empty: pilot was fast-forwarded to pilot-working on 12 October.
+when pilot is advanced. Since the 12 October promotion:
+
+| Change | Kind |
+| --- | --- |
+| Local Windows setup instructions and a shared Claude import; uses saved tool/credential paths and pilot-working. No deployed behavior changes. | Docs only |
 
 ## Maintenance baseline
 
