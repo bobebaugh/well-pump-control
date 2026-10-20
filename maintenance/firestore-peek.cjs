@@ -8,6 +8,11 @@
 //   node maintenance/firestore-peek.cjs eventRecords --fields eventDefinitionId,notification
 //   node maintenance/firestore-peek.cjs eventBoardState/tab5-well-main   one document
 //   node maintenance/firestore-peek.cjs _system/pilot --root
+//   node maintenance/firestore-peek.cjs rulesEngineV3Releases/RELEASE_ID --full
+//
+// --full prints one complete JSON document per line, without depth or preview
+// truncation (Firestore timestamps/references/bytes use the scalar conversions below).
+// --fields can still select fields. --json alone retains the bounded-depth preview.
 //
 // It exists so a person or an agent can look at a record without copying it out of the
 // Firebase console by hand, and without opening a public route to do it. Credentials come
@@ -43,7 +48,8 @@ const target = argv.find(token => !token.startsWith("-") &&
   token !== optionValue("--order") && token !== optionValue("--fields"));
 
 const limit = Number(optionValue("-n", "--limit") || 5);
-const asJson = flag("--json");
+const full = flag("--full");
+const asJson = full || flag("--json");
 
 // Firestore scalars that are not JSON: timestamps, references, byte buffers.
 function plainValue(value, depth = 0) {
@@ -52,9 +58,9 @@ function plainValue(value, depth = 0) {
   if (typeof value._latitude === "number") return `geo(${value._latitude},${value._longitude})`;
   if (value.constructor && value.constructor.name === "DocumentReference") return `ref(${value.path})`;
   if (Buffer.isBuffer(value)) return `bytes(${value.length})`;
-  if (Array.isArray(value)) return depth > 6 ? "[...]" : value.map(item => plainValue(item, depth + 1));
+  if (Array.isArray(value)) return !full && depth > 6 ? "[...]" : value.map(item => plainValue(item, depth + 1));
   if (typeof value === "object") {
-    if (depth > 6) return "{...}";
+    if (!full && depth > 6) return "{...}";
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, plainValue(item, depth + 1)]));
   }
   return value;
@@ -111,7 +117,7 @@ function show(id, data, fields) {
   if (path.split("/").filter(Boolean).length % 2 === 0) {
     const snapshot = await db.doc(path).get();
     if (!snapshot.exists) { console.log(`No document at ${path}`); process.exitCode = 1; return; }
-    console.log(`${path}`);
+    if (!full) console.log(`${path}`);
     show(snapshot.id, snapshot.data(), fields);
     return;
   }
@@ -126,7 +132,7 @@ function show(id, data, fields) {
   if (order) query = query.orderBy(order, flag("--desc") ? "desc" : "asc");
 
   const snapshot = await query.limit(limit).get();
-  console.log(`${path} — ${snapshot.size} document(s)${snapshot.size === limit ? ` (limit ${limit})` : ""}`);
+  if (!full) console.log(`${path} — ${snapshot.size} document(s)${snapshot.size === limit ? ` (limit ${limit})` : ""}`);
   snapshot.forEach(document => show(document.id, document.data(), fields));
 })().catch(error => {
   console.error(`Read failed: ${error?.code || ""} ${error?.message || error}`.trim());

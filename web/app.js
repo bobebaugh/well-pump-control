@@ -798,6 +798,7 @@ function liveIdleExpired(nowMs) { return nowMs - lastInteractionAt >= LIVE_IDLE_
 // stale or unavailable, because nothing has failed -- the page simply stopped asking.
 function renderPaused() {
   const text = "Paused";
+  for (const element of [pressureValue, powerValue, voltageValue]) element.nextElementSibling.hidden = true;
   pumpState.className = "pump-state paused";
   pumpState.querySelector("strong").textContent = "Live view paused";
   for (const element of [pressureValue, powerValue, voltageValue, pfValue]) element.textContent = text;
@@ -832,6 +833,7 @@ function resumeLive() {
   if (!livePaused) return;
   livePaused = false;
   livePausedBanner.hidden = true;
+  for (const element of [pressureValue, powerValue, voltageValue]) element.nextElementSibling.hidden = false;
   liveReading = null;
   clearObservation();
   checkObservation();

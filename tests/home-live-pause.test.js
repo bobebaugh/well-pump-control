@@ -30,7 +30,7 @@ function element() {
   const small = { textContent: "" };
   const strong = { textContent: "" };
   return {
-    textContent: "", className: "", hidden: true, style: {},
+    textContent: "", className: "", hidden: true, style: {}, nextElementSibling: { hidden: false },
     classList: { remove() {}, add() {} },
     querySelector: selector => selector === ".health-dot" ? dot : selector === "small" ? small : strong,
     dot, small, strong
@@ -82,6 +82,9 @@ test("pausing stops both polls, shows the banner and marks every live tile pause
   page.pauseLive();
   assert.equal(page.state().livePaused, true);
   assert.equal(els.livePausedBanner.hidden, false);
+  for (const name of ["pressureValue", "powerValue", "voltageValue"]) {
+    assert.equal(els[name].nextElementSibling.hidden, true, `${name} unit is hidden while paused`);
+  }
   assert.deepEqual(calls.filter(call => call[0] === "clearTimeout").map(call => call[1]), [1, 2]);
   for (const name of ["pressureValue", "powerValue", "voltageValue", "pfValue", "sw0Value", "rly0Value",
     "tankPressure", "tankGallons", "tankFlow", "protShelly", "protTab5", "protMode"]) {
@@ -110,6 +113,9 @@ test("an interaction resumes at once: banner hidden, both polls restarted", () =
   page.resumeLive();
   assert.equal(page.state().livePaused, false);
   assert.equal(els.livePausedBanner.hidden, true);
+  for (const name of ["pressureValue", "powerValue", "voltageValue"]) {
+    assert.equal(els[name].nextElementSibling.hidden, false, `${name} unit is restored on resume`);
+  }
   assert.equal(page.state().lastInteractionAt, 9000000);
   assert.equal(page.state().liveReading, null);
   const after = calls.slice(calls.findIndex(call => call[0] === "clearObservation")).map(call => call[0]);
