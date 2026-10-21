@@ -61,6 +61,10 @@ finish authorized reversible work and record remaining decisions in CURRENT.
   RPC acknowledgement or unavailable measurement is not physical success/recovery.
 - Preserve units, source, validity, observation time and staleness. No fabricated
   values, lock state, event close time or execution confirmation.
+- The Tab5 is frozen for the winter (CURRENT, "Frozen for the winter"). Keep the
+  device-facing functions (ingest-power, ingest-record, event-board, device-sync,
+  package delivery through rules-engine-release) and interfaces/ compatible with the
+  installed files. A fix that needs a device install waits for the owner's return.
 - Keep interfaces byte-identical on both working branches. If their meaning changes,
   update the relevant producer, consumer, schema/examples and checks together.
 - Keep secrets out of Git, logs, URLs and reports. The beta password is checked by

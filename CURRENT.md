@@ -1,6 +1,36 @@
 # Current beta status â€” web/cloud
 
-As of 23 September 2026. This records source and owner evidence, not assumed deployment.
+As of 21 October 2026. This records source and owner evidence, not assumed deployment.
+
+## Frozen for the winter, 21 October 2026
+
+Step G of the pre-freeze round. Device files stay untouched until the owner returns
+(June 2027); rules packages and screens can still change.
+
+| Item | Running | Evidence |
+| --- | --- | --- |
+| Tab5 files | pilot.py M6.46, cloud.py M6.46, main.py M6.41, installed 12 Oct from tab5-working 78733ab | Owner's install, the M6.46 stamp, records since 12 Oct. Not byte-compared with the device. |
+| Source sha256 at 78733ab | pilot.py f26c2dfb965e..., cloud.py a3c1f695e7ff..., main.py a3fc3e2cfd28... | For a later byte-compare against the device; a match there is the receipt this row lacks. |
+| Device branch | Tab5 = tab5-working = d258402; nothing under tab5/ differs from 78733ab | Git |
+| Rules package | v52, 20261021151452-event-v3-v52, contentHash 546ad8ad218b... | Event board and records |
+| Session | boot_16ed4cf94153 from 15:22:49 UTC on 21 Oct | Records. A restart at 15:17:24 came up still on v51; this second one adopted v52. |
+| Web | main = pilot = 617823e, the winter main deploy | Git |
+
+Read-only check of 20,314 records, 21 Sep-21 Oct: since the whole-house power cut on 29 Sep
+no receipt gap over 15 minutes, and WiFiConnected false only at restarts. The month's
+two longer gaps are the 22 Sep deployment and bisection, and the 28 Sep battery run-down. Closed by
+the owner on 21 Oct: the network (UniFi has been working well), and the battery (it
+stays in). The run-down ran the Tab5 about 8 hours until it shut itself off, and it
+recovered alone when power returned: records stop at 06:39 UTC on 28 Sep and a new
+session starts at 12:46 UTC.
+
+The device-facing functions (ingest-power, ingest-record, event-board, device-sync,
+package delivery through rules-engine-release) and interfaces/ must stay compatible
+with these files; AGENTS carries the rule.
+
+Before departure, owner: lower the timer relay once flush cycles are off, and confirm
+the phone raises a Gmail alert on the MF-Well subject. Email is the channel; Verizon
+ends email-to-text by 31 March 2027, so the SMS leg will stop during the winter.
 
 ## Available now
 
@@ -18,11 +48,8 @@ variable set listed the sites/well-main collections and read eventRecords and
 eventBoardState documents. The owner provisioned the account read-only; that was not
 tested with a write, since Pilot and Main share live data.
 
-Installed on the Tab5 since 12 October: pilot.py and cloud.py M6.46 and main.py M6.41,
-from tab5-working 78733ab, running package v51 (decision 8). The Tab5 posts to main.
-The Tab5 branch is still at M6.45 (7aaae38) until the owner promotes it. Evidence is
-the owner's install, the M6.46 stamp and the records; the device files were not
-byte-compared. The stray remote branch claude/kind-hamilton-isgae0
+The installed Tab5 files and running package are in the freeze table above. The Tab5
+posts to main. The stray remote branch claude/kind-hamilton-isgae0
 holds one unique commit (9803c8a, a README rewrite on the old main stub); cloud
 sessions cannot push tags, so it stays until the owner archives it under a tag.
 The owner confirms the Shelly 1 protection script is fully unit tested on real
@@ -82,7 +109,10 @@ hiding, firestore-peek --full and docs. No function the Tab5 calls changed. Web 
 ## On pilot-working, not yet on pilot
 
 Keep this list current on every pilot-working change and move rows to the table above
-when pilot is advanced. Empty: pilot and main were fast-forwarded on 21 October.
+when pilot is advanced. Pilot and main were fast-forwarded on 21 October; since then:
+
+- Docs only, 21 Oct: the freeze record (step G) at the top of this file and the freeze
+  rule in AGENTS. No deploy is needed for it to take effect.
 
 ## Maintenance baseline
 
@@ -292,7 +322,8 @@ deploy costs 15, so main moves once.
   minutes. The 100-record queue lasts about 12 hours when quiet and about 4 hours on a
   typical day; each pump run adds about 45 records. A device fault found here means a
   reinstall, and the 13 days start again.
-- G. Freeze. Record the running files and package in CURRENT. Add to AGENTS that the
+- G. Done 21 Oct: see "Frozen for the winter" at the top.
+- G (plan). Freeze. Record the running files and package in CURRENT. Add to AGENTS that the
   device-facing functions (ingest-power, ingest-record, event-board, device-sync,
   package delivery) and interfaces/ stay compatible with the installed files.
 
@@ -312,8 +343,8 @@ Owner tasks, no code:
   cycle 1 and opens W07 at 72 psi on cycle 2; with the LAN up it requests the Tab5
   hold. Main's and pilot's four device POST endpoints answer 401 without the password.
 - Rules package review: now part of the special unit at the top of this section.
-- Battery: M5Stack says a battery below 6 V enters protection mode, which needs manual
-  recovery. Proposal: remove it for the freeze, after confirming in step E that the Tab5
+- Battery: closed 21 Oct, it stays in (see "Frozen for the winter"). Was: M5Stack says a
+  battery below 6 V enters protection mode, which needs manual recovery. Proposal: remove it for the freeze, after confirming in step E that the Tab5
   restarts unattended with the battery out (cut power 10 s, restore). No rule uses the
   battery.
 - Whole-house power cut, soon: the owner wants it done ahead of the final install, and
@@ -330,7 +361,8 @@ Owner tasks, no code:
   above the battery's protection threshold (owner's report).
 - Caretaker card. No water: power-cycle the Tab5. Still none: selector to Hand. The Tab5
   hold has no time limit, so a Tab5 that stops while holding keeps holding (#4).
-- Network, the owner's largest freeze risk: the UniFi system as a whole, not its DHCP.
+- Network: closed 21 Oct, UniFi working well and no receipt gap since 29 Sep (see
+  "Frozen for the winter"). Was: the owner's largest freeze risk, the UniFi system as a whole, not its DHCP.
   The Tab5 cannot change during the freeze, but UniFi can change underneath it. Before
   the soak, turn off or schedule automatic firmware updates, and settle the settings
   that can drop or steer a weak client: nightly channel optimization, minimum RSSI and
@@ -368,7 +400,7 @@ Reduction options are in FUTURE, Running cost.
 
 1. Review the remaining beta reliability choices in FUTURE. No application fix was
    authorized or applied by housekeeping.
-2. Work through the pre-freeze round above. It sets when pilot, Tab5 and main advance.
+2. Done 21 Oct: the pre-freeze round is complete; see "Frozen for the winter".
 3. Finish activation from BETA: confirm the mfwell.ebaugh.net certificate, owner access
    and rejection of a missing or wrong password on production, and that Netlify branch
    deploys remain restricted to pilot.
@@ -377,22 +409,18 @@ Reduction options are in FUTURE, Running cost.
    old package number or this source revision for installed evidence.
 5. The notification channel is live and sending from the device. The variables
    `RESEND_API_KEY`, `NOTIFY_FROM`, `NOTIFY_EMAIL_TO`, `NOTIFY_SMS_TO` and
-   `NOTIFY_DRY_RUN` are set on both main and pilot, and a text arrives on every pump
-   run. One message per event is correct, not a half failure: only pilot serves the
-   device, so only pilot sends. Two would mean main had started receiving device
-   events. Main's copy stays inert until the device is repointed, and then carries the
-   channel over without a settings change.
+   `NOTIFY_DRY_RUN` are set on both main and pilot. One message per event is correct,
+   not a half failure: since M6.45 (29 Sep) only main serves the device, so only main
+   sends. Two would mean pilot had started receiving device events again.
 
    Netlify injects these into a function at deploy time, so a site already deployed
    sees a new variable only after a redeploy, and "Trigger deploy" rebuilds production
    only - pilot's latest deploy must be retried separately. An event record whose
    notification field reads not-configured names the variables the running deploy is
    missing. Verify with a test event, T010-T040, using
-   tests/notification-live.check.cjs, opened through event-board on the pilot deploy:
-   a send proved by any other entry proves a path the device does not take.
-
-   Pilot's deploy is currently behind on diagnostic logging only. The missing code
-   writes function-log detail and changes no behaviour; it rides the next pilot push.
+   tests/notification-live.check.cjs, opened through event-board on main's deploy, the
+   one the device posts to: a send proved by any other entry proves a path the device
+   does not take.
 6. Email is the notification channel; the SMS leg is best-effort and degrading. Over
    22-28 September the application sent 184 messages and Resend delivered 184, with no
    bounce, failure or suppression, and every event record's notification field reads
@@ -411,9 +439,8 @@ Reduction options are in FUTURE, Running cost.
    raises a Gmail alert on the MF-Well subject, since that is the only path that does
    not depend on a carrier's tolerance.
 
-7. Review the dashboard changes now on pilot (f0acaa4-46d19ca). They reach main in the
-   single main deploy, step C of the pre-freeze round. Cloud sessions can now read records directly with
-   maintenance/firestore-peek.cjs instead of from a CSV export.
+7. Done: the dashboard changes (f0acaa4-46d19ca) reached main at step C. Cloud sessions
+   read records directly with maintenance/firestore-peek.cjs instead of from a CSV export.
 
 8. Running-cost change, approved by the owner on 12 October: reopen the freeze once,
    for a problem the soak found. Netlify's 300 free credits are shared with the owner's
@@ -523,15 +550,15 @@ Reduction options are in FUTURE, Running cost.
    answered in under 1 s. No incident posted on the Firebase status page. If it lasts,
    the package-only relief is logging CloudAvailable in the health record only, at the
    cost of the per-drop cause; the device fix is the 2 s RTDB timeout in FUTURE. Resolved by
-   the owner the same day with v52 (20261021151452-event-v3-v52, adopted about 15:15
-   UTC; verified by the owner and Codex): CloudAvailable, BufferUsedPercent and
+   the owner the same day with v52 (20261021151452-event-v3-v52, adopted at the restart
+   of 15:22:49 UTC; verified by the owner and Codex): CloudAvailable, BufferUsedPercent and
    RecordsLost now log as always, so their changes no longer create records (RecordsLost
    too, to avoid a record per lost record in a long outage, a case never tested); a new
    "Record queue high" event opens at BufferUsedPercent >= 20 and closes below 10, with
    no actions or notification. The RTDB slowness itself also degrades the dashboard and
    the rules editor; a GitHub issue holds next summer's improvements.
 
-   One visit, one restart: install M6.46, publish the longer H001 trigger, repeat the
+   Was the plan, done 12-17 Oct as recorded above. One visit, one restart: install M6.46, publish the longer H001 trigger, repeat the
    short power cut watching whether the Tab5 reboots when power returns. Then a 3-5 day
    soak, enough since only timing changes: expect RTDB about 260 MB a day (from 534),
    the Tab5's Netlify use about 90 to about 35 credits a month (ingest-record's ~560
