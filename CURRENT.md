@@ -114,6 +114,8 @@ when pilot is advanced. Pilot and main were fast-forwarded on 21 October; since 
 - Docs only, 21 Oct: the freeze record (step G) at the top of this file and the freeze
   rule in AGENTS. No deploy is needed for it to take effect.
 
+- Docs only, 21 Oct: shared local/cloud startup guidance, saved credential discovery and safe local update command. No deployed behavior changed.
+
 ## Maintenance baseline
 
 Before housekeeping: pilot = 150bb8ab6297062ca6a8157708f05700c6cd74d0;

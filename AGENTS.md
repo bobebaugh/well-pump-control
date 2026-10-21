@@ -93,3 +93,23 @@ Prefer normal fast-forward pushes; recheck remote tips before publishing. Never
 force over concurrent work. Keep rollback source and runtime package compatibility
 separate. Archived tips live under archive/beta-2026-09-16/ tags; restore a tag to a
 temporary detached checkout for inspection rather than reviving obsolete branches.
+## Environment and saved local access
+
+First identify the actual host/runtime. `CLAUDE_CODE_REMOTE=true` identifies Claude
+cloud execution; a Linux/WSL path alone does not. In cloud sessions use the cloud
+environment's variables/connectors, not Windows paths. Cloud is Bob's usual choice;
+local work is for this PC's filesystem or mounted FinData.
+
+On a prepared Windows PC, read `%USERPROFILE%\.pc-setup\settings.json` for SourceRoot,
+FinDataRoot, tools and the applicable credential path before reporting access missing.
+Before local work, use the setup checkout's `pc-setup.cmd update -Project well-pump-control`.
+It fetches and fast-forwards only a clean checkout with no unpushed commits; if it stops,
+preserve the work and follow this repository's branch instructions. It does not install
+dependencies. The owner need not press PC Setup's Update checkouts button for the agent.
+
+Local Claude folder access belongs in this checkout's ignored
+`.claude/settings.local.json`, not global Claude settings. Preserve existing entries.
+Use the project's dev.cmd where available; from Claude's Git Bash invoke `./dev.cmd`
+directly. Agent commits use an explicit identity: Claude uses
+`git -c user.name=Claude -c user.email=noreply@anthropic.com commit ...`; Codex uses
+`git -c user.name=Codex -c user.email=codex@openai.com commit ...`.
