@@ -499,6 +499,32 @@ Reduction options are in FUTURE, Running cost.
    only event (42 cycles). Cloud-flag drops fell again from 17 Oct, to 12-30 a day,
    with no change on the device; the cause is outside it and unknown.
 
+   Hidden-error review, 20-21 Oct (read-only; owner's decisions 21 Oct). Two A items,
+   both confirmed in the code and both deferred by the owner: this is primarily a
+   logging application, and neither stops logging. A1: rule qualification subtracts
+   wrapping ticks (pilot.py 3951 and 1819), so an event whose qualifying period
+   straddles the 12.4-day tick wrap does not qualify until its condition resets; the
+   worst case is an E007 hold that does not release. A2: if an ADC read and its
+   immediate reinitialisation both fail, main.py never retries, so pressure stays
+   unavailable until a restart (never seen: ADC valid in 100% of soak records).
+   Mitigation for both: a restart from the web or by the caretaker; optionally a
+   restart about every 10 days avoids the wrap entirely, and an event on ADCValid
+   false (a real value when the ADC is lost) with notification would flag A2. Both
+   remote paths depend on RTDB; review item 7 (a permanently failed Firebase refresh
+   is retried forever) would stop web restarts, leaving the caretaker. Web B items to
+   fix before departure in the one main deploy: false Normal mode tile during System
+   Monitor (3), stale electrical numbers (4), history polling while paused (8), the
+   1 Nov repeated hour on the records page (9), the silent alert's retry key (10).
+   Deferred to FUTURE: 5, 6, 11 and the C notes.
+
+   Credentials for logging, checked before departure (owner): the device password
+   PILOT_INGEST_TOKEN does not expire; leave it unchanged. The service-account key in
+   Netlify's FIREBASE_SERVICE_ACCOUNT_JSON writes every record: confirm in Google Cloud
+   (IAM, service accounts, Keys) that it has no expiry. Google billing for the Blaze
+   project: confirm the payment method is valid through spring. That key is a single
+   point of failure: if it fails, records, pump emails and the silent alert all stop
+   together, so several days without a pump email is the signal.
+
    One visit, one restart: install M6.46, publish the longer H001 trigger, repeat the
    short power cut watching whether the Tab5 reboots when power returns. Then a 3-5 day
    soak, enough since only timing changes: expect RTDB about 260 MB a day (from 534),

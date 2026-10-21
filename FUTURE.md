@@ -41,6 +41,18 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   Shelly link is what would push a cycle past its 2 s budget. The Tab5's Wi-Fi is better
   at the PC than at the tank, and the weak link is the wellhead end, the Shelly 1's
   network (owner), so that 854 ms is the wellhead link, not the Tab5's.
+- **Hidden-error review, 20-21 Oct (device items deferred by the owner):** A1, rule
+  qualification across the tick wrap: use time.ticks_diff in pilot.py's
+  _rules_v3_qualified and _runtime_qualified, with a wrap test. A2, ADC recovery:
+  retry ADS1110 initialisation after a failed reinitialisation instead of leaving
+  adc None (main.py 98, 144). Item 7: on a permanent Firebase refresh error (HTTP 400),
+  drop the refresh token and bootstrap again through device-sync (cloud.py 1567, 1604).
+  Web: history inventing runtime and water use across missing records (5), a silent
+  device's last run shown as still running (6), an overflowing month query dropping
+  the newest records (11). Notes: retiredSessionIds grows by one per restart in the
+  eventBoardState document (62 on 20 Oct); no record retention is implemented (about
+  100,000 observations a winter); event notifications that fail are not retried, and
+  a fifth notifiable transition in one reconciliation is skipped.
 - **Reset cause at boot:** the session-start record carries no reason for the restart,
   so a reset at power return cannot be told from a manual one (29 Sep power cut).
   Recording the reset cause in that record is a device change for after the freeze.
