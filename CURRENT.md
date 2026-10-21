@@ -527,6 +527,16 @@ Reduction options are in FUTURE, Running cost.
    has no practical expiry; the billing account covers more than this app and the
    owner watches it.
 
+   21 Oct: Firebase RTDB slow from about 03:00 UTC. Cloud-flag drops rose from a few an
+   hour to 150-190 an hour, each about 6 s, nearly all RTDB calls timing out at the 1 s
+   limit (errno 116) plus a few RTDB HTTP 500s; Wi-Fi, Netlify posts, Shellys and
+   protection unaffected. Each drop and recovery is a durable record, so records rose to
+   about 2,850 a day. Confirmed outside the house at 11:58 UTC: from the cloud session,
+   6 of 20 RTDB requests took over 1 s, waiting up to 3 s on the server, while Netlify
+   answered in under 1 s. No incident posted on the Firebase status page. If it lasts,
+   the package-only relief is logging CloudAvailable in the health record only, at the
+   cost of the per-drop cause; the device fix is the 2 s RTDB timeout in FUTURE.
+
    One visit, one restart: install M6.46, publish the longer H001 trigger, repeat the
    short power cut watching whether the Tab5 reboots when power returns. Then a 3-5 day
    soak, enough since only timing changes: expect RTDB about 260 MB a day (from 534),
