@@ -262,3 +262,12 @@ test("the Tab5 hold mode comes from the same record, and is null when not report
   assert.equal(silent.userMonitor, null);
   assert.equal(silent.relayRestoration, null);
 });
+
+test("system Monitor is exposed separately from User Monitor without inventing an absent flag", async () => {
+  for (const flag of [true, false, null, "true"]) {
+    const reply = await body(observation({ status: { user_monitor_active: false, monitor_mode_active: flag } }));
+    assert.equal(reply.systemMonitor, typeof flag === "boolean" ? flag : null);
+    assert.equal(reply.userMonitor, false);
+  }
+  assert.equal((await body(observation({ status: {} }))).systemMonitor, null);
+});

@@ -96,6 +96,7 @@ when pilot is advanced. Since the 12 October promotion:
 | Local Windows setup instructions and a shared Claude import; uses saved tool/credential paths and pilot-working. No deployed behavior changes. | Docs only |
 | Home-page pressure, power and voltage tiles hide their units while live polling is paused and restore them on resume. | Web |
 | Read-only `firestore-peek --full` prints complete JSON documents without nested-value or preview truncation, including full rules clauses. | Maintenance |
+| Mode tile shows System Monitor in amber from the observation's system flag; Normal requires both Monitor flags to be false in a fresh reading. | Web |
 
 ## Maintenance baseline
 

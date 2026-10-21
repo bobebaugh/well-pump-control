@@ -168,6 +168,7 @@ function createHandler(dependencies = {}) {
       // Whether the Tab5 has released its hold (User Monitor), from the same
       // record, so the protection line and the numbers are one instant.
       userMonitor: booleanOrNull(status.user_monitor_active),
+      systemMonitor: booleanOrNull(status.monitor_mode_active),
       relayRestoration: typeof status.tab5_relay_restoration === "string" ? status.tab5_relay_restoration : null,
       pressureCommissioned: booleanOrNull(status.pressure_sensor_commissioned),
       pressureValid: booleanOrNull(status.pressure_valid),

@@ -177,8 +177,10 @@ live tile, health row and the events panel read paused, never unknown, stale or
 unavailable. Any interaction, the Resume control or showing the tab again resumes at
 once; a hidden tab keeps the existing visibility guards. Every live reading,
 the pump badge and the Tab5/meter/Shelly 1 health rows come from one observation
-record, so the state and the numbers beside it are the same instant. The badge
-reads SW(0) directly and falls back to meter watts only when Shelly 1 is
+record, so the state and the numbers beside it are the same instant. The mode tile
+distinguishes amber System Monitor from amber User Monitor and shows Normal only when
+both flags are explicitly false in a fresh observation. The badge reads SW(0) directly
+and falls back to meter watts only when Shelly 1 is
 unavailable; unknown is a distinct state and is never shown as stopped. The SW(0)
 and RLY0 tiles and the Shelly 1 row show a value only from a fresh record in which
 Shelly 1 answered; a stale record, a failed read or an unreachable Shelly 1 shows

@@ -422,7 +422,8 @@ function renderProtection(data, fresh) {
   else if (shelly1.tab5IsLocked === false) setProtection(protTab5, "Clear", "ok");
   else setProtection(protTab5, "Unknown", "unknown");
   if (data.userMonitor === true) { setProtection(protMode, "Tab5 hold released", "caution"); protModeDetail.textContent = "User Monitor until Tab5 restart"; }
-  else if (data.userMonitor === false) { setProtection(protMode, "Normal", "ok"); protModeDetail.textContent = ""; }
+  else if (data.systemMonitor === true) { setProtection(protMode, "System Monitor", "caution"); protModeDetail.textContent = "System event has put the Tab5 in Monitor mode"; }
+  else if (data.userMonitor === false && data.systemMonitor === false) { setProtection(protMode, "Normal", "ok"); protModeDetail.textContent = ""; }
   else { setProtection(protMode, "Unknown", "unknown"); protModeDetail.textContent = ""; }
   if (data.relayRestoration === "unconfirmed") protModeDetail.textContent = `${protModeDetail.textContent ? `${protModeDetail.textContent} · ` : ""}Relay restoration unconfirmed`;
 }
