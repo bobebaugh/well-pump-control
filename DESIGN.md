@@ -154,9 +154,13 @@ The silent-device alert is a scheduled function (device-silence, every 15 minute
 production deploy only). It reads the newest durable record by receipt time; more than
 30 minutes without one sends one email and text, and records arriving again send one
 more. It uses the notifier's settings and dry run, in plain ASCII. Its state is
-sites/well-main/alerts/device-silence, written only after a send, so a failed send is
-retried on the next run. On a branch deploy it runs only when invoked, and an extra
-invocation cannot repeat a message.
+sites/well-main/alerts/device-silence. A transition's exact message and idempotency key
+are saved before its send; unconfirmed delivery or a failed completion save retries
+that fixed message on the next run. Delivery confirmation is stored separately from
+the observed silent/ok status. Records resuming replace a pending Silent with Resumed,
+even if the Silent outcome is uncertain; a pending Resumed stays fixed as new records
+arrive. On a branch deploy it runs only when invoked. Resend deduplicates a transition's
+retries for 24 hours.
 
 Event display names and enum choices are text the Tab5 posts back, and it sends those
 bodies with a character-count Content-Length, so a character over one byte truncates the
@@ -187,10 +191,9 @@ and falls back to meter watts only when Shelly 1 is
 unavailable; unknown is a distinct state and is never shown as stopped. The SW(0)
 and RLY0 tiles and the Shelly 1 row show a value only from a fresh record in which
 Shelly 1 answered; a stale record, a failed read or an unreachable Shelly 1 shows
-unknown rather than the last value. The page
-also clears watts, volts and power factor on stale, missing or failed observations;
-meter health never calls a stale reading valid. The page
-displays a disagreement between the contactor and motor current without judging
+unknown rather than the last value. The page also clears watts, volts and power
+factor on stale, missing or failed observations; meter health never calls a stale
+reading valid. The page displays a disagreement between the contactor and motor current without judging
 it; the rules engine owns what one means. The tank shows the device's net flow estimate
 (TankNetFlowGPM, signed, positive filling) from the same record. It reads zero when
 TankFlowQuality is not VALID or the magnitude is under a provisional noise floor,

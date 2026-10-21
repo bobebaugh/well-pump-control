@@ -61,10 +61,78 @@ test("a transition sends email and text in one idempotent batch, then records th
   assert.equal(h.writes.at(-1).notified.kind, "silent");
 });
 
-test("a failed send leaves the state alone so the next run retries it", async () => {
+test("a failed send retains a pending message so the next run retries it", async () => {
   const h = harness({ lastReceivedMs: NOW - 3600000, state: { status: "ok" }, status: 500 });
   assert.deepEqual((await h.run()).sent, { kind: "silent", status: "failed", code: "resend_500" });
-  assert.equal(h.writes.length, 0);
+  assert.equal(h.writes.length, 1);
+  assert.equal(h.writes[0].status, "silent");
+  assert.equal(h.writes[0].pending.message.kind, "silent");
+  assert.equal(h.writes[0].notified, undefined);
+});
+
+function retryHarness() {
+  let state = { status: "ok" }, lastReceivedMs = NOW - 3600000, nowMs = NOW;
+  let loseResponse = false, failCompletion = false, failPreparation = false;
+  const calls = [];
+  return {
+    calls, state: () => state,
+    loseResponse(value) { loseResponse = value; },
+    failCompletion(value) { failCompletion = value; },
+    failPreparation(value) { failPreparation = value; },
+    advance(ms, receivedMs = lastReceivedMs) { nowMs += ms; lastReceivedMs = receivedMs; },
+    run: () => checkDeviceSilence({
+      readNewestReceivedMs: async () => lastReceivedMs, readState: async () => state,
+      writeState: async value => {
+        if (failPreparation && value.pending || failCompletion && !value.pending) throw new Error("state unavailable");
+        state = structuredClone(value);
+      }, nowMs, env: ENV, log: { error() {} },
+      fetchImpl: async (url, options) => {
+        assert.ok(state.pending, "save intent before attempting delivery");
+        calls.push({ url, options });
+        if (loseResponse) throw new Error("response lost after acceptance");
+        return { ok: true, status: 200 };
+      }
+    })
+  };
+}
+
+test("a lost response retries the identical key and body as elapsed minutes change", async () => {
+  const h = retryHarness();
+  h.loseResponse(true); await h.run();
+  h.advance(15 * 60000); h.loseResponse(false); await h.run();
+  assert.equal(h.calls[0].options.headers["Idempotency-Key"], h.calls[1].options.headers["Idempotency-Key"]);
+  assert.equal(h.calls[0].options.body, h.calls[1].options.body);
+  assert.equal(h.state().pending, null);
+  assert.equal(h.state().notified.kind, "silent");
+  await h.run(); assert.equal(h.calls.length, 2);
+});
+
+test("a failed completion save retries the identical message; failed preparation sends nothing", async () => {
+  const h = retryHarness();
+  h.failPreparation(true);
+  await assert.rejects(h.run(), /state unavailable/);
+  assert.equal(h.calls.length, 0);
+  h.failPreparation(false); h.failCompletion(true);
+  await assert.rejects(h.run(), /state unavailable/);
+  h.advance(15 * 60000); h.failCompletion(false); await h.run();
+  assert.deepEqual(h.calls[0], h.calls[1]);
+});
+
+test("Resumed still sends after either uncertain Silent outcome and keeps its text on retry", async () => {
+  for (const fault of ["response", "completion"]) {
+    const h = retryHarness();
+    if (fault === "response") { h.loseResponse(true); await h.run(); }
+    else { h.failCompletion(true); await assert.rejects(h.run()); h.failCompletion(false); }
+    h.advance(15 * 60000, NOW + 14 * 60000);
+    h.loseResponse(true);
+    assert.equal((await h.run()).sent.kind, "resumed");
+    assert.match(JSON.parse(h.calls[1].options.body)[0].subject, /Resumed/);
+    assert.notEqual(h.calls[0].options.headers["Idempotency-Key"], h.calls[1].options.headers["Idempotency-Key"]);
+    h.advance(15 * 60000, NOW + 29 * 60000); h.loseResponse(false); await h.run();
+    assert.deepEqual(h.calls[1], h.calls[2], "new records cannot change the pending Resumed payload");
+    assert.equal(h.state().notified.kind, "resumed");
+    await h.run(); assert.equal(h.calls.length, 3);
+  }
 });
 
 test("dry run and missing settings never call Resend", async () => {

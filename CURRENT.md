@@ -100,6 +100,14 @@ when pilot is advanced. Since the 12 October promotion:
 | Electrical tiles clear stale/missing readings and failed reads; meter health requires a fresh observation before reporting valid. | Web |
 | The 15-minute idle pause also stops history, event and service fetches; resuming refreshes each once, including when the tab is shown again. | Web |
 | Record queries and CSV retain absolute quick-range boundaries and follow the actual current instant through the 1 November repeated hour. | Web |
+| Silent-device alerts save pending transition text/key before sending, retry identical payloads after uncertain outcomes, and still send Resumed when Silent delivery is uncertain. | Cloud |
+
+Pre-freeze web/cloud checks, 20 October 2026: `npm test` passes all 431 tests,
+including New York's 1 November repeated hour and alert response/state-save failures.
+Read-only GETs confirmed the affected main scripts/API still carry the old behavior.
+Next owner decision: promote and deploy the web fixes. Freeze documentation waits
+until fetched main = pilot with these fixes. Tab5 = tab5-working at d258402 on the
+final fetch; the device-source prerequisite is met.
 
 ## Maintenance baseline
 

@@ -76,24 +76,34 @@ function transitionKey(kind, lastReceivedAt) {
   return createHash("sha256").update(`device-silence\n${kind}\n${lastReceivedAt || "none"}`).digest("hex");
 }
 
-// Reads the newest record by receipt and the stored state, and writes the state only
-// after a message was sent (or composed in a dry run), so a failed send is retried on
-// the next run instead of being forgotten.
+// Save the transition and its exact message before sending. A lost response or a
+// failed completion save then retries the same key/body. Recording silence before
+// the attempt also preserves the Resumed transition when delivery is uncertain.
 async function checkDeviceSilence({ readNewestReceivedMs, readState, writeState, nowMs, env, fetchImpl, log = console }) {
   const [lastReceivedMs, state] = await Promise.all([readNewestReceivedMs(), readState()]);
   const { next, message } = decideSilence({ lastReceivedMs, nowMs, state, timeZone: env.NOTIFY_TIME_ZONE || undefined });
-  if (!message) {
-    // Only the first run writes here; afterwards state changes with a transition.
-    if (!state) await writeState({ ...next, checkedAt: new Date(nowMs).toISOString() });
+  const checkedAt = new Date(nowMs).toISOString();
+  let transition = state;
+  if (message) {
+    transition = { ...next, checkedAt, pending: {
+      key: transitionKey(message.kind, next.lastReceivedAt), message
+    } };
+    await writeState(transition);
+  } else if (!state) {
+    await writeState({ ...next, checkedAt });
+  }
+  const pending = transition?.pending;
+  if (!pending) {
     return { status: next.status, sent: null };
   }
-  const outcome = await sendPair(message, transitionKey(message.kind, next.lastReceivedAt), { env, fetchImpl });
+  const outcome = await sendPair(pending.message, pending.key, { env, fetchImpl });
   if (outcome.status === "sent" || outcome.status === "dry-run") {
-    await writeState({ ...next, checkedAt: new Date(nowMs).toISOString(), notified: { kind: message.kind, status: outcome.status, at: new Date(nowMs).toISOString() } });
+    await writeState({ ...transition, pending: null, checkedAt,
+      notified: { kind: pending.message.kind, status: outcome.status, at: checkedAt } });
   } else {
-    log.error("Device silence alert not delivered", { kind: message.kind, ...outcome });
+    log.error("Device silence alert delivery unconfirmed", { kind: pending.message.kind, ...outcome });
   }
-  return { status: next.status, sent: { kind: message.kind, ...outcome } };
+  return { status: next.status, sent: { kind: pending.message.kind, ...outcome } };
 }
 
 module.exports = { SILENCE_AFTER_MS, checkDeviceSilence, decideSilence, sendPair };
