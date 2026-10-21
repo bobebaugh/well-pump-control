@@ -80,21 +80,16 @@ battery and no cloud keeps pressure and every pressure rule from the first cycle
 ## On tab5-working, not yet on Tab5
 
 Keep this list current on every tab5-working change; clear it when Tab5 advances.
+Empty: on 21 October, on the owner's direction, Tab5 was fast-forwarded to tab5-working
+(was 7aaae38, M6.45). Tab5 now holds the installed M6.46 (78733ab; pilot.py and cloud.py
+M6.46, main.py M6.41, running package v51), plus the retirement of the four withdrawn
+Wi-Fi power-save tests (7742dbe; 296 host tests pass, none erroring) and docs. Nothing
+under tab5/ differs from 78733ab. Evidence for the install: the owner's report, the
+M6.46 stamp and the records since 12 October; the device files were not byte-compared.
 
-| Change | Files |
-| --- | --- |
-| Retire four host tests for the Wi-Fi modem-sleep change withdrawn on 22 September; its class-local helpers are removed with them. No device source changes; all 296 Tab5 host tests pass. | tests/test_tab5_cloud_transport.py |
-| 78733ab: M6.46 running cost (pilot-working CURRENT, decision 8): ingest-power heartbeat 60 s to 10 minutes; cloud-flag telemetry freshness 90 s to 12 minutes and screen red 180 s to 25 minutes; RTDB live reading at most every 10 s, latest value, first after boot at once; V3 pointer 10 s to 20 s. Installed 12 Oct, session boot_fe722e651806; Tab5 promotion awaits the owner. | cloud.py, pilot.py |
-
-Before M6.46: on 5 October, on the owner's direction, Tab5 was fast-forwarded to tab5-working
-(was 9e1accb, M6.43). Tab5 now holds M6.45 as installed on 29 September from
-tab5-working 462a4f3: pilot.py and cloud.py M6.45, main.py M6.41. Evidence: the owner's
-install, the M6.45 stamp on the System page and the records since; the device files
-were not byte-compared with the branch.
-
-M6.43 needs device evidence for two things: one Shelly reboot reporting accepted
-then confirmed-completed, and the script liveness field reading true in normal
-operation. Whether any event or inhibit policy should depend on that field is a
+Since M6.43 two items wanted device evidence: one Shelly reboot reporting accepted then
+confirmed-completed (the owner tested a Shelly reboot from the web on 29 September),
+and the script liveness field reading true in normal operation (not yet checked). Whether any event or inhibit policy should depend on that field is a
 separate decision, not taken here.
 
 Disabling Wi-Fi modem sleep was deployed on 22 September and withdrawn the same
