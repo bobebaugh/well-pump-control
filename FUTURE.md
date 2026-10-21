@@ -53,6 +53,10 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   eventBoardState document (62 on 20 Oct); no record retention is implemented (about
   100,000 observations a winter); event notifications that fail are not retried, and
   a fifth notifiable transition in one reconciliation is skipped.
+- **Paused service rows (cosmetic):** while the home page is paused, the Device health
+  panel's Netlify API and Firestore rows keep their last green result; the four device
+  rows already say "Live view paused". Owner, 22 Oct: fine as is, since the Tab5 row
+  shows the pause.
 - **Reset cause at boot:** the session-start record carries no reason for the restart,
   so a reset at power return cannot be told from a manual one (29 Sep power cut).
   Recording the reset cause in that record is a device change for after the freeze.
