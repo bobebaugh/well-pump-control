@@ -60,6 +60,12 @@ describe behavior that has since changed. Do not reinstate those old semantics.
 - **Reset cause at boot:** the session-start record carries no reason for the restart,
   so a reset at power return cannot be told from a manual one (29 Sep power cut).
   Recording the reset cause in that record is a device change for after the freeze.
+- **Cloud-drop counter instead of flip records:** on 21 Oct an RTDB slowdown made
+  CloudAvailable flip about 1,400 times a day, each flip a durable record, cluttering
+  the troubleshooting history; the owner's relief is logging CloudAvailable in records
+  without triggering them (package change). Better long term: a tab5-runtime reading
+  counting cloud drops (and their causes by kind) since the last health record, so the
+  10-minute record carries the evidence without a record per flip. Device change.
 - **RTDB timeout:** the evidence M6.44 was built to collect is in. Over 29 Sep-5 Oct
   CloudAvailable went false 125 times, nearly all RTDB calls timing out (errno 116) at
   RTDB_TIMEOUT_S = 1 s, across current-observation, rules-metadata, global-enable,
