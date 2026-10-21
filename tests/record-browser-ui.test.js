@@ -22,7 +22,7 @@ async function settle() { for (let index = 0; index < 6; index += 1) await new P
 function response(query, recordId, extra = {}) {
   return { status: "ok", catalog: [{ name: "ClockValid" }, { name: "PumpWatts" }], eventTriggerField: query.get("event") ? "ClockValid" : null, records: [{ recordId, schemaVersion: 2, sessionId: "session001", cycleSequence: 4, observationTime: "2026-03-08T01:00:00.000Z", receiptTime: "2026-03-08T01:01:00.000Z", rulesRelease: {}, triggerReasons: [{ kind: recordId }], fields: { PumpWatts: { state: "available", value: 0 }, ClockValid: { state: "available", value: false } } }], ...extra };
 }
-function page(search, stored = null, pageRecords = null, pageEvents = null) {
+function page(search, stored = null, pageRecords = null, pageEvents = null, browserDate = Date) {
   const eventReads = [];
   const ids = ["records-status", "records-table", "column-picker", "range-from", "range-to", "range-custom", "range-custom-to", "range-8h", "range-today", "range-day", "range-week", "event-choice", "event-select", "export-shown", "export-range", "newer-records", "older-records", "latest-records", "receipt-records", "timezone-label", "history-older", "history-newer", "history-panel", "history-list"];
   const elements = Object.fromEntries(ids.map(id => [id, new Element(id)]));
@@ -57,7 +57,7 @@ function page(search, stored = null, pageRecords = null, pageEvents = null) {
   const downloads = [];
   document.createElement = () => ({ click() { downloads.push(this.download); } });
   class BrowserURL extends URL { static createObjectURL() { return "blob:test"; } static revokeObjectURL() {} }
-  const context = { URL: BrowserURL, URLSearchParams, Intl, Date, Promise, setImmediate, setTimeout: (callback) => setImmediate(callback), clearTimeout: () => {}, document, location: { search }, fetch, console, Blob: class {}, localStorage };
+  const context = { URL: BrowserURL, URLSearchParams, Intl, Date: browserDate, Promise, setImmediate, setTimeout: (callback) => setImmediate(callback), clearTimeout: () => {}, document, location: { search }, fetch, console, Blob: class {}, localStorage };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "web", "record-reasons.js"), "utf8"), context, { filename: "web/record-reasons.js" });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "web", "records.js"), "utf8"), context, { filename: "web/records.js" });
@@ -253,6 +253,36 @@ test("To follows now until edited, and Today starts at local midnight", async ()
   view.elements["range-to"].value = "2000-01-01T00:00";
   await view.elements["export-range"].fire("click");
   assert.ok(Math.abs(new Date(view.elements["range-to"].value) - now) < 120000, "an untouched To is refreshed to now at export");
+});
+
+test("queries and CSV keep absolute instants through New York's 2026 repeated hour", async () => {
+  const previousTZ = process.env.TZ;
+  process.env.TZ = "America/New_York";
+  try {
+    let now = Date.parse("2026-11-01T05:30:42.123Z");
+    class BrowserDate extends Date {
+      constructor(...args) { super(...(args.length ? args : [now])); }
+      static now() { return now; }
+    }
+    const view = page("", null, null, null, BrowserDate); await view.ready();
+    assert.equal(new BrowserDate().getTimezoneOffset(), 240);
+    now = Date.parse("2026-11-01T06:30:42.123Z");
+    assert.equal(new BrowserDate().getHours(), 1);
+    assert.equal(new BrowserDate().getTimezoneOffset(), 300);
+    await view.elements["latest-records"].fire("click");
+    assert.equal(view.requests.at(-1).anchor, "2026-11-01T06:30:42.123Z");
+    assert.equal(view.eventReads.at(-1).end, "2026-11-01T06:30:42.123Z");
+    await view.elements["export-range"].fire("click");
+    assert.equal(view.requests.at(-1).end, "2026-11-01T06:30:42.123Z");
+    // The next day's 24-hour quick range begins in the second 1:30 too.
+    now = Date.parse("2026-11-02T06:30:42.123Z");
+    await view.elements["range-day"].fire("click");
+    assert.equal(view.requests.at(-1).start, "2026-11-01T06:30:42.123Z");
+    await view.elements["export-range"].fire("click");
+    assert.equal(view.requests.at(-1).start, "2026-11-01T06:30:42.123Z");
+  } finally {
+    if (previousTZ === undefined) delete process.env.TZ; else process.env.TZ = previousTZ;
+  }
 });
 
 const current = view => Object.entries(view.elements).filter(([, element]) => element.classes.has("is-current")).map(([id]) => id);

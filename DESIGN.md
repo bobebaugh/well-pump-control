@@ -214,6 +214,9 @@ over quiet stretches of at least two hours that start an hour after the last run
 draw (half a gallon lost within ten minutes) and end at a draw, a run or a record gap
 over 25 minutes. The record browser supports selected
 columns, event/session navigation, paging, date anchors and daily CSV export. Its
+quick ranges retain absolute start times, and an unedited To follows the absolute
+current instant for queries and CSV, including the repeated autumn hour. Manual
+From/To edits use local wall time; a manually selected To includes its whole minute. Its
 columns are the fields the records on the page carry, so they follow the package
 that wrote them rather than the draft being edited. Standard (contactor, watts,
 pressure, tank water, net flow) is the default on every screen; presets and a

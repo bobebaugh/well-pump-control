@@ -144,15 +144,23 @@ async function load(pageCursor = null, direction = "after") {
   try { const data = await request(`${endpoint}?${params}`); if (!state.triggerChecked && link.event && state.mode === "session") { state.triggerChecked = true; state.trigger = data.eventTriggerField || null; } state.catalog = data.catalog; if (state.mode === "session" && data.status === "empty" && pageCursor) { if (direction === "before") state.previousCursor = null; else state.nextCursor = null; statusLine.textContent = direction === "before" ? "No earlier session records exist; showing the last available records." : "No later session records exist; showing the last available records."; updateButtons(); return; } state.currentStart = pageCursor; state.currentDirection = direction; state.nextCursor = data.nextCursor; state.previousCursor = data.previousCursor; state.scan = data.scan || null; renderColumns(); render(data.records); statusLine.textContent = (data.status === "empty" ? (state.mode === "observation" ? "No matching records in this range." : "No records at this position.") : (data.source === "receipt-time-fallback" ? "Receipt-time fallback: this is cloud receipt time, not device observation time." : "Observation time is device-reported time. Receipt time is shown separately.")) + scanNote(data.scan, data.records.length); updateButtons(); } catch (error) { statusLine.textContent = error.body?.code === "configuration_missing" ? "Configuration is unavailable." : error.body?.code === "read_denied" ? "Record reading is denied by the current service configuration." : error.body?.code === "invalid_cursor" ? "This browsing position is invalid; choose Latest or a new range." : "Read failed. The page remains usable; try again."; }
 }
 function stamp(value) { return value.replace(/-/g, "").replace(":", "").replace("T", "_"); }
-// From and To are local wall-clock times. To follows "now" until it is edited,
-// so the newest records and an export always run to the moment they are asked for.
-function setRange(from, to = new Date()) { rangeFrom.value = localDateTime(from); rangeTo.value = localDateTime(to); state.toFollowsNow = true; }
+// Inputs display local wall time, but a quick range retains its absolute start.
+// During the repeated autumn hour an unedited 1:30 can mean either of two instants.
+// To follows the actual instant "now" until edited; only manual input is parsed.
+function setRange(from, to = new Date()) {
+  rangeFrom.value = localDateTime(from); rangeTo.value = localDateTime(to);
+  state.rangeStartMs = from.getTime(); state.rangeStartText = rangeFrom.value;
+  state.toFollowsNow = true;
+}
 function range() {
-  if (state.toFollowsNow) rangeTo.value = localDateTime();
-  const start = new Date(rangeFrom.value); const end = new Date(rangeTo.value);
+  const start = rangeFrom.value === state.rangeStartText
+    ? new Date(state.rangeStartMs) : new Date(rangeFrom.value);
+  const end = state.toFollowsNow ? new Date() : new Date(rangeTo.value);
+  if (state.toFollowsNow) rangeTo.value = localDateTime(end);
   if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return { error: "Choose both a From and a To date and time." };
-  // The To minute is included whole.
-  end.setSeconds(59, 999);
+  // A manually chosen To includes the whole minute. UTC setters preserve its
+  // resolved instant across a timezone transition.
+  if (!state.toFollowsNow) end.setUTCSeconds(59, 999);
   if (end <= start) return { error: "To must be later than From." };
   if (end - start > MAX_EXPORT_DAYS * 86400000) return { error: `Choose a range of ${MAX_EXPORT_DAYS} days or less.` };
   return { start, end };
@@ -210,7 +218,7 @@ document.querySelector("#receipt-records").addEventListener("click", () => { sta
 older.addEventListener("click", () => { if (state.mode === "session") { if (state.previousCursor) load(state.previousCursor, "before"); } else if (state.nextCursor) { state.trail.push(state.currentStart); load(state.nextCursor); } }); newer.addEventListener("click", () => { if (state.mode === "session") { if (state.nextCursor) load(state.nextCursor, "after"); } else load(state.trail.pop() || null); }); document.querySelector("#export-range").addEventListener("click", exportRange);
 // Editing From or To makes a custom range once the edit settles.
 let editTimer = null;
-function customEdit(isTo) { if (isTo) state.toFollowsNow = false; clearTimeout(editTimer); editTimer = setTimeout(() => applyRange("custom"), 700); }
+function customEdit(isTo) { if (isTo) state.toFollowsNow = false; else state.rangeStartText = null; clearTimeout(editTimer); editTimer = setTimeout(() => applyRange("custom"), 700); }
 rangeFrom.addEventListener("change", () => customEdit(false)); rangeTo.addEventListener("change", () => customEdit(true));
 for (const [id, selector] of Object.entries(quickButtons)) document.querySelector(selector).addEventListener("click", () => applyRange(id));
 eventSelect.addEventListener("change", () => chooseEvent(eventSelect.value));

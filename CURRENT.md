@@ -99,6 +99,7 @@ when pilot is advanced. Since the 12 October promotion:
 | Mode tile shows System Monitor in amber from the observation's system flag; Normal requires both Monitor flags to be false in a fresh reading. | Web |
 | Electrical tiles clear stale/missing readings and failed reads; meter health requires a fresh observation before reporting valid. | Web |
 | The 15-minute idle pause also stops history, event and service fetches; resuming refreshes each once, including when the tab is shown again. | Web |
+| Record queries and CSV retain absolute quick-range boundaries and follow the actual current instant through the 1 November repeated hour. | Web |
 
 ## Maintenance baseline
 
