@@ -73,29 +73,16 @@ the Tab5 but make a text message use the shorter UCS-2 segment.
 ## On pilot, not yet on main
 
 Keep this list current on every pilot promotion and clear it when main is fast-forwarded
-to pilot. Docs-only commits change no behavior. Main last matched pilot at a5f205b (29
-September, step C). The Tab5 has posted to main since M6.45 was installed on 29
-September, so pilot is a test deploy that still shares live data. Pilot was
-fast-forwarded to pilot-working on 12 October and again on 21 October, on the owner's
-direction. Main waits for the owner's single winter deploy (15 credits).
-
-| Change | Kind |
-| --- | --- |
-| 5ebbcb8: home page polls the live reading every 5 s and pauses after 15 idle minutes with a Resume control (decision 8) | Web |
-| 6a7a8a4: paused tiles hide their units; read-only firestore-peek --full prints whole documents | Web, maintenance |
-| d916e52: Mode tile shows System Monitor in amber; Normal needs both Monitor flags false in a fresh reading (review item 3) | Web + current-observation |
-| aa657e7: stale or missing electrical readings clear; meter health needs a fresh reading (item 4) | Web |
-| a803570: the idle pause also stops history, event and service fetches; resume refreshes once (item 8) | Web |
-| b361c2c: records page and CSV keep absolute range boundaries through the 1 November repeated hour (item 9) | Web |
-| 1e1c29c: silent alert saves its pending message and key before sending, retries identical payloads, still sends Resumed (item 10) | Cloud (scheduled function) |
-| 480f116, 778627c-0bf5e9d and others: Windows setup notes, records, decisions and the review | Docs only |
-
-None of these touches a function the Tab5 calls or interfaces/. Web tests: 431 pass.
+to pilot. Empty: on 21 October, on the owner's direction, pilot was fast-forwarded to
+pilot-working and main to pilot (main was a5f205b), the single winter main deploy. Main
+now carries the idle pause, the review's web fixes (items 3, 4, 8, 9, 10), paused-unit
+hiding, firestore-peek --full and docs. No function the Tab5 calls changed. Web tests:
+431 pass.
 
 ## On pilot-working, not yet on pilot
 
 Keep this list current on every pilot-working change and move rows to the table above
-when pilot is advanced. Empty: pilot was fast-forwarded to pilot-working on 21 October.
+when pilot is advanced. Empty: pilot and main were fast-forwarded on 21 October.
 
 ## Maintenance baseline
 
@@ -535,7 +522,14 @@ Reduction options are in FUTURE, Running cost.
    6 of 20 RTDB requests took over 1 s, waiting up to 3 s on the server, while Netlify
    answered in under 1 s. No incident posted on the Firebase status page. If it lasts,
    the package-only relief is logging CloudAvailable in the health record only, at the
-   cost of the per-drop cause; the device fix is the 2 s RTDB timeout in FUTURE.
+   cost of the per-drop cause; the device fix is the 2 s RTDB timeout in FUTURE. Resolved by
+   the owner the same day with v52 (20261021151452-event-v3-v52, adopted about 15:15
+   UTC; verified by the owner and Codex): CloudAvailable, BufferUsedPercent and
+   RecordsLost now log as always, so their changes no longer create records (RecordsLost
+   too, to avoid a record per lost record in a long outage, a case never tested); a new
+   "Record queue high" event opens at BufferUsedPercent >= 20 and closes below 10, with
+   no actions or notification. The RTDB slowness itself also degrades the dashboard and
+   the rules editor; a GitHub issue holds next summer's improvements.
 
    One visit, one restart: install M6.46, publish the longer H001 trigger, repeat the
    short power cut watching whether the Tab5 reboots when power returns. Then a 3-5 day
