@@ -1,8 +1,14 @@
 # Current beta status â€” Tab5/Shelly
 
-As of 22 September 2026. Release stamps are per file, not per bundle.
+As of 21 October 2026. Release stamps are per file, not per bundle.
 
-Installed and running: pilot.py M6.43 plus diagnostic instrumentation, cloud.py
+Frozen for the winter, 21 October 2026: installed and running are pilot.py and cloud.py
+M6.46 and main.py M6.41, from 78733ab (12 Oct), on package v52 in session
+boot_16ed4cf94153. The full record, with source hashes, is in pilot-working's CURRENT,
+"Frozen for the winter". Device files stay untouched until the owner returns. The
+paragraphs below record the 22 September state and are kept as history.
+
+Was installed on 22 September: pilot.py M6.43 plus diagnostic instrumentation, cloud.py
 M6.37, main.py M6.41. pilot.py carries edge-triggered log() calls tagged DIAG and no
 logic change: bindings resolved at startup, Boyle pump edges, script liveness
 transitions, slow Shelly 1 reads, and Shelly restart request and resolution. 9e1accb,
@@ -86,6 +92,9 @@ M6.46, main.py M6.41, running package v51), plus the retirement of the four with
 Wi-Fi power-save tests (7742dbe; 296 host tests pass, none erroring) and docs. Nothing
 under tab5/ differs from 78733ab. Evidence for the install: the owner's report, the
 M6.46 stamp and the records since 12 October; the device files were not byte-compared.
+
+Docs only, 21 Oct: the freeze rule in AGENTS, mirrored from the web line, and the
+freeze note at the top of this file.
 
 Since M6.43 two items wanted device evidence: one Shelly reboot reporting accepted then
 confirmed-completed (the owner tested a Shelly reboot from the web on 29 September),
