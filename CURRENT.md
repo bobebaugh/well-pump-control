@@ -523,7 +523,9 @@ Reduction options are in FUTURE, Running cost.
    (IAM, service accounts, Keys) that it has no expiry. Google billing for the Blaze
    project: confirm the payment method is valid through spring. That key is a single
    point of failure: if it fails, records, pump emails and the silent alert all stop
-   together, so several days without a pump email is the signal.
+   together, so several days without a pump email is the signal. Checked 21 Oct (owner): the key
+   has no practical expiry; the billing account covers more than this app and the
+   owner watches it.
 
    One visit, one restart: install M6.46, publish the longer H001 trigger, repeat the
    short power cut watching whether the Tab5 reboots when power returns. Then a 3-5 day
