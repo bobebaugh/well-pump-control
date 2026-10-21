@@ -18,10 +18,11 @@ variable set listed the sites/well-main collections and read eventRecords and
 eventBoardState documents. The owner provisioned the account read-only; that was not
 tested with a write, since Pilot and Main share live data.
 
-Installed on the Tab5 since 29 September: pilot.py and cloud.py M6.45 and main.py M6.41,
-from tab5-working 462a4f3, running package v50. Tab5 was fast-forwarded to match on
-5 October. Evidence is the owner's install, the M6.45 stamp and the records; the device
-files were not byte-compared. The stray remote branch claude/kind-hamilton-isgae0
+Installed on the Tab5 since 12 October: pilot.py and cloud.py M6.46 and main.py M6.41,
+from tab5-working 78733ab, running package v51 (decision 8). The Tab5 posts to main.
+The Tab5 branch is still at M6.45 (7aaae38) until the owner promotes it. Evidence is
+the owner's install, the M6.46 stamp and the records; the device files were not
+byte-compared. The stray remote branch claude/kind-hamilton-isgae0
 holds one unique commit (9803c8a, a README rewrite on the old main stub); cloud
 sessions cannot push tags, so it stays until the owner archives it under a tag.
 The owner confirms the Shelly 1 protection script is fully unit tested on real

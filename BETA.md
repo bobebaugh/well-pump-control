@@ -80,10 +80,10 @@ device line on Tab5.
 
 The hostname is mfwell.ebaugh.net, a Cloudflare CNAME in DNS-only mode; it answers 200
 and redirects http to https. Do not change the apex site or existing DNS/mail records
-as a housekeeping action. Existing branch URLs remain, and one of them is load bearing:
-the Tab5 still posts ingest, event boards, releases and device sync to the pilot branch
-deploy, so that deploy must stay enabled and device-driven functions run in its context
-rather than production's.
+as a housekeeping action. Existing branch URLs remain. Since M6.45 (installed 29
+September) the Tab5 posts ingest, event boards, releases and device sync to main's
+production deploy, so device-driven functions run in production's context; the pilot
+branch deploy is a test deploy that still shares live data.
 
 The production Functions context is configured with the same existing
 Firebase project/database/RTDB and password as pilot: FIREBASE_PROJECT_ID,
