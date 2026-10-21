@@ -185,6 +185,8 @@ unavailable; unknown is a distinct state and is never shown as stopped. The SW(0
 and RLY0 tiles and the Shelly 1 row show a value only from a fresh record in which
 Shelly 1 answered; a stale record, a failed read or an unreachable Shelly 1 shows
 unknown rather than the last value. The page
+also clears watts, volts and power factor on stale, missing or failed observations;
+meter health never calls a stale reading valid. The page
 displays a disagreement between the contactor and motor current without judging
 it; the rules engine owns what one means. The tank shows the device's net flow estimate
 (TankNetFlowGPM, signed, positive filling) from the same record. It reads zero when

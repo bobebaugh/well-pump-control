@@ -366,9 +366,10 @@ function renderPumpBadge(state) {
 
 // Reachability and validity are different failures and are reported as such: a
 // meter that cannot be read is not a meter reporting a bad reading.
-function renderMeterHealth(data) {
+function renderMeterHealth(data, fresh) {
   const values = data.values || {};
-  if (values.isValid === true) setHealth(shellyRow, "online", "Meter valid");
+  if (!fresh) setHealth(shellyRow, "unavailable", "No fresh meter reading");
+  else if (values.isValid === true) setHealth(shellyRow, "online", "Meter valid");
   else if (values.isValid === false) setHealth(shellyRow, "offline", "Meter invalid");
   else if (data.shellyAvailable === false) setHealth(shellyRow, "offline", "Not reachable from Tab5");
   else setHealth(shellyRow, "unavailable", "Meter state unknown");
@@ -434,7 +435,7 @@ function renderObservation(data) {
   // The Tab5 writes at most every 10 s and the page reads every 5 s, so a healthy
   // reading is under about 17 s old. Past 30 s the number on screen is a memory,
   // and saying so matters more than showing a stale digit.
-  const fresh = data.ageSeconds !== null && data.ageSeconds <= 30;
+  const fresh = Number.isFinite(data.ageSeconds) && data.ageSeconds <= 30;
   liveReading = { fresh, ageSeconds: data.ageSeconds, at: Date.now() };
   renderEventStatus();
   const psi = Number.isFinite(values.pressurePsi) ? values.pressurePsi : null;
@@ -474,11 +475,9 @@ function renderObservation(data) {
 
   // The rest of the live readings come from the same record, so every number on
   // the row is the same instant rather than two reads stitched together.
-  if (fresh) {
-    if (Number.isFinite(values.powerW)) powerValue.textContent = values.powerW.toFixed(0);
-    if (Number.isFinite(values.voltageV)) voltageValue.textContent = values.voltageV.toFixed(1);
-    if (Number.isFinite(values.powerFactor)) pfValue.textContent = values.powerFactor.toFixed(2);
-  }
+  powerValue.textContent = fresh && Number.isFinite(values.powerW) ? values.powerW.toFixed(0) : "—";
+  voltageValue.textContent = fresh && Number.isFinite(values.voltageV) ? values.voltageV.toFixed(1) : "—";
+  pfValue.textContent = fresh && Number.isFinite(values.powerFactor) ? values.powerFactor.toFixed(2) : "—";
   const relay = shelly1RelayView(shelly1, fresh);
   setBinaryValue(sw0Value, relay.sw0);
   setBinaryValue(rly0Value, relay.rly0);
@@ -488,7 +487,7 @@ function renderObservation(data) {
   // 60s badge and a 2s power figure is what this replaced.
   renderPumpBadge(pumpBadgeState(data, fresh));
   renderProtection(data, fresh);
-  renderMeterHealth(data);
+  renderMeterHealth(data, fresh);
   renderShelly1Health(shelly1, fresh);
   setHealth(tab5Row, fresh ? "online" : "checking",
     data.ageSeconds === null ? "Timestamp unavailable" : `Last report ${data.ageSeconds}s ago`);
@@ -712,6 +711,7 @@ async function checkObservation() {
     // proves nothing. Say the row is unavailable instead of ageing a number
     // nothing refreshed.
     else {
+      clearObservation();
       setHealth(tab5Row, "offline", "Telemetry unavailable");
       setHealth(shelly1Row, "unavailable", "Telemetry unavailable · relay state unknown");
       setBinaryValue(sw0Value, null);

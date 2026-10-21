@@ -24,11 +24,21 @@ function element() {
 }
 
 function page() {
-  const names = ["protShelly", "protShellyDetail", "protTab5", "protMode", "protModeDetail"];
+  const names = ["protShelly", "protShellyDetail", "protTab5", "protMode", "protModeDetail",
+    "pressureValue", "tankPressure", "tankGallons", "tankFlow", "tankWater", "pressureTag", "pressureRow",
+    "powerValue", "voltageValue", "pfValue", "sw0Value", "rly0Value", "shellyRow", "shelly1Row", "tab5Row", "pumpState"];
   const els = Object.fromEntries(names.map(name => [name, element()]));
-  const render = new Function(...names,
-    `${lift("setProtection")}\n${lift("renderProtection")}\nreturn renderProtection;`)(...Object.values(els));
-  return { els, render };
+  const funcs = ["setProtection", "renderProtection", "setHealth", "setBinaryValue", "shelly1RelayView", "binaryText",
+    "renderShelly1Health", "renderMeterHealth", "renderObservation", "clearObservation"];
+  const renderers = new Function(...names, `
+    let liveReading;
+    function renderEventStatus() {} function renderPumpBadge() {} function pumpBadgeState() {}
+    function tankWaterGallons() { return null; } function tankFillPercent() { return null; }
+    function tankFlowText() { return "—"; }
+    ${funcs.map(lift).join("\n")}
+    return { render: renderProtection, observation: renderObservation, clear: clearObservation };
+  `)(...Object.values(els));
+  return { els, ...renderers };
 }
 
 test("System Monitor is amber and distinct from Normal and User Monitor", () => {
@@ -49,4 +59,25 @@ test("System Monitor is amber and distinct from Normal and User Monitor", () => 
   }
   render({ userMonitor: false, systemMonitor: true, relayRestoration: "unconfirmed" }, true);
   assert.match(els.protModeDetail.textContent, /Relay restoration unconfirmed/);
+});
+
+test("electrical values clear on stale, missing or failed observations and recover on fresh data", () => {
+  const { els, observation, clear } = page();
+  const good = { ageSeconds: 2, values: { pressurePsi: 50, powerW: 2800, voltageV: 240, powerFactor: 0.98, isValid: true } };
+  const digits = () => [els.powerValue, els.voltageValue, els.pfValue].map(el => el.textContent);
+  for (const bad of [
+    { ...good, ageSeconds: 31 }, { ...good, ageSeconds: null }, { ...good, ageSeconds: undefined },
+    { ...good, values: { powerW: null, voltageV: null, powerFactor: null } }, { ageSeconds: 2 }
+  ]) {
+    observation(good);
+    assert.deepEqual(digits(), ["2800", "240.0", "0.98"]);
+    observation(bad);
+    assert.deepEqual(digits(), ["—", "—", "—"]);
+    assert.doesNotMatch(els.shellyRow.querySelector("small").textContent, /Meter valid/);
+    observation(good);
+    assert.equal(els.shellyRow.querySelector("small").textContent, "Meter valid");
+  }
+  clear();
+  assert.deepEqual(digits(), ["—", "—", "—"]);
+  assert.doesNotMatch(els.shellyRow.querySelector("small").textContent, /Meter valid/);
 });
