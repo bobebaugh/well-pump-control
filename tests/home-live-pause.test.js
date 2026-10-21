@@ -47,13 +47,16 @@ function pageHarness(nowMs) {
   const calls = [];
   const body = `
     let livePaused = false; let lastInteractionAt = ${nowMs}; let liveReading = null;
-    let observationTimer = 1; let operatorTimer = 2; let lastEventBoard = null;
+    let observationTimer = 1; let operatorTimer = 2; let historyTimer = 3; let lastEventBoard = null;
     const LIVE_IDLE_PAUSE_MS = ${15 * 60 * 1000};
     const Date = { now: () => clock.now };
     function clearTimeout(handle) { calls.push(["clearTimeout", handle]); }
     function clearObservation() { calls.push(["clearObservation"]); }
     function checkObservation() { calls.push(["checkObservation"]); }
     function checkOperatorStatus() { calls.push(["checkOperatorStatus"]); }
+    function checkHistory() { calls.push(["checkHistory"]); }
+    function checkEvents() { calls.push(["checkEvents"]); }
+    function checkServices() { calls.push(["checkServices"]); }
     function renderEventStatus() { calls.push(["renderEventStatus", liveReading]); }
     ${lift("setHealth")}
     ${lift("setProtection")}
@@ -85,7 +88,7 @@ test("pausing stops both polls, shows the banner and marks every live tile pause
   for (const name of ["pressureValue", "powerValue", "voltageValue"]) {
     assert.equal(els[name].nextElementSibling.hidden, true, `${name} unit is hidden while paused`);
   }
-  assert.deepEqual(calls.filter(call => call[0] === "clearTimeout").map(call => call[1]), [1, 2]);
+  assert.deepEqual(calls.filter(call => call[0] === "clearTimeout").map(call => call[1]), [1, 2, 3]);
   for (const name of ["pressureValue", "powerValue", "voltageValue", "pfValue", "sw0Value", "rly0Value",
     "tankPressure", "tankGallons", "tankFlow", "protShelly", "protTab5", "protMode"]) {
     assert.equal(els[name].textContent, "Paused", `${name} says paused`);
@@ -119,7 +122,7 @@ test("an interaction resumes at once: banner hidden, both polls restarted", () =
   assert.equal(page.state().lastInteractionAt, 9000000);
   assert.equal(page.state().liveReading, null);
   const after = calls.slice(calls.findIndex(call => call[0] === "clearObservation")).map(call => call[0]);
-  assert.deepEqual(after, ["clearObservation", "checkObservation", "checkOperatorStatus"]);
+  assert.deepEqual(after, ["clearObservation", "checkObservation", "checkOperatorStatus", "checkHistory", "checkEvents", "checkServices"]);
   // Interaction while live only moves the idle clock.
   calls.length = 0;
   clock.now = 9100000;

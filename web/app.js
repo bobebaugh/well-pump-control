@@ -251,6 +251,7 @@ async function checkOperatorStatus({ promptForKey = false } = {}) {
     renderOperatorStatus(body.control);
     operatorTimer = setTimeout(checkOperatorStatus, operatorSignedIn ? 5000 : 15000);
   } catch (error) {
+    if (livePaused && !promptForKey) return;
     if (error.body?.code === "unauthorized") {
       sessionStorage.removeItem("pilotMonitorKey");
       setSignedIn(false);
@@ -629,6 +630,7 @@ async function loadHistory(windowKey) {
 
 async function checkHistory() {
   clearTimeout(historyTimer);
+  if (pollingPaused()) return;
   if (document.hidden) {
     historyTimer = setTimeout(checkHistory, HISTORY_REFRESH_MS);
     return;
@@ -637,12 +639,15 @@ async function checkHistory() {
     // The day window is always refreshed: the tank cutaway and the 24h tiles
     // both need it even when the chart is showing the week.
     await loadHistory("1d");
+    if (pollingPaused()) return;
     if (historyWindow !== "1d" && !(Date.now() - (historyLoadedAt[historyWindow] || 0) < HISTORY_MAX_AGE_MS[historyWindow])) {
       await loadHistory(historyWindow);
     }
+    if (pollingPaused()) return;
     renderDayStats();
     renderHistory();
   } catch (error) {
+    if (pollingPaused()) return;
     // The cutaway degrades on its own; the pressure readout is unaffected.
     if (!historyData[historyWindow]) historyCaption.textContent = "History unavailable";
   }
@@ -748,10 +753,11 @@ function renderEventStatus() {
 async function checkEvents() {
   // The heaviest of the remaining repeating polls: one call assembles the event
   // board and the recent closed occurrences rather than reading a document.
-  if (document.hidden) return;
+  if (pollingPaused() || document.hidden) return;
 
   try {
     const data = await fetchStatus("/.netlify/functions/record-browser?view=home");
+    if (pollingPaused()) return;
     const board = data.board;
     const open = Object.values(board?.openEvents || {});
     openEvents.innerHTML = open.length ? open.map(entry => eventCard({ ...entry, ...entry.slot, opening: entry.slot?.opening })).join("") : "<p class='event-empty'>No open events reported by the latest successful board.</p>";
@@ -760,6 +766,7 @@ async function checkEvents() {
     eventStatus.textContent = eventBoardStatus(lastEventBoard, liveReading, Date.now());
     localStorage.setItem("pilotLastEventBoard", JSON.stringify({ board, at: Date.now() }));
   } catch (error) {
+    if (pollingPaused()) return;
     const prior = JSON.parse(localStorage.getItem("pilotLastEventBoard") || "null");
     if (prior?.board) { openEvents.innerHTML = Object.values(prior.board.openEvents || {}).map(entry => eventCard({ ...entry, ...entry.slot, opening: entry.slot?.opening })).join(""); eventStatus.textContent = `Event board read failed; showing last known board from ${formatTime(new Date(prior.at))}.`; }
     else eventStatus.textContent = error.body?.code === "configuration_missing" ? "Event browser configuration is unavailable." : error.body?.code === "read_denied" ? "Event board read is denied by the current service configuration." : "Event board read failed.";
@@ -770,13 +777,14 @@ async function checkServices() {
   // Same visibility guard the operator poll already carries. This one repeats on
   // a bare interval, so without it two endpoints were billed every five minutes
   // against a screen nobody was looking at.
-  if (document.hidden) return;
+  if (pollingPaused() || document.hidden) return;
 
   const checkedAt = new Date();
   const [apiResult, firestoreResult] = await Promise.allSettled([
     fetchStatus("/.netlify/functions/health"),
     fetchStatus("/.netlify/functions/firebase-status")
   ]);
+  if (pollingPaused()) return;
 
   setHealth(healthRow,
     apiResult.status === "fulfilled" && apiResult.value.status === "ok" ? "online" : "offline",
@@ -794,6 +802,12 @@ async function checkServices() {
 }
 
 function liveIdleExpired(nowMs) { return nowMs - lastInteractionAt >= LIVE_IDLE_PAUSE_MS; }
+
+function pollingPaused() {
+  if (!livePaused && !liveIdleExpired(Date.now())) return false;
+  pauseLive();
+  return true;
+}
 
 // Paused is its own state: every live tile says so rather than reading as unknown,
 // stale or unavailable, because nothing has failed -- the page simply stopped asking.
@@ -823,6 +837,7 @@ function renderPaused() {
 function pauseLive() {
   clearTimeout(observationTimer);
   clearTimeout(operatorTimer);
+  clearTimeout(historyTimer);
   if (livePaused) return;
   livePaused = true;
   livePausedBanner.hidden = false;
@@ -839,6 +854,9 @@ function resumeLive() {
   clearObservation();
   checkObservation();
   checkOperatorStatus();
+  checkHistory();
+  checkEvents();
+  checkServices();
 }
 
 for (const type of ["pointerdown", "pointermove", "wheel", "keydown", "touchstart"]) {
@@ -860,13 +878,11 @@ document.addEventListener("visibilitychange", () => {
       lastInteractionAt = Date.now();
       checkObservation();
       checkOperatorStatus();
+      checkHistory();
+      // Interval polls also refresh once when the tab becomes visible.
+      checkEvents();
+      checkServices();
     }
-    checkHistory();
-    // These two skip their interval tick while hidden rather than rescheduling,
-    // so without this they would show whatever was on screen at the last tick
-    // until the interval came round again -- up to five minutes for services.
-    checkEvents();
-    checkServices();
   }
 });
 

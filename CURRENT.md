@@ -98,6 +98,7 @@ when pilot is advanced. Since the 12 October promotion:
 | Read-only `firestore-peek --full` prints complete JSON documents without nested-value or preview truncation, including full rules clauses. | Maintenance |
 | Mode tile shows System Monitor in amber from the observation's system flag; Normal requires both Monitor flags to be false in a fresh reading. | Web |
 | Electrical tiles clear stale/missing readings and failed reads; meter health requires a fresh observation before reporting valid. | Web |
+| The 15-minute idle pause also stops history, event and service fetches; resuming refreshes each once, including when the tab is shown again. | Web |
 
 ## Maintenance baseline
 

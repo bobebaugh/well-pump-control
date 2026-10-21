@@ -172,10 +172,13 @@ The web home displays live RTDB observations and event state. From M6.46 the Tab
 writes the RTDB current observation at most every 10 s, always the latest sample, and
 the page reads it every 5 s, so the Dashboard, pump starts included, updates within
 about 10 s (worst age about 17 s against the 30 s fresh rule). After 15 minutes without
-a pointer, key or touch the page stops the live and operator polls and says so: every
+a pointer, key or touch the page stops all timed fetches, including history, events
+and service checks as well as live and operator polls, and says so: every
 live tile, health row and the events panel read paused, never unknown, stale or
 unavailable. Any interaction, the Resume control or showing the tab again resumes at
-once; a hidden tab keeps the existing visibility guards. Every live reading,
+once, refreshing each poll once; a hidden tab keeps the existing visibility guards.
+Replies arriving during the pause cannot restart history polling or replace paused
+status. Every live reading,
 the pump badge and the Tab5/meter/Shelly 1 health rows come from one observation
 record, so the state and the numbers beside it are the same instant. The mode tile
 distinguishes amber System Monitor from amber User Monitor and shows Normal only when
