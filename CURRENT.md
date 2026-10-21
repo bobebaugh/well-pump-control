@@ -75,39 +75,27 @@ the Tab5 but make a text message use the shorter UCS-2 segment.
 Keep this list current on every pilot promotion and clear it when main is fast-forwarded
 to pilot. Docs-only commits change no behavior. Main last matched pilot at a5f205b (29
 September, step C). The Tab5 has posted to main since M6.45 was installed on 29
-September, so pilot is now a test deploy that still shares live data. On 12 October, on
-the owner's direction, pilot was fast-forwarded to pilot-working; main waits until the
-owner is sure no more web changes are coming (each main deploy costs 15 credits).
+September, so pilot is a test deploy that still shares live data. Pilot was
+fast-forwarded to pilot-working on 12 October and again on 21 October, on the owner's
+direction. Main waits for the owner's single winter deploy (15 credits).
 
 | Change | Kind |
 | --- | --- |
-| 5ebbcb8: Running-cost web half (decision 8): home page polls the live reading every 5 s; after 15 minutes without interaction it pauses the live and operator polls with a Resume control, and paused tiles, health rows and events say paused (units still show beside "Paused", cosmetic) | Web |
-| 778627c-01280b6: main deploy, M6.45 install, soak and running-cost records; next-summer options; decision 8 | Docs only |
+| 5ebbcb8: home page polls the live reading every 5 s and pauses after 15 idle minutes with a Resume control (decision 8) | Web |
+| 6a7a8a4: paused tiles hide their units; read-only firestore-peek --full prints whole documents | Web, maintenance |
+| d916e52: Mode tile shows System Monitor in amber; Normal needs both Monitor flags false in a fresh reading (review item 3) | Web + current-observation |
+| aa657e7: stale or missing electrical readings clear; meter health needs a fresh reading (item 4) | Web |
+| a803570: the idle pause also stops history, event and service fetches; resume refreshes once (item 8) | Web |
+| b361c2c: records page and CSV keep absolute range boundaries through the 1 November repeated hour (item 9) | Web |
+| 1e1c29c: silent alert saves its pending message and key before sending, retries identical payloads, still sends Resumed (item 10) | Cloud (scheduled function) |
+| 480f116, 778627c-0bf5e9d and others: Windows setup notes, records, decisions and the review | Docs only |
 
-5ebbcb8 needs no M6.46 and M6.46 needs no web change. Web tests: 421 pass.
+None of these touches a function the Tab5 calls or interfaces/. Web tests: 431 pass.
 
 ## On pilot-working, not yet on pilot
 
 Keep this list current on every pilot-working change and move rows to the table above
-when pilot is advanced. Since the 12 October promotion:
-
-| Change | Kind |
-| --- | --- |
-| Local Windows setup instructions and a shared Claude import; uses saved tool/credential paths and pilot-working. No deployed behavior changes. | Docs only |
-| Home-page pressure, power and voltage tiles hide their units while live polling is paused and restore them on resume. | Web |
-| Read-only `firestore-peek --full` prints complete JSON documents without nested-value or preview truncation, including full rules clauses. | Maintenance |
-| Mode tile shows System Monitor in amber from the observation's system flag; Normal requires both Monitor flags to be false in a fresh reading. | Web |
-| Electrical tiles clear stale/missing readings and failed reads; meter health requires a fresh observation before reporting valid. | Web |
-| The 15-minute idle pause also stops history, event and service fetches; resuming refreshes each once, including when the tab is shown again. | Web |
-| Record queries and CSV retain absolute quick-range boundaries and follow the actual current instant through the 1 November repeated hour. | Web |
-| Silent-device alerts save pending transition text/key before sending, retry identical payloads after uncertain outcomes, and still send Resumed when Silent delivery is uncertain. | Cloud |
-
-Pre-freeze web/cloud checks, 20 October 2026: `npm test` passes all 431 tests,
-including New York's 1 November repeated hour and alert response/state-save failures.
-Read-only GETs confirmed the affected main scripts/API still carry the old behavior.
-Next owner decision: promote and deploy the web fixes. Freeze documentation waits
-until fetched main = pilot with these fixes. Tab5 = tab5-working at d258402 on the
-final fetch; the device-source prerequisite is met.
+when pilot is advanced. Empty: pilot was fast-forwarded to pilot-working on 21 October.
 
 ## Maintenance baseline
 
