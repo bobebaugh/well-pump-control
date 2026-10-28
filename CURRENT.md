@@ -39,9 +39,15 @@ RT01's display name, "RTDB Queue High", is misleading. BufferUsedPercent is the 
 100-record durable queue to Netlify's ingest-record (tab5/pilot.py
 add_transport_evidence; cloud.py DURABLE_QUEUE_DEPTH), not anything in RTDB. RTDB
 slowness alone does not fill it: on 26 Oct it stayed at 2% or less. It fills only when
-ingest-record posts fail or stall. On 28 Oct, Netlify and RTDB failed together, which
-points to the internet path more than to Google. Netlify's function log for
-ingest-record at 12:56-12:58 UTC would settle it; the cloud session cannot read it. Google's status page lists nothing after its 21 Oct RTDB
+ingest-record posts fail or stall. On 28 Oct, Netlify and RTDB failed together. The
+owner's ingest-record function log (27 Oct 17:45 to 28 Oct 17:32 UTC) has no
+invocation between 12:51:39 and 12:59:21 UTC. It then shows 33 quick calls
+(120-260 ms) draining the queue by 13:00:16. Overnight it shows normal 10-minute
+cold starts of about 0.9 s, and its only ERROR lines are the known punycode
+deprecation warning. The stalled posts never reached the function, so neither
+Firestore nor the function was at fault. With RTDB unreachable too, the cause is the
+path from the house (Wi-Fi stayed up, so the internet side), not Google. One record
+received at 12:58:22 UTC has no line in the pasted log. Google's status page lists nothing after its 21 Oct RTDB
 incident (us-central1, 6:00 AM-8:30 PM PT). From the cloud, RTDB answered in 0.12-0.37 s
 at 17:40 UTC.
 
