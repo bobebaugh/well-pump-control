@@ -81,7 +81,8 @@ Open at hand-off (2026-10-28, session 1; this prompt first written):
 
    RT01 watches cloud.py's 100-record RAM queue to Netlify. Netlify and RTDB sends both failed for about
    80 s with Wi-Fi up (UniFi), then a missed reply cost 60 s of backoff (CURRENT; FUTURE, "CPU B sends
-   share one loop"). The cause isn't recorded. The fix waits for June.
+   share one loop"). The cause isn't recorded. Bob's call: an app issue, fixed when development resumes
+   (retry sooner than 60 s). Reopen it sooner only if a stall recurs; the health check's lag list shows that.
    For the next rules package (Bob, 28 Oct: not before): rename RT01's display name from "RTDB Queue
    High" to what it catches, for example "Record Queue High" or "Cloud Send Backlog".
 3. **Activation and release receipt**, still open: CURRENT Next owner decisions 3 and 4. The device files have

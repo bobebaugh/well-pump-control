@@ -77,11 +77,14 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   On 28 Oct both Netlify and RTDB sends failed for about 80 s with the Wi-Fi link up.
   A missed reply then cost a further 60 s of backoff on a record already stored
   (CURRENT, "Frozen for the winter"). Three such stalls in 16 days, none losing a
-  record. The 2 s RTDB timeout above lengthens any slow call. Candidates, all device
-  changes, measured first in a host test:
+  record. The 2 s RTDB timeout above lengthens any slow call. Owner, 28 Oct: an
+  application issue to dig into when development resumes, or sooner if it recurs. A
+  normal send takes a couple of seconds, so nothing should wait a minute to try again.
+  Candidates, all device changes, measured first in a host test:
+  - retry durable posts sooner: cap the backoff near 10 s instead of 60 s (the
+    timeout per try is already 3 s);
   - record why sends fail, as counts by kind in the health record (see the
     cloud-drop counter);
-  - cap the durable backoff lower once another channel has just succeeded;
   - bound or cache name resolution, if MicroPython's requests resolves before its
     timeout applies.
 - **Simulator as a test:** the owner's concept, worth keeping, but not yet something to
