@@ -43,8 +43,12 @@ How Bob wants the role done:
   - RTDB data isn't read. Timing an unauthenticated GET on the database host (it answers 401) measures
     latency harmlessly.
   - Google's incidents are posted at status.firebase.google.com.
-- **Docs in the same push** (AGENTS): each change gets its row in CURRENT's promotion list, and DESIGN when
-  behavior changes. Keep CURRENT short; put ideas in FUTURE or an issue.
+- **Close-out by design:** while Bob is working with you in real time, queue doc updates locally and don't
+  commit or push each turn. Bob says when he's stepping back; then write them up and push in one go.
+  Each push still carries its docs (AGENTS): the row in CURRENT's promotion list, and DESIGN when behavior
+  changes. Keep CURRENT short; put ideas in FUTURE or an issue.
+- **Hold topics for their occasion.** A change that belongs to a later unit, such as a rules-package
+  rename, waits in "Open at hand-off" until Bob brings that unit up.
 - **The release boundaries are Bob's.**
   - Promoting to pilot, Tab5 or main needs his word. Each main deploy costs Netlify credits.
   - Installing device files, publishing a rules package, restarting a device, changing Firebase rules or
@@ -72,11 +76,15 @@ Open at hand-off (2026-10-28, session 1; this prompt first written):
 
    RT01 measures the Tab5's queue to Netlify. Bob's ingest-record log shows the stalled posts never
    arrived, and UniFi shows the WAN up. One call on CPU B's serial loop hung about 60 s and held up
-   every channel, RTDB included (FUTURE, "One stuck call stalls every channel"). The fix waits for June. A display-name fix rides the next rules package Bob publishes.
+   every channel, RTDB included (FUTURE, "One stuck call stalls every channel"). The fix waits for June.
+   For the next rules package (Bob, 28 Oct: not before): rename RT01's display name from "RTDB Queue
+   High" to what it catches, for example "Record Queue High" or "Cloud Send Backlog". A display-name fix rides the next rules package Bob publishes.
 3. **Activation and release receipt**, still open: CURRENT Next owner decisions 3 and 4. The device files have
    not been byte-compared with source.
 4. **Stray branches:**
-   - `claude/intelligent-brown-3csfcv` is merged into pilot-working and can be deleted on Bob's word.
+   - `claude/intelligent-brown-3csfcv` is merged into pilot-working. Bob approved deleting it on 28 Oct,
+     but GitHub refuses a branch delete from a cloud session (403), as it refuses tags. Bob deletes it
+     on github.com.
    - `claude/kind-hamilton-isgae0` has one unique commit and waits for Bob to archive it under a tag; cloud
      sessions can't push tags.
 5. **Next summer:** issue 28 (keep the screens usable when the live services are slow), issues 26 and 27, and
