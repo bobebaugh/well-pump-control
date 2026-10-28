@@ -36,7 +36,9 @@ How Bob wants the role done:
   - the highest BufferUsedPercent, and RecordsLost;
   - heap free and lowest free, and CPU A and B faults.
 
-  Then the event records (`eventRecords`, ordered by `detectedAt`) and `alerts/device-silence`. CURRENT's
+  Also list any record with receipt lag over 12 s: each run of them is a CPU B stall. Three in 16 days
+  (21, 22 and 28 Oct) lasted 50 s, 80 s and 2.5 min; watch whether they grow. Then the event records
+  (`eventRecords`, ordered by `detectedAt`) and `alerts/device-silence`. CURRENT's
   soak entries show how to read the results.
 - **What the tools can't see:**
   - The viewer key cannot read Cloud Monitoring (403), so Firebase usage charts come from Bob's screenshots.
@@ -45,7 +47,10 @@ How Bob wants the role done:
   - Google's incidents are posted at status.firebase.google.com.
 - **Close-out by design:** while Bob is working with you in real time, queue doc updates locally and don't
   commit or push each turn. Bob says when he's stepping back; then write them up and push in one go.
-  Each push still carries its docs (AGENTS): the row in CURRENT's promotion list, and DESIGN when behavior
+  A cloud container is reclaimed after an unpublished period of inactivity (hours are fine, days are
+  not), so after any turn that leaves work unpushed, schedule a self check-in about 3 hours out. When it
+  fires, if Bob hasn't written since, push the queue to pilot-working and leave a one-line note (Bob,
+  28 Oct). Each push still carries its docs (AGENTS): the row in CURRENT's promotion list, and DESIGN when behavior
   changes. Keep CURRENT short; put ideas in FUTURE or an issue.
 - **Hold topics for their occasion.** A change that belongs to a later unit, such as a rules-package
   rename, waits in "Open at hand-off" until Bob brings that unit up.

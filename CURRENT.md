@@ -58,7 +58,19 @@ against the UIFlow build), and a stalled DNS lookup would not show in UniFi's WA
 uptime. Which service's call hung is not recorded: v52 logs CloudAvailable as
 always, which dropped the per-drop cause note. So RTDB trouble can back up the
 record queue through the shared loop, and RT01 catches that whichever call is stuck.
-The device fix waits for June (FUTURE, "One stuck call stalls every channel"). Google's status page lists nothing after its 21 Oct RTDB
+The device fix waits for June (FUTURE, "One stuck call stalls every channel").
+
+Read-only, 12,201 records since 12 Oct: three such stalls (receipt lag over 12 s), all
+in this session or the one before it.
+- 21 Oct 00:02 UTC: about 50 s, pump off, while RTDB was already flapping.
+- 22 Oct 20:58 UTC: about 80 s, pump off. Both Shellys dropped out at the same moment,
+  so the Tab5's own LAN link faltered while WiFiConnected stayed true.
+- 28 Oct 12:56 UTC: about 2.5 min, starting about 50 s before the pump.
+
+The pump did not cause the 28 Oct stall. Its records (one every 2-6 s) filled the
+queue fast enough to trip RT01, while the quiet-time stalls reached only 5%. When the
+queue is full the oldest records are evicted and counted in RecordsLost. At pump-run
+rates that would take a stall of about 4-8 minutes, against 2.5 at most so far. Google's status page lists nothing after its 21 Oct RTDB
 incident (us-central1, 6:00 AM-8:30 PM PT). From the cloud, RTDB answered in 0.12-0.37 s
 at 17:40 UTC.
 
