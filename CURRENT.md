@@ -47,32 +47,42 @@ cold starts of about 0.9 s, and its only ERROR lines are the known punycode
 deprecation warning. So neither Firestore nor the function failed; the posts never
 arrived. One record received at 12:58:22 UTC has no line in the pasted log.
 
-UniFi shows the WAN up 100% with no latency step near 12:56 UTC (owner's screenshot),
-so this was not a plain internet outage. The Tab5's CPU B sends everything in one
-serial loop: telemetry, the event board, one durable record, then one RTDB step,
-taking turns. After the first record got through at 12:58:22, the next took 60 s,
-with only an event-board post and one RTDB step between them. Their timeouts are 3 s
-and 1 s, so one call hung far past its timeout and held up every channel. MicroPython's
-requests likely resolves the host name before the timeout applies (not verified
-against the UIFlow build), and a stalled DNS lookup would not show in UniFi's WAN
-uptime. Which service's call hung is not recorded: v52 logs CloudAvailable as
-always, which dropped the per-drop cause note. So RTDB trouble can back up the
-record queue through the shared loop, and RT01 catches that whichever call is stuck.
-The device fix waits for June (FUTURE, "One stuck call stalls every channel").
+UniFi shows the WAN up 100% with no latency step, and the Tab5 on UX7Main without a
+break since the v52 restart on 21 Oct (owner's screenshots). Read against the Tab5's
+code (cloud.py, pilot.py at Tab5), the times show failed sends with backoff, not one
+call blocking throughout:
+- CloudAvailable was already false at 12:56:47. It needs the last Netlify and RTDB
+  attempts to have succeeded, and an RTDB success within 45 s.
+- A failed durable post retries after 5, 10, 20, 40 and then 60 s.
+- CloudAvailable was true again by 12:58:09, so RTDB and Netlify telemetry were
+  answering and CPU B was running.
+- The first queued record was committed at 12:58:22 (ingest-record keeps the first
+  write's receivedAt). The Tab5 evidently missed the reply within its 3 s timeout,
+  so it waited out the 60 s backoff and re-sent the record at 12:59:21. The log
+  shows 33 calls from 12:59:21 for 32 new records; the extra one is that duplicate.
+- The 12:58:22 call itself is missing from the pasted log, unexplained.
 
-Read-only, 12,201 records since 12 Oct: three such stalls (receipt lag over 12 s), all
-in this session or the one before it.
+So outbound HTTPS from the Tab5 failed, for Netlify and RTDB alike, from no later than
+12:56:47 until about 12:58:05. The last minute of delay was backoff. The cause is not
+recorded: the Wi-Fi link held, and v52 logs CloudAvailable as always, which dropped
+the per-drop cause note. DNS, the gateway, or the Tab5's own network stack remain
+possible.
+
+Read-only, 12,201 records since 12 Oct: three such stalls (receipt lag over 12 s).
 - 21 Oct 00:02 UTC: about 50 s, pump off, while RTDB was already flapping.
 - 22 Oct 20:58 UTC: about 80 s, pump off. Both Shellys dropped out at the same moment,
-  so the Tab5's own LAN link faltered while WiFiConnected stayed true.
+  though UniFi shows no Wi-Fi disconnect, so the Tab5's own network side faltered.
 - 28 Oct 12:56 UTC: about 2.5 min, starting about 50 s before the pump.
 
 The pump did not cause the 28 Oct stall. Its records (one every 2-6 s) filled the
-queue fast enough to trip RT01, while the quiet-time stalls reached only 5%. When the
-queue is full the oldest records are evicted and counted in RecordsLost. At pump-run
-rates that would take a stall of about 4-8 minutes, against 2.5 at most so far. Google's status page lists nothing after its 21 Oct RTDB
-incident (us-central1, 6:00 AM-8:30 PM PT). From the cloud, RTDB answered in 0.12-0.37 s
-at 17:40 UTC.
+queue fast enough to trip RT01, while the quiet-time stalls reached only 5%. The
+queue is cloud.py's RAM queue of 100 records (and at most 384 KiB); when full, the
+oldest records are evicted and counted in RecordsLost. At pump-run rates that would
+take an outage of about 4-8 minutes, plus up to 60 s of backoff. A design note for
+June is in FUTURE, "CPU B sends share one loop".
+
+Google's status page lists nothing after its 21 Oct RTDB incident (us-central1,
+6:00 AM-8:30 PM PT). From the cloud, RTDB answered in 0.12-0.37 s at 17:40 UTC.
 
 The device-facing functions (ingest-power, ingest-record, event-board, device-sync,
 package delivery through rules-engine-release) and interfaces/ must stay compatible
@@ -167,8 +177,8 @@ when pilot is advanced. Pilot and main were fast-forwarded on 21 October; since 
 - Docs only, 21 Oct: shared local/cloud startup guidance, saved credential discovery and safe local update command. No deployed behavior changed.
 
 - Docs only, 28 Oct: the PM session prompt (maintenance/pm-session-prompt.md), the 28
-  Oct cloud check under "Frozen for the winter", and FUTURE's "One stuck call stalls
-  every channel". No deployed behavior changed.
+  Oct cloud check under "Frozen for the winter", and FUTURE's "CPU B sends share one
+  loop". No deployed behavior changed.
 
 ## Maintenance baseline
 

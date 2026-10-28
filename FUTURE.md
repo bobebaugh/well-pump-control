@@ -72,18 +72,18 @@ describe behavior that has since changed. Do not reinstate those old semantics.
   operator-command, presence and sync-state; telemetry posts almost never. Raising it to
   2 s is the candidate, a device change for after the freeze. Harmless meanwhile: each
   drop recovers within seconds and nothing protective depends on the cloud.
-- **One stuck call stalls every channel:** CPU B makes every network call in one serial
-  loop. On 28 Oct one call hung about 60 s, far past its 1 s or 3 s timeout, while
-  UniFi showed the WAN up. Durable records waited for it, the queue reached 30% and RT01
-  emailed (CURRENT, "Frozen for the winter"). The likely gap is the DNS lookup or
-  connect, which MicroPython's requests may run before its timeout applies. The
-  2 s RTDB timeout above lengthens every stall of this kind. Candidates, all device
-  changes:
-  - bound or cache name resolution;
-  - give durable records their own turn, so RTDB cannot starve them;
-  - record which call hung, as a count in the health record (see the cloud-drop
-    counter).
-  Measure first: a host test that blocks getaddrinfo shows the effect.
+- **CPU B sends share one loop:** cloud.py makes every network call in one serial loop,
+  so one slow call delays every channel, and the durable queue's backoff reaches 60 s.
+  On 28 Oct both Netlify and RTDB sends failed for about 80 s with the Wi-Fi link up.
+  A missed reply then cost a further 60 s of backoff on a record already stored
+  (CURRENT, "Frozen for the winter"). Three such stalls in 16 days, none losing a
+  record. The 2 s RTDB timeout above lengthens any slow call. Candidates, all device
+  changes, measured first in a host test:
+  - record why sends fail, as counts by kind in the health record (see the
+    cloud-drop counter);
+  - cap the durable backoff lower once another channel has just succeeded;
+  - bound or cache name resolution, if MicroPython's requests resolves before its
+    timeout applies.
 - **Simulator as a test:** the owner's concept, worth keeping, but not yet something to
   rely on (29 Sep). Known oddities: E002, P001, P013 and W09 open in a normal run, and
   P013 opens at cycle 2 for reasons nobody has examined. Qualify it against recorded

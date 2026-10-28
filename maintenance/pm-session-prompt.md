@@ -79,11 +79,11 @@ Open at hand-off (2026-10-28, session 1; this prompt first written):
    - 28 Oct, 12:56-13:00 UTC: records arrived up to 2.5 minutes late; nothing was lost. RT01 emailed "Event
      Record Buffer Filling on Tab5", which is what Bob saw.
 
-   RT01 measures the Tab5's queue to Netlify. Bob's ingest-record log shows the stalled posts never
-   arrived, and UniFi shows the WAN up. One call on CPU B's serial loop hung about 60 s and held up
-   every channel, RTDB included (FUTURE, "One stuck call stalls every channel"). The fix waits for June.
+   RT01 watches cloud.py's 100-record RAM queue to Netlify. Netlify and RTDB sends both failed for about
+   80 s with Wi-Fi up (UniFi), then a missed reply cost 60 s of backoff (CURRENT; FUTURE, "CPU B sends
+   share one loop"). The cause isn't recorded. The fix waits for June.
    For the next rules package (Bob, 28 Oct: not before): rename RT01's display name from "RTDB Queue
-   High" to what it catches, for example "Record Queue High" or "Cloud Send Backlog". A display-name fix rides the next rules package Bob publishes.
+   High" to what it catches, for example "Record Queue High" or "Cloud Send Backlog".
 3. **Activation and release receipt**, still open: CURRENT Next owner decisions 3 and 4. The device files have
    not been byte-compared with source.
 4. **Stray branches:**
