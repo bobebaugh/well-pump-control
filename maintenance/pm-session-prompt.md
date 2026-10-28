@@ -70,8 +70,9 @@ Open at hand-off (2026-10-28, session 1; this prompt first written):
    - 28 Oct, 12:56-13:00 UTC: records arrived up to 2.5 minutes late; nothing was lost. RT01 emailed "Event
      Record Buffer Filling on Tab5", which is what Bob saw.
 
-   RT01 measures the Tab5's queue to Netlify, not RTDB, despite its name. Bob's ingest-record log shows
-   the stalled posts never reached Netlify, so the cause was the house's internet path, not Google. A display-name fix rides the next rules package Bob publishes.
+   RT01 measures the Tab5's queue to Netlify. Bob's ingest-record log shows the stalled posts never
+   arrived, and UniFi shows the WAN up. One call on CPU B's serial loop hung about 60 s and held up
+   every channel, RTDB included (FUTURE, "One stuck call stalls every channel"). The fix waits for June. A display-name fix rides the next rules package Bob publishes.
 3. **Activation and release receipt**, still open: CURRENT Next owner decisions 3 and 4. The device files have
    not been byte-compared with source.
 4. **Stray branches:**

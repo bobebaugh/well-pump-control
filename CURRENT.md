@@ -44,10 +44,21 @@ owner's ingest-record function log (27 Oct 17:45 to 28 Oct 17:32 UTC) has no
 invocation between 12:51:39 and 12:59:21 UTC. It then shows 33 quick calls
 (120-260 ms) draining the queue by 13:00:16. Overnight it shows normal 10-minute
 cold starts of about 0.9 s, and its only ERROR lines are the known punycode
-deprecation warning. The stalled posts never reached the function, so neither
-Firestore nor the function was at fault. With RTDB unreachable too, the cause is the
-path from the house (Wi-Fi stayed up, so the internet side), not Google. One record
-received at 12:58:22 UTC has no line in the pasted log. Google's status page lists nothing after its 21 Oct RTDB
+deprecation warning. So neither Firestore nor the function failed; the posts never
+arrived. One record received at 12:58:22 UTC has no line in the pasted log.
+
+UniFi shows the WAN up 100% with no latency step near 12:56 UTC (owner's screenshot),
+so this was not a plain internet outage. The Tab5's CPU B sends everything in one
+serial loop: telemetry, the event board, one durable record, then one RTDB step,
+taking turns. After the first record got through at 12:58:22, the next took 60 s,
+with only an event-board post and one RTDB step between them. Their timeouts are 3 s
+and 1 s, so one call hung far past its timeout and held up every channel. MicroPython's
+requests likely resolves the host name before the timeout applies (not verified
+against the UIFlow build), and a stalled DNS lookup would not show in UniFi's WAN
+uptime. Which service's call hung is not recorded: v52 logs CloudAvailable as
+always, which dropped the per-drop cause note. So RTDB trouble can back up the
+record queue through the shared loop, and RT01 catches that whichever call is stuck.
+The device fix waits for June (FUTURE, "One stuck call stalls every channel"). Google's status page lists nothing after its 21 Oct RTDB
 incident (us-central1, 6:00 AM-8:30 PM PT). From the cloud, RTDB answered in 0.12-0.37 s
 at 17:40 UTC.
 
@@ -143,8 +154,9 @@ when pilot is advanced. Pilot and main were fast-forwarded on 21 October; since 
 
 - Docs only, 21 Oct: shared local/cloud startup guidance, saved credential discovery and safe local update command. No deployed behavior changed.
 
-- Docs only, 28 Oct: the PM session prompt (maintenance/pm-session-prompt.md) and the 28
-  Oct cloud check under "Frozen for the winter". No deployed behavior changed.
+- Docs only, 28 Oct: the PM session prompt (maintenance/pm-session-prompt.md), the 28
+  Oct cloud check under "Frozen for the winter", and FUTURE's "One stuck call stalls
+  every channel". No deployed behavior changed.
 
 ## Maintenance baseline
 
