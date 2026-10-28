@@ -67,7 +67,8 @@ How Bob wants the role done:
   hand-off" section, commit and push it, start the successor, and rename yourself "(done)". Git keeps the
   earlier versions.
 
-Open at hand-off (2026-10-28, session 1; this prompt first written):
+Open at hand-off (2026-10-28, session 1; this prompt first written; closed out 28 Oct, Bob returns if
+RT01 opens again):
 
 1. **Before departure (about 1 Nov), Bob's tasks, from CURRENT:**
    - Lower the timer relay once flush cycles are off.
@@ -87,12 +88,9 @@ Open at hand-off (2026-10-28, session 1; this prompt first written):
    High" to what it catches, for example "Record Queue High" or "Cloud Send Backlog".
 3. **Activation and release receipt**, still open: CURRENT Next owner decisions 3 and 4. The device files have
    not been byte-compared with source.
-4. **Stray branches:**
-   - `claude/intelligent-brown-3csfcv` is merged into pilot-working. Bob approved deleting it on 28 Oct,
-     but GitHub refuses a branch delete from a cloud session (403), as it refuses tags. Bob deletes it
-     on github.com.
-   - `claude/kind-hamilton-isgae0` has one unique commit and waits for Bob to archive it under a tag; cloud
-     sessions can't push tags.
+4. **Stray branch:** `claude/kind-hamilton-isgae0` has one unique commit and waits for Bob to archive it
+   under a tag. Cloud sessions can't push tags or delete branches (GitHub answers 403), so Bob does both on
+   github.com. He deleted the merged `claude/intelligent-brown-3csfcv` there on 28 Oct.
 5. **Next summer:** issue 28 (keep the screens usable when the live services are slow), issues 26 and 27, and
    FUTURE's Firestore reads, power-blip logger, coordination store and the 2 s RTDB timeout. Nothing here
    starts before Bob's return.
