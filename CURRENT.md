@@ -24,6 +24,21 @@ stays in). The run-down ran the Tab5 about 8 hours until it shut itself off, and
 recovered alone when power returned: records stop at 06:39 UTC on 28 Sep and a new
 session starts at 12:46 UTC.
 
+Checked 28 Oct 17:30 UTC, read-only, 1,833 records since 25 Oct: the same session, no
+restart, no receipt gap over 15 minutes, records lost 0, and the silent alert still ok.
+Two cloud episodes:
+- 26 Oct, 19:00 to about 01:30 UTC: CloudAvailable false in up to three quarters of an
+  hour's records while Netlify receipt stayed at 1-3 s. This is the 21 Oct pattern of
+  RTDB calls timing out.
+- 28 Oct, 12:56-13:00 UTC: records arrived up to 2.5 minutes late, with Wi-Fi up and
+  CloudAvailable false for about 80 s. The queue peaked at 30%: "RTDB Queue High" (RT01)
+  opened, then closed at 13:00 once the queue had drained in order.
+
+The second episode cut off Netlify as well as RTDB, which points to the internet path
+more than to RTDB alone. Google's status page lists nothing after its 21 Oct RTDB
+incident (us-central1, 6:00 AM-8:30 PM PT). From the cloud, RTDB answered in 0.12-0.37 s
+at 17:40 UTC.
+
 The device-facing functions (ingest-power, ingest-record, event-board, device-sync,
 package delivery through rules-engine-release) and interfaces/ must stay compatible
 with these files; AGENTS carries the rule.
@@ -115,6 +130,9 @@ when pilot is advanced. Pilot and main were fast-forwarded on 21 October; since 
   rule in AGENTS. No deploy is needed for it to take effect.
 
 - Docs only, 21 Oct: shared local/cloud startup guidance, saved credential discovery and safe local update command. No deployed behavior changed.
+
+- Docs only, 28 Oct: the PM session prompt (maintenance/pm-session-prompt.md) and the 28
+  Oct cloud check under "Frozen for the winter". No deployed behavior changed.
 
 ## Maintenance baseline
 
