@@ -67,9 +67,11 @@ Open at hand-off (2026-10-28, session 1; this prompt first written):
 2. **RTDB check, 28 Oct** (CURRENT, "Frozen for the winter"). Bob thought RTDB failed overnight. The records
    show two episodes, neither one overnight:
    - 26 Oct, 19:00 to about 01:30 UTC: CloudAvailable flapping while Netlify receipt stayed normal.
-   - 28 Oct, 12:56-13:00 UTC: records arrived up to 2.5 minutes late; nothing was lost.
+   - 28 Oct, 12:56-13:00 UTC: records arrived up to 2.5 minutes late; nothing was lost. RT01 emailed "Event
+     Record Buffer Filling on Tab5", which is what Bob saw.
 
-   Google posted nothing after its 21 Oct incident. Ask what he saw if he hasn't said.
+   RT01 measures the Tab5's queue to Netlify, not RTDB, despite its name. Google posted nothing after its
+   21 Oct incident. A display-name fix rides the next rules package Bob publishes.
 3. **Activation and release receipt**, still open: CURRENT Next owner decisions 3 and 4. The device files have
    not been byte-compared with source.
 4. **Stray branches:**

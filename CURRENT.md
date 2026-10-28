@@ -31,11 +31,17 @@ Two cloud episodes:
   hour's records while Netlify receipt stayed at 1-3 s. This is the 21 Oct pattern of
   RTDB calls timing out.
 - 28 Oct, 12:56-13:00 UTC: records arrived up to 2.5 minutes late, with Wi-Fi up and
-  CloudAvailable false for about 80 s. The queue peaked at 30%: "RTDB Queue High" (RT01)
-  opened, then closed at 13:00 once the queue had drained in order.
+  CloudAvailable false for about 80 s. The queue peaked at 30%: RT01 opened at 12:58:22
+  and emailed "Event Record Buffer Filling on Tab5" (Resend: sent), then closed at 13:00
+  once the queue had drained in order.
 
-The second episode cut off Netlify as well as RTDB, which points to the internet path
-more than to RTDB alone. Google's status page lists nothing after its 21 Oct RTDB
+RT01's display name, "RTDB Queue High", is misleading. BufferUsedPercent is the Tab5's
+100-record durable queue to Netlify's ingest-record (tab5/pilot.py
+add_transport_evidence; cloud.py DURABLE_QUEUE_DEPTH), not anything in RTDB. RTDB
+slowness alone does not fill it: on 26 Oct it stayed at 2% or less. It fills only when
+ingest-record posts fail or stall. On 28 Oct, Netlify and RTDB failed together, which
+points to the internet path more than to Google. Netlify's function log for
+ingest-record at 12:56-12:58 UTC would settle it; the cloud session cannot read it. Google's status page lists nothing after its 21 Oct RTDB
 incident (us-central1, 6:00 AM-8:30 PM PT). From the cloud, RTDB answered in 0.12-0.37 s
 at 17:40 UTC.
 
@@ -574,8 +580,9 @@ Reduction options are in FUTURE, Running cost.
    of 15:22:49 UTC; verified by the owner and Codex): CloudAvailable, BufferUsedPercent and
    RecordsLost now log as always, so their changes no longer create records (RecordsLost
    too, to avoid a record per lost record in a long outage, a case never tested); a new
-   "Record queue high" event opens at BufferUsedPercent >= 20 and closes below 10, with
-   no actions or notification. The RTDB slowness itself also degrades the dashboard and
+   "Record queue high" event (RT01, published as "RTDB Queue High") opens at
+   BufferUsedPercent >= 20 and closes below 10, with no actions. It does notify on
+   opening, as the 28 Oct email showed. The RTDB slowness itself also degrades the dashboard and
    the rules editor; a GitHub issue holds next summer's improvements.
 
    Was the plan, done 12-17 Oct as recorded above. One visit, one restart: install M6.46, publish the longer H001 trigger, repeat the
