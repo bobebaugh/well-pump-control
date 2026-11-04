@@ -2,6 +2,13 @@
 
 As of 21 October 2026. This records source and owner evidence, not assumed deployment.
 
+## Local test follow-up, 3 November 2026
+
+The record-browser UI choice test now selects a custom date relative to today,
+within the existing 32-day limit. Its fixed September date had aged out and failed
+on the fresh FL workstation. Application behavior, device files and deployed
+artifacts are unchanged; this is a test-only maintenance change.
+
 ## Frozen for the winter, 21 October 2026
 
 Step G of the pre-freeze round. Device files stay untouched until the owner returns

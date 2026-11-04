@@ -298,9 +298,13 @@ test("one choice sets the rows, and it is the one marked current", async () => {
   assert.deepEqual(current(view), ["range-8h"]);
   assert.ok(Math.abs(Date.parse(view.requests.at(-1).start) - (Date.now() - 8 * 3600000)) < 120000);
   assert.equal(view.eventReads.at(-1).start, view.requests.at(-1).start);
-  view.elements["range-from"].value = "2026-09-25T02:00"; await view.elements["range-from"].fire("change");
+  // Keep the custom From within the 32-day guard as the real clock advances.
+  const customFrom = new Date(Date.now() - 2 * 86400000);
+  customFrom.setHours(2, 0, 0, 0);
+  const localFrom = `${customFrom.getFullYear()}-${String(customFrom.getMonth() + 1).padStart(2, "0")}-${String(customFrom.getDate()).padStart(2, "0")}T02:00`;
+  view.elements["range-from"].value = localFrom; await view.elements["range-from"].fire("change");
   assert.deepEqual(current(view), ["range-custom", "range-custom-to"]);
-  assert.equal(view.requests.at(-1).start, new Date("2026-09-25T02:00").toISOString());
+  assert.equal(view.requests.at(-1).start, customFrom.toISOString());
   await view.change("filter", "changes");
   assert.equal(view.requests.at(-1).filter, "changes", "the server filters, so a page fills to 50");
   await view.elements["receipt-records"].fire("click");
